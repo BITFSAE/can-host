@@ -215,11 +215,11 @@ def build_isa_frame(isa: IsaState) -> Optional[can.Message]:
     if not isa.online:
         return None
     current_ma = int(round(isa.current_a * 1000.0))
-    # Intel 小端 int32
+    # 本工程按 IVT-S 已配置 Little Endian 的 DBC 发送 DB2..DB5。
     raw = current_ma & 0xFFFFFFFF
     result_state = isa.error_code & 0x0F
     if isa.is_error and ((result_state & 0x0E) == 0):
-        result_state |= 0x02
+        result_state |= 0x04
     status = result_state << 4
     payload = [
         0x00,           # Byte0: MUX = 0
@@ -568,7 +568,7 @@ class CommandProcessor:
             return f"isaoff={'on' if enabled else 'off'}"
 
         if name == "isaerr":
-            code = int(parts[3], 0) if len(parts) >= 4 else 0x12
+            code = int(parts[3], 0) if len(parts) >= 4 else 0x04
             self.model.isa.is_error = enabled
             if enabled:
                 self.model.isa.error_code = code
