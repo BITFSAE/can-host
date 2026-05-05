@@ -102,43 +102,59 @@ class BenchModel:
         self.open_wire_cells: Set[int] = set()
         self.open_wire_temps: Set[int] = set()
 
-    def get_cell_mv(self, global_cell_index: int) -> int:
+    def _cell_position(self, global_cell_index: int) -> Tuple[SlaveState, int]:
         if global_cell_index < 1 or global_cell_index > SLAVE_COUNT * CELL_COUNT_PER_SLAVE:
             raise ValueError("单体编号超出范围，应为 1..138")
         zero_based = global_cell_index - 1
         slave = self.slaves[zero_based // CELL_COUNT_PER_SLAVE]
         local = zero_based % CELL_COUNT_PER_SLAVE
-        return slave.base_cell_mv + slave.cell_offsets_mv[local]
+        return slave, local
 
-    def set_cell_mv(self, global_cell_index: int, cell_mv: int) -> None:
-        zero_based = global_cell_index - 1
-        slave = self.slaves[zero_based // CELL_COUNT_PER_SLAVE]
-        local = zero_based % CELL_COUNT_PER_SLAVE
-        slave.cell_offsets_mv[local] = cell_mv - slave.base_cell_mv
-
-    def get_temp_c(self, global_temp_index: int) -> int:
+    def _temp_position(self, global_temp_index: int) -> Tuple[SlaveState, int]:
         if global_temp_index < 1 or global_temp_index > SLAVE_COUNT * TEMP_COUNT_PER_SLAVE:
             raise ValueError("温度编号超出范围，应为 1..48")
         zero_based = global_temp_index - 1
         slave = self.slaves[zero_based // TEMP_COUNT_PER_SLAVE]
         local = zero_based % TEMP_COUNT_PER_SLAVE
+        return slave, local
+
+    def get_cell_mv(self, global_cell_index: int) -> int:
+        slave, local = self._cell_position(global_cell_index)
+        return slave.base_cell_mv + slave.cell_offsets_mv[local]
+
+    def set_cell_mv(self, global_cell_index: int, cell_mv: int) -> None:
+        slave, local = self._cell_position(global_cell_index)
+        slave.cell_offsets_mv[local] = cell_mv - slave.base_cell_mv
+
+    def get_temp_c(self, global_temp_index: int) -> int:
+        slave, local = self._temp_position(global_temp_index)
         return slave.base_temp_c + slave.temp_offsets_c[local]
 
     def set_temp_c(self, global_temp_index: int, temp_c: int) -> None:
-        zero_based = global_temp_index - 1
-        slave = self.slaves[zero_based // TEMP_COUNT_PER_SLAVE]
-        local = zero_based % TEMP_COUNT_PER_SLAVE
+        slave, local = self._temp_position(global_temp_index)
         slave.temp_offsets_c[local] = temp_c - slave.base_temp_c
 
     def reset_cell_mv(self, global_cell_index: int) -> None:
-        zero_based = global_cell_index - 1
-        slave = self.slaves[zero_based // CELL_COUNT_PER_SLAVE]
+        slave, _ = self._cell_position(global_cell_index)
         self.set_cell_mv(global_cell_index, slave.base_cell_mv)
 
     def reset_temp_c(self, global_temp_index: int) -> None:
-        zero_based = global_temp_index - 1
-        slave = self.slaves[zero_based // TEMP_COUNT_PER_SLAVE]
+        slave, _ = self._temp_position(global_temp_index)
         self.set_temp_c(global_temp_index, slave.base_temp_c)
+
+    def set_open_wire_cell(self, global_cell_index: int, enabled: bool) -> None:
+        self._cell_position(global_cell_index)
+        if enabled:
+            self.open_wire_cells.add(global_cell_index)
+        else:
+            self.open_wire_cells.discard(global_cell_index)
+
+    def set_open_wire_temp(self, global_temp_index: int, enabled: bool) -> None:
+        self._temp_position(global_temp_index)
+        if enabled:
+            self.open_wire_temps.add(global_temp_index)
+        else:
+            self.open_wire_temps.discard(global_temp_index)
 
     def estimated_pack_voltage_v(self) -> float:
         total_mv = 0
@@ -201,9 +217,10 @@ def build_isa_frame(isa: IsaState) -> Optional[can.Message]:
     current_ma = int(round(isa.current_a * 1000.0))
     # Intel 小端 int32
     raw = current_ma & 0xFFFFFFFF
-    status = (isa.error_code & 0x0F) << 4
-    if isa.is_error:
-        status |= 0x04  # bit2: measurement error
+    result_state = isa.error_code & 0x0F
+    if isa.is_error and ((result_state & 0x0E) == 0):
+        result_state |= 0x02
+    status = result_state << 4
     payload = [
         0x00,           # Byte0: MUX = 0
         status,         # Byte1: status(7:4) | counter(3:0)
@@ -223,7 +240,7 @@ FAULT_BIT_NAMES = [
     (8,  "BATTOV"), (9,  "BATTUV"), (10, "BATTOC"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
     (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
-    (20, "HALL"), (21, "IMD"), (22, "SAFETY"), (23, "CHR_TELEM"),
+    (20, "ISA"), (21, "IMD"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
     (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "RSV"),
 ]
@@ -280,7 +297,7 @@ def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
         "DV": (data[0] >> 3) & 1, "DT": (data[0] >> 2) & 1,
         "CHG_OCS": (data[0] >> 1) & 1, "DSCH_OCS": data[0] & 1,
         "BSUOFF": (data[1] >> 7) & 1, "HVREL": (data[1] >> 5) & 1,
-        "HALL": (data[1] >> 4) & 1, "BATTOV": (data[1] >> 3) & 1,
+        "ISA": (data[1] >> 4) & 1, "BATTOV": (data[1] >> 3) & 1,
         "BATTUV": (data[1] >> 2) & 1, "BEEP": (data[1] >> 1) & 1,
         "IMD": data[1] & 1,
     }
@@ -380,9 +397,15 @@ class CommandProcessor:
             self.model.set_temp_c(int(parts[1]), int(parts[2]))
             return f"温度{parts[1]} 已设为 {parts[2]}C"
         if cmd == "openwire" and len(parts) == 3:
-            return self._set_item(self.model.open_wire_cells, int(parts[1]), parts[2], "单体", "断线")
+            enabled = self._on_off(parts[2])
+            index = int(parts[1])
+            self.model.set_open_wire_cell(index, enabled)
+            return f"单体{index} 断线 {'开启' if enabled else '关闭'}"
         if cmd == "opentemp" and len(parts) == 3:
-            return self._set_item(self.model.open_wire_temps, int(parts[1]), parts[2], "温度", "断线")
+            enabled = self._on_off(parts[2])
+            index = int(parts[1])
+            self.model.set_open_wire_temp(index, enabled)
+            return f"温度{index} 断线 {'开启' if enabled else '关闭'}"
         if cmd == "scenario":
             return self._scenario(parts)
         if cmd == "reset":
@@ -419,15 +442,6 @@ class CommandProcessor:
             slave.temp_offsets_c = [0] * TEMP_COUNT_PER_SLAVE
             return f"从控{si} 基准温度设为 {slave.base_temp_c}C"
         raise ValueError("slave 子命令: online/basev/baset")
-
-    @staticmethod
-    def _set_item(target: Set[int], index: int, state_text: str, label: str, action: str) -> str:
-        enabled = CommandProcessor._on_off(state_text)
-        if enabled:
-            target.add(index)
-        else:
-            target.discard(index)
-        return f"{label}{index} {action} {'开启' if enabled else '关闭'}"
 
     @staticmethod
     def _on_off(text: str) -> bool:
@@ -536,18 +550,12 @@ class CommandProcessor:
 
         if name == "openwire" and len(parts) >= 4:
             ci = int(parts[3])
-            if enabled:
-                self.model.open_wire_cells.add(ci)
-            else:
-                self.model.open_wire_cells.discard(ci)
+            self.model.set_open_wire_cell(ci, enabled)
             return f"openwire: cell{ci}={'on' if enabled else 'off'}"
 
         if name == "opentemp" and len(parts) >= 4:
             ti = int(parts[3])
-            if enabled:
-                self.model.open_wire_temps.add(ti)
-            else:
-                self.model.open_wire_temps.discard(ti)
+            self.model.set_open_wire_temp(ti, enabled)
             return f"opentemp: temp{ti}={'on' if enabled else 'off'}"
 
         if name == "slaveoff" and len(parts) >= 4:
