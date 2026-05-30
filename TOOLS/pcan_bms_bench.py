@@ -240,7 +240,7 @@ FAULT_BIT_NAMES = [
     (8,  "BATTOV"), (9,  "BATTUV"), (10, "BATTOC"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
     (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
-    (20, "ISA"), (21, "IMD"), (22, "SAFETY"), (23, "CHR_TELEM"),
+    (20, "ISA"), (21, "RSV21"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
     (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "RSV"),
 ]
@@ -299,7 +299,7 @@ def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
         "BSUOFF": (data[1] >> 7) & 1, "HVREL": (data[1] >> 5) & 1,
         "ISA": (data[1] >> 4) & 1, "BATTOV": (data[1] >> 3) & 1,
         "BATTUV": (data[1] >> 2) & 1, "BEEP": (data[1] >> 1) & 1,
-        "IMD": data[1] & 1,
+        "IMD_SW": data[1] & 1,
     }
 
 
@@ -346,7 +346,9 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         return f"累加电压: {((data[0]<<8)|data[1])/10.0:.1f}V"
 
     if aid == BMS_IMD_DIAG_ID and len(data) >= 8:
-        return (f"IMD: class={data[0]} status=0x{data[1]:02X} "
+        status = (data[0] >> 4) & 0x0F
+        cls = data[0] & 0x0F
+        return (f"IMD: status={status} class={cls} flags=0x{data[1]:02X} "
                 f"duty={((data[2]<<8)|data[3])/10.0:.1f}% "
                 f"Rf={((data[4]<<8)|data[5])}kOhm freq={((data[6]<<8)|data[7])/100.0:.2f}Hz")
 
