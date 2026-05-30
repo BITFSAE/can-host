@@ -46,6 +46,8 @@ BMS_CELL_SUM_ID   = 0x186750F4   # 单体累加电压
 BMS_IMD_DIAG_ID   = 0x186850F4   # IMD 诊断
 BMS_FAULT_ID      = 0x187650F4   # 统一故障状态帧
 BMS_ALARM_LEVEL_ID = 0x187850F4  # 告警等级明细
+CAN2_FAULT_ID      = 0x4A1       # CAN2/CANB 统一故障状态镜像
+CAN2_ALARM_LEVEL_ID = 0x4A2      # CAN2/CANB 告警等级明细镜像
 BMS_THRESHOLD_ID  = 0x187750F4   # 告警阈值
 BMS_SWITCH_ID     = 0x187F50F4   # 告警开关
 
@@ -242,7 +244,7 @@ FAULT_BIT_NAMES = [
     (8,  "BATTOV"), (9,  "BATTUV"), (10, "BATTOC"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
     (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
-    (20, "ISA"), (21, "RSV21"), (22, "SAFETY"), (23, "CHR_TELEM"),
+    (20, "ISA"), (21, "CAN"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
     (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "IVT_U1"),
 ]
@@ -349,16 +351,18 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         pv = ((data[6] << 8) | data[7]) / 10.0
         return f"继电器: POS={pos} PRE={pre} NEG={neg} 充电请求={rv:.1f}V/{ri:.1f}A 预充电压={pv:.1f}V"
 
-    if aid == BMS_FAULT_ID and len(data) >= 8:
+    if aid in (BMS_FAULT_ID, CAN2_FAULT_ID) and len(data) >= 8:
         info = decode_fault_frame(data)
-        return (f"故障状态: state={info['state']} level={info['level']} "
+        prefix = "CANB故障状态" if aid == CAN2_FAULT_ID else "故障状态"
+        return (f"{prefix}: state={info['state']} level={info['level']} "
                 f"fault_code={info['fault_code']} latched={info['latched']} "
                 f"charge={info['charge_mode']} slave_off={info['slave_offline']} "
                 f"ver={info['version']}\n  活跃: {format_faults(info['faults'])}")
 
-    if aid == BMS_ALARM_LEVEL_ID and len(data) >= 8:
+    if aid in (BMS_ALARM_LEVEL_ID, CAN2_ALARM_LEVEL_ID) and len(data) >= 8:
         levels = decode_alarm_level_frame(data)
-        return f"告警等级: {format_alarm_levels(levels)}"
+        prefix = "CANB告警等级" if aid == CAN2_ALARM_LEVEL_ID else "告警等级"
+        return f"{prefix}: {format_alarm_levels(levels)}"
 
     if aid == BMS_CELL_MAX_V_ID and len(data) >= 6:
         return (f"单体极值: Max={((data[0]<<8)|data[1])}mV#{data[4]} "
@@ -764,9 +768,9 @@ class PcanBenchApp:
             self.monitor.total_data = data
         elif aid == BMS_RELAY_ID:
             self.monitor.relay_data = data
-        elif aid == BMS_FAULT_ID:
+        elif aid in (BMS_FAULT_ID, CAN2_FAULT_ID):
             self.monitor.fault_data = data
-        elif aid == BMS_ALARM_LEVEL_ID:
+        elif aid in (BMS_ALARM_LEVEL_ID, CAN2_ALARM_LEVEL_ID):
             self.monitor.alarm_level_data = data
         elif aid == BMS_THRESHOLD_ID:
             self.monitor.threshold_data = data
