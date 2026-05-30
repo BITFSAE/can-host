@@ -45,6 +45,7 @@ BMS_RELAY_ID      = 0x186350F4   # 继电器/充电请求
 BMS_CELL_SUM_ID   = 0x186750F4   # 单体累加电压
 BMS_IMD_DIAG_ID   = 0x186850F4   # IMD 诊断
 BMS_FAULT_ID      = 0x187650F4   # 统一故障状态帧
+BMS_ALARM_LEVEL_ID = 0x187850F4  # 告警等级明细
 BMS_THRESHOLD_ID  = 0x187750F4   # 告警阈值
 BMS_SWITCH_ID     = 0x187F50F4   # 告警开关
 
@@ -85,6 +86,7 @@ class BmsMonitorState:
     total_data: Optional[List[int]] = None
     relay_data: Optional[List[int]] = None
     fault_data: Optional[List[int]] = None
+    alarm_level_data: Optional[List[int]] = None
     threshold_data: Optional[List[int]] = None
     switch_data: Optional[List[int]] = None
     cell_sum_data: Optional[List[int]] = None
@@ -242,7 +244,7 @@ FAULT_BIT_NAMES = [
     (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
     (20, "ISA"), (21, "RSV21"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
-    (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "RSV"),
+    (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "IVT_U1"),
 ]
 
 BAT_STATE_NAMES = {2: "自检", 3: "待机", 4: "预充", 5: "高压", 7: "故障"}
@@ -286,6 +288,25 @@ def decode_threshold_frame(data: Sequence[int]) -> Dict[str, int]:
         "OT_raw": data[4],
         "UT_raw": data[5],
     }
+
+
+def decode_alarm_level_frame(data: Sequence[int]) -> Dict[str, int]:
+    if len(data) < 8:
+        return {}
+    levels: Dict[str, int] = {}
+    for bit, name in FAULT_BIT_NAMES:
+        byte = bit // 4
+        shift = (bit % 4) * 2
+        level = (data[byte] >> shift) & 0x03
+        if level:
+            levels[name] = level
+    return levels
+
+
+def format_alarm_levels(levels: Dict[str, int]) -> str:
+    if not levels:
+        return "无"
+    return " ".join(f"{name}=L{level}" for name, level in levels.items())
 
 
 def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
@@ -334,6 +355,10 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
                 f"fault_code={info['fault_code']} latched={info['latched']} "
                 f"charge={info['charge_mode']} slave_off={info['slave_offline']} "
                 f"ver={info['version']}\n  活跃: {format_faults(info['faults'])}")
+
+    if aid == BMS_ALARM_LEVEL_ID and len(data) >= 8:
+        levels = decode_alarm_level_frame(data)
+        return f"告警等级: {format_alarm_levels(levels)}"
 
     if aid == BMS_CELL_MAX_V_ID and len(data) >= 6:
         return (f"单体极值: Max={((data[0]<<8)|data[1])}mV#{data[4]} "
@@ -497,6 +522,10 @@ class CommandProcessor:
             lines.append(f"  活跃: {format_faults(info['faults'])}")
         else:
             lines.append("故障: 尚未收到")
+
+        if m.alarm_level_data and len(m.alarm_level_data) >= 8:
+            levels = decode_alarm_level_frame(m.alarm_level_data)
+            lines.append(f"告警等级: {format_alarm_levels(levels)}")
 
         if m.threshold_data and len(m.threshold_data) >= 6:
             tv = decode_threshold_frame(m.threshold_data)
@@ -737,6 +766,8 @@ class PcanBenchApp:
             self.monitor.relay_data = data
         elif aid == BMS_FAULT_ID:
             self.monitor.fault_data = data
+        elif aid == BMS_ALARM_LEVEL_ID:
+            self.monitor.alarm_level_data = data
         elif aid == BMS_THRESHOLD_ID:
             self.monitor.threshold_data = data
         elif aid == BMS_SWITCH_ID:
