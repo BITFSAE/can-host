@@ -2,11 +2,12 @@
 """BMS F405 主控台架联调脚本（PCAN 版）.
 
 用途：
-1. 在 CAN1 250kbps 总线上模拟 6 个从控电压/温度报文；
+1. 在 CAN1 500kbps 总线上模拟 6 个从控电压/温度报文；
 2. 模拟 ISA IVT-S 电流传感器标准帧 0x521；
-3. 监听主控发出的状态帧，便于台架联调；
-4. 通过简单命令行交互注入离线、断线、过温、电流故障等；
-5. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
+3. 可关闭 ISA 模拟，与 CAN1 上的真实 IVT-S 共线；
+4. 监听主控发出的状态帧，便于台架联调；
+5. 通过简单命令行交互注入离线、断线、过温、电流故障等；
+6. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
 
 依赖：
     pip install python-can
@@ -32,7 +33,7 @@ except ImportError as exc:
     raise SystemExit("缺少 python-can，请先执行: pip install python-can") from exc
 
 
-CAN1_BITRATE = 250000
+CAN1_BITRATE = 500000
 ISA_CAN_ID = 0x521          # ISA IVT-S 电流传感器
 SLAVE_VOLT_BASE_ID = 0x180050F3
 SLAVE_TEMP_BASE_ID = 0x184050F3
@@ -98,13 +99,17 @@ class BmsMonitorState:
 
 
 class BenchModel:
-    def __init__(self) -> None:
+    def __init__(self, simulate_isa: bool = True) -> None:
+        self.simulate_isa = simulate_isa
         self.slaves: List[SlaveState] = [
             SlaveState(slave_id=index + 1) for index in range(SLAVE_COUNT)
         ]
-        self.isa = IsaState()
+        self.isa = IsaState(online=simulate_isa)
         self.open_wire_cells: Set[int] = set()
         self.open_wire_temps: Set[int] = set()
+
+    def reset(self) -> None:
+        self.__init__(simulate_isa=self.simulate_isa)
 
     def _cell_position(self, global_cell_index: int) -> Tuple[SlaveState, int]:
         if global_cell_index < 1 or global_cell_index > SLAVE_COUNT * CELL_COUNT_PER_SLAVE:
@@ -415,9 +420,11 @@ class CommandProcessor:
         if cmd == "bms" and (len(parts) == 1 or (len(parts) == 2 and parts[1] == "show")):
             return self._bms_show()
         if cmd == "current" and len(parts) == 2:
+            self._require_simulated_isa()
             self.model.isa.current_a = float(parts[1])
             return f"ISA 电流已设为 {self.model.isa.current_a:.3f}A"
         if cmd == "isa" and len(parts) >= 3:
+            self._require_simulated_isa()
             return self._isa_cmd(parts)
         if cmd == "slave" and len(parts) >= 4:
             return self._slave_cmd(parts)
@@ -440,9 +447,13 @@ class CommandProcessor:
         if cmd == "scenario":
             return self._scenario(parts)
         if cmd == "reset":
-            self.model.__init__()
+            self.model.reset()
             return "所有模拟量已恢复默认"
         raise ValueError("未知命令，输入 help 查看支持项")
+
+    def _require_simulated_isa(self) -> None:
+        if not self.model.simulate_isa:
+            raise ValueError("已启用 --real-ivt，禁止发送模拟 ISA 0x521")
 
     def _isa_cmd(self, parts: List[str]) -> str:
         sub = parts[1].lower()
@@ -486,8 +497,9 @@ class CommandProcessor:
     def _status(self) -> str:
         lines = [
             f"估算累加: {self.model.estimated_pack_voltage_v():.3f}V",
-            f"ISA: 在线={self.model.isa.online} 电流={self.model.isa.current_a:.3f}A "
-            f"错误={self.model.isa.is_error}",
+            (f"ISA模拟: 在线={self.model.isa.online} 电流={self.model.isa.current_a:.3f}A "
+             f"错误={self.model.isa.is_error}" if self.model.simulate_isa else
+             "ISA模拟: 关闭（真实 IVT-S 模式）"),
             f"单体断线: {len(self.model.open_wire_cells)} 温度断线: {len(self.model.open_wire_temps)}",
         ]
         for s in self.model.slaves:
@@ -599,10 +611,12 @@ class CommandProcessor:
             return f"slaveoff: slave{si}={'off' if enabled else 'on'}"
 
         if name == "isaoff":
+            self._require_simulated_isa()
             self.model.isa.online = not enabled
             return f"isaoff={'on' if enabled else 'off'}"
 
         if name == "isaerr":
+            self._require_simulated_isa()
             code = int(parts[3], 0) if len(parts) >= 4 else 0x04
             self.model.isa.is_error = enabled
             if enabled:
@@ -610,17 +624,19 @@ class CommandProcessor:
             return f"isaerr: {'on code=0x'+format(code,'02X') if enabled else 'off'}"
 
         if name == "chgoc":
+            self._require_simulated_isa()
             ca = float(parts[3]) if len(parts) >= 4 else 35.0
             self.model.isa.current_a = ca if enabled else 0.0
             return f"chgoc: current={self.model.isa.current_a:.1f}A"
 
         if name == "disoc":
+            self._require_simulated_isa()
             ca = float(parts[3]) if len(parts) >= 4 else -200.0
             self.model.isa.current_a = ca if enabled else 0.0
             return f"disoc: current={self.model.isa.current_a:.1f}A"
 
         if name == "clear":
-            self.model.__init__()
+            self.model.reset()
             return "所有场景已清除"
 
         raise ValueError(f"未知 scenario: {name}")
@@ -654,7 +670,7 @@ class CommandProcessor:
 class PcanBenchApp:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.model = BenchModel()
+        self.model = BenchModel(simulate_isa=not args.real_ivt)
         self.monitor = BmsMonitorState()
         self.cmd = CommandProcessor(self.model, self.monitor)
         self.cmd_queue: "queue.Queue[str]" = queue.Queue()
@@ -665,7 +681,9 @@ class PcanBenchApp:
         self._last_tx_err_ts = 0.0
 
     def _build_tx_ids(self) -> Set[Tuple[bool, int]]:
-        ids: Set[Tuple[bool, int]] = {(False, ISA_CAN_ID)}
+        ids: Set[Tuple[bool, int]] = set()
+        if self.model.simulate_isa:
+            ids.add((False, ISA_CAN_ID))
         for si in range(SLAVE_COUNT):
             ids.add((True, SLAVE_TEMP_BASE_ID + (si << 16)))
             for fi in range(6):
@@ -674,6 +692,7 @@ class PcanBenchApp:
 
     def run(self) -> None:
         print(f"PCAN: {self.args.channel} @ {self.args.bitrate}bps")
+        print("IVT-S: " + ("真实设备，脚本不发送 0x521" if self.args.real_ivt else "脚本模拟 0x521"))
         quiet = not self.args.live_rx
         print("脚本已启动。" + (" 安静模式，输入命令查看结果。" if quiet else " 实时打印主控回帧。"))
         print("输入 help 查看命令列表。\n")
@@ -801,6 +820,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--bitrate", type=int, default=CAN1_BITRATE, help="CAN 波特率")
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
+    p.add_argument("--real-ivt", "--no-isa", action="store_true",
+                   help="不发送模拟 ISA 0x521，供真实 IVT-S 与从控模拟共线")
     return p.parse_args(argv)
 
 
