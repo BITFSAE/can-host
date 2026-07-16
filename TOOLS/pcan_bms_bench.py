@@ -3,8 +3,8 @@
 
 用途：
 1. 在 CAN1 500kbps 总线上模拟 6 个从控电压/温度报文；
-2. 模拟 ISA IVT-S 电流传感器标准帧 0x521；
-3. 可关闭 ISA 模拟，与 CAN1 上的真实 IVT-S 共线；
+2. 模拟自有 ISA IVT-S 电流结果帧 0x512；
+3. 可关闭 ISA 模拟，让 CANB 上的自有 IVT-S 单独向主控提供测量；
 4. 监听主控发出的状态帧，便于台架联调；
 5. 通过简单命令行交互注入离线、断线、过温、电流故障等；
 6. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
@@ -34,7 +34,7 @@ except ImportError as exc:
 
 
 CAN1_BITRATE = 500000
-ISA_CAN_ID = 0x521          # ISA IVT-S 电流传感器
+ISA_CAN_ID = 0x512          # 自有 ISA IVT-S 电流结果
 SLAVE_VOLT_BASE_ID = 0x180050F3
 SLAVE_TEMP_BASE_ID = 0x184050F3
 
@@ -220,7 +220,7 @@ def build_slave_temp_frame(model: BenchModel, slave: SlaveState) -> Optional[can
 
 
 def build_isa_frame(isa: IsaState) -> Optional[can.Message]:
-    """构建 ISA IVT-S 电流帧 0x521"""
+    """构建自有 ISA IVT-S 电流帧 0x512"""
     if not isa.online:
         return None
     current_ma = int(round(isa.current_a * 1000.0))
@@ -453,7 +453,7 @@ class CommandProcessor:
 
     def _require_simulated_isa(self) -> None:
         if not self.model.simulate_isa:
-            raise ValueError("已启用 --real-ivt，禁止发送模拟 ISA 0x521")
+            raise ValueError("已启用 --real-ivt，禁止发送模拟 ISA 0x512")
 
     def _isa_cmd(self, parts: List[str]) -> str:
         sub = parts[1].lower()
@@ -692,7 +692,7 @@ class PcanBenchApp:
 
     def run(self) -> None:
         print(f"PCAN: {self.args.channel} @ {self.args.bitrate}bps")
-        print("IVT-S: " + ("真实设备，脚本不发送 0x521" if self.args.real_ivt else "脚本模拟 0x521"))
+        print("IVT-S: " + ("真实设备，脚本不发送 0x512" if self.args.real_ivt else "脚本模拟 0x512"))
         quiet = not self.args.live_rx
         print("脚本已启动。" + (" 安静模式，输入命令查看结果。" if quiet else " 实时打印主控回帧。"))
         print("输入 help 查看命令列表。\n")
@@ -821,7 +821,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
     p.add_argument("--real-ivt", "--no-isa", action="store_true",
-                   help="不发送模拟 ISA 0x521，供真实 IVT-S 与从控模拟共线")
+                   help="不发送模拟 ISA 0x512，供真实 IVT-S 与从控模拟共线")
     return p.parse_args(argv)
 
 
