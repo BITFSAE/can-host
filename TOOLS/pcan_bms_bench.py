@@ -13,7 +13,7 @@
     pip install python-can
 
 运行前需安装 PEAK 驱动与 PCANBasic。
-默认只覆盖 CAN1 台架测试，不涉及 CAN2 充电机/VCU 模拟。
+默认覆盖 CAN1 台架测试；加 `--sop-ack` 后切换到 CANB，校验 SOP 并模拟 ECU 确认。
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 try:
     import can
-except ImportError as exc:
-    raise SystemExit("缺少 python-can，请先执行: pip install python-can") from exc
+except ImportError:
+    can = None
 
 
 CAN1_BITRATE = 500000
@@ -49,6 +49,9 @@ BMS_FAULT_ID      = 0x187650F4   # 统一故障状态帧
 BMS_ALARM_LEVEL_ID = 0x187850F4  # 告警等级明细
 CAN2_FAULT_ID      = 0x4A1       # CAN2/CANB 统一故障状态镜像
 CAN2_ALARM_LEVEL_ID = 0x4A2      # CAN2/CANB 告警等级明细镜像
+CAN2_SOP_LIMITS_ID   = 0x4A0
+CAN2_SOP_STATUS_ID   = 0x4A3
+CAN2_SOP_ACK_ID      = 0x4A4
 BMS_THRESHOLD_ID  = 0x187750F4   # 告警阈值
 BMS_SWITCH_ID     = 0x187F50F4   # 告警开关
 
@@ -96,6 +99,32 @@ class BmsMonitorState:
     imd_diag_data: Optional[List[int]] = None
     cell_max_v_data: Optional[List[int]] = None
     cell_max_t_data: Optional[List[int]] = None
+    sop_limits_data: Optional[List[int]] = None
+    sop_status_data: Optional[List[int]] = None
+    sop_ack_count: int = 0
+
+
+def crc8_sae_j1850(data: Sequence[int]) -> int:
+    crc = 0xFF
+    for value in data:
+        crc ^= value
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1D) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc ^ 0xFF
+
+
+def build_sop_ack(limits: Sequence[int], status: Sequence[int]) -> can.Message:
+    seq_version = status[0]
+    limits_valid = bool(status[1] & 0x01)
+    p_dis = limits[4] | (limits[5] << 8)
+    p_chg = limits[6] | (limits[7] << 8)
+    data = [seq_version, 0x03,
+            p_dis & 0xFF, (p_dis >> 8) & 0xFF,
+            p_chg & 0xFF, (p_chg >> 8) & 0xFF,
+            0 if limits_valid else 7]
+    data.append(crc8_sae_j1850([0x04, 0xA4, *data]))
+    return can.Message(arbitration_id=CAN2_SOP_ACK_ID,
+                       is_extended_id=False, data=data)
 
 
 class BenchModel:
@@ -369,6 +398,19 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         prefix = "CANB告警等级" if aid == CAN2_ALARM_LEVEL_ID else "告警等级"
         return f"{prefix}: {format_alarm_levels(levels)}"
 
+    if aid == CAN2_SOP_LIMITS_ID and len(data) >= 8:
+        return (f"SOP限值: 放电={(data[0]|data[1]<<8)/10.0:.1f}A/"
+                f"{(data[4]|data[5]<<8)/10.0:.1f}kW 回充="
+                f"{(data[2]|data[3]<<8)/10.0:.1f}A/"
+                f"{(data[6]|data[7]<<8)/10.0:.1f}kW")
+
+    if aid == CAN2_SOP_STATUS_ID and len(data) >= 8:
+        return (f"SOP状态: ver={data[0]>>4} seq={data[0]&0x0F} "
+                f"flags=0x{data[1]:02X} state={data[2]} "
+                f"reason=0x{(data[3]|data[4]<<8):04X} "
+                f"health=0x{data[5]:02X} intervention=0x{data[6]:02X} "
+                f"crc=0x{data[7]:02X}")
+
     if aid == BMS_CELL_MAX_V_ID and len(data) >= 6:
         return (f"单体极值: Max={((data[0]<<8)|data[1])}mV#{data[4]} "
                 f"Min={((data[2]<<8)|data[3])}mV#{data[5]}")
@@ -553,6 +595,17 @@ class CommandProcessor:
             on_list = [k for k, v in sw.items() if v]
             lines.append(f"开关: {' '.join(on_list) if on_list else '全关'}")
 
+        if m.sop_limits_data and m.sop_status_data:
+            lines.append(decode_bms_message(can.Message(
+                arbitration_id=CAN2_SOP_LIMITS_ID,
+                is_extended_id=False,
+                data=m.sop_limits_data)) or "")
+            lines.append(decode_bms_message(can.Message(
+                arbitration_id=CAN2_SOP_STATUS_ID,
+                is_extended_id=False,
+                data=m.sop_status_data)) or "")
+            lines.append(f"SOP确认已发送: {m.sop_ack_count}")
+
         return "\n".join(lines)
 
     def _scenario(self, parts: List[str]) -> str:
@@ -684,15 +737,20 @@ class PcanBenchApp:
         ids: Set[Tuple[bool, int]] = set()
         if self.model.simulate_isa:
             ids.add((False, ISA_CAN_ID))
-        for si in range(SLAVE_COUNT):
-            ids.add((True, SLAVE_TEMP_BASE_ID + (si << 16)))
-            for fi in range(6):
-                ids.add((True, SLAVE_VOLT_BASE_ID + ((si * 6 + fi) << 16)))
+        if self.args.sop_ack:
+            ids.add((False, CAN2_SOP_ACK_ID))
+        else:
+            for si in range(SLAVE_COUNT):
+                ids.add((True, SLAVE_TEMP_BASE_ID + (si << 16)))
+                for fi in range(6):
+                    ids.add((True, SLAVE_VOLT_BASE_ID + ((si * 6 + fi) << 16)))
         return ids
 
     def run(self) -> None:
         print(f"PCAN: {self.args.channel} @ {self.args.bitrate}bps")
+        print("总线用途: " + ("CANB SOP/IVT" if self.args.sop_ack else "CAN1 从控/IVT台架"))
         print("IVT-S: " + ("真实设备，脚本不发送 0x512" if self.args.real_ivt else "脚本模拟 0x512"))
+        print("ECU SOP确认: " + ("开启" if self.args.sop_ack else "关闭"))
         quiet = not self.args.live_rx
         print("脚本已启动。" + (" 安静模式，输入命令查看结果。" if quiet else " 实时打印主控回帧。"))
         print("输入 help 查看命令列表。\n")
@@ -744,12 +802,12 @@ class PcanBenchApp:
         ni = time.monotonic()
         while not self.stop_event.is_set():
             now = time.monotonic()
-            if now >= nv:
+            if (not self.args.sop_ack) and now >= nv:
                 for s in self.model.slaves:
                     for f in build_slave_voltage_frames(self.model, s):
                         self._send(f)
                 nv += TX_VOLT_PERIOD_S
-            if now >= nt:
+            if (not self.args.sop_ack) and now >= nt:
                 for s in self.model.slaves:
                     f = build_slave_temp_frame(self.model, s)
                     if f:
@@ -803,6 +861,24 @@ class PcanBenchApp:
             self.monitor.cell_max_v_data = data
         elif aid == BMS_CELL_MAX_T_ID:
             self.monitor.cell_max_t_data = data
+        elif aid == CAN2_SOP_LIMITS_ID and len(data) == 8:
+            self.monitor.sop_limits_data = data
+        elif aid == CAN2_SOP_STATUS_ID and len(data) == 8:
+            self.monitor.sop_status_data = data
+            self._send_sop_ack_if_valid()
+
+    def _send_sop_ack_if_valid(self) -> None:
+        if not self.args.sop_ack:
+            return
+        limits = self.monitor.sop_limits_data
+        status = self.monitor.sop_status_data
+        if limits is None or status is None:
+            return
+        crc_data = [0x04, 0xA0, *limits, 0x04, 0xA3, *status[:7]]
+        if (status[0] >> 4) != 1 or crc8_sae_j1850(crc_data) != status[7]:
+            return
+        self._send(build_sop_ack(limits, status))
+        self.monitor.sop_ack_count += 1
 
     def _stdin(self) -> None:
         while not self.stop_event.is_set():
@@ -822,11 +898,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
     p.add_argument("--real-ivt", "--no-isa", action="store_true",
                    help="不发送模拟 ISA 0x512，供真实 IVT-S 与从控模拟共线")
+    p.add_argument("--sop-ack", action="store_true",
+                   help="CANB 模式：停止发送从控帧，校验 0x4A0/0x4A3 并发送 0x4A4")
     return p.parse_args(argv)
 
 
 def main(argv: Sequence[str]) -> int:
-    app = PcanBenchApp(parse_args(argv))
+    args = parse_args(argv)
+    if can is None:
+        raise SystemExit("缺少 python-can，请先执行: pip install python-can")
+    app = PcanBenchApp(args)
     app.run()
     return 0
 
