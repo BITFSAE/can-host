@@ -275,10 +275,10 @@ def build_isa_frame(isa: IsaState) -> Optional[can.Message]:
 FAULT_BIT_NAMES = [
     (0,  "OV"), (1,  "UV"), (2,  "OT"), (3,  "UT"),
     (4,  "LBK"), (5,  "TBK"), (6,  "DV"), (7,  "DT"),
-    (8,  "BATTOV"), (9,  "BATTUV"), (10, "BATTOC"), (11, "SOCLO"),
+    (8,  "BATTOV"), (9,  "BATTUV"), (10, "AUX"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
-    (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
-    (20, "ISA"), (21, "CAN"), (22, "SAFETY"), (23, "CHR_TELEM"),
+    (16, "BSUOFF"), (17, "PRECHG"), (18, "CRITICAL_IO"), (19, "HVREL"),
+    (20, "ISA"), (21, "CAN_RUNTIME"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
     (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "IVT_U1"),
 ]
@@ -353,10 +353,11 @@ def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
         "OT": (data[0] >> 5) & 1, "UT": (data[0] >> 4) & 1,
         "DV": (data[0] >> 3) & 1, "DT": (data[0] >> 2) & 1,
         "CHG_OCS": (data[0] >> 1) & 1, "DSCH_OCS": data[0] & 1,
-        "BSUOFF": (data[1] >> 7) & 1, "HVREL": (data[1] >> 5) & 1,
+        "AUX": (data[1] >> 7) & 1, "CAN_RUNTIME": (data[1] >> 6) & 1,
+        "HVREL": (data[1] >> 5) & 1,
         "ISA": (data[1] >> 4) & 1, "BATTOV": (data[1] >> 3) & 1,
         "BATTUV": (data[1] >> 2) & 1, "BEEP": (data[1] >> 1) & 1,
-        "IMD_SW": data[1] & 1,
+        "SOCLO": data[1] & 1,
     }
 
 
@@ -416,7 +417,11 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
                 f"Min={((data[2]<<8)|data[3])}mV#{data[5]}")
 
     if aid == BMS_CELL_MAX_T_ID and len(data) >= 5:
-        return f"温度极值: Max={data[0]-30}C#{data[2]} Min={data[1]-30}C#{data[3]} 风扇={data[4]}"
+        fan = ""
+        if len(data) >= 8:
+            fan = f" duty={data[5]}% rpm≈{data[6]*100} flags=0x{data[7]:02X}"
+        return (f"温度极值: Max={data[0]-30}C#{data[2]} "
+                f"Min={data[1]-30}C#{data[3]} CoolingCtl={data[4]}{fan}")
 
     if aid == BMS_CELL_SUM_ID and len(data) >= 2:
         return f"累加电压: {((data[0]<<8)|data[1])/10.0:.1f}V"
@@ -432,10 +437,10 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         tv = decode_threshold_frame(data)
         return f"告警阈值: OV={tv['OV_mV']}mV UV={tv['UV_mV']}mV OT={tv['OT_raw']-30}C UT={tv['UT_raw']-30}C"
 
-    if aid == BMS_SWITCH_ID and len(data) >= 2:
+    if aid == BMS_SWITCH_ID and len(data) >= 3:
         sw = decode_switch_frame(data)
         on_list = [k for k, v in sw.items() if v]
-        return f"告警开关: {' '.join(on_list) if on_list else '全关'}"
+        return f"告警开关: ver={data[2]} {' '.join(on_list) if on_list else '全关'}"
 
     return None
 
