@@ -1,0 +1,2 @@
+pywebview>=5.4,<7
+python-can>=4.4,<5

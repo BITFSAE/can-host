@@ -1,0 +1,108 @@
+"""Deterministic BMS traffic source for UI development and training."""
+
+from __future__ import annotations
+
+import math
+import random
+import threading
+import time
+from collections.abc import Callable
+
+from .protocol import CanFrame
+
+
+class BmsSimulator:
+    def __init__(self, sink: Callable[[CanFrame], None]) -> None:
+        self.sink = sink
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.thresholds = [4190, 3100, 90, 30]
+        self.switch_bytes = [0xF3, 0x3F, 0x02]
+        self.request_voltage = 5700
+        self.request_current = 30
+        self.current_inverted = False
+        self.tick = 0
+        self.random = random.Random(405)
+
+    def start(self) -> None:
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, name="bms-simulator", daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+
+    def on_command(self, frame: CanFrame) -> None:
+        data = frame.data
+        if frame.arbitration_id == 0x188050F5 and len(data) >= 5:
+            self.request_voltage = int.from_bytes(data[:2], "big")
+            self.request_current = int.from_bytes(data[2:4], "big")
+        elif frame.arbitration_id == 0x188150F5 and len(data) >= 6:
+            self.thresholds = [int.from_bytes(data[:2], "big"), int.from_bytes(data[2:4], "big"), data[4], data[5]]
+        elif frame.arbitration_id == 0x188250F5 and len(data) >= 3:
+            self.switch_bytes = list(data[:3])
+        elif frame.arbitration_id == 0x18A150F5 and data:
+            self.current_inverted = bool(data[0])
+            self.sink(CanFrame(0x18A250F4, bytes([data[0] != 0]), True))
+        elif frame.arbitration_id == 0x18A350F5 and len(data) == 8:
+            self.sink(CanFrame(0x18A450F4, bytes([0]) + data[:7], True))
+
+    def _send(self, can_id: int, data: bytes, extended: bool = True) -> None:
+        self.sink(CanFrame(can_id, data, extended))
+
+    def _run(self) -> None:
+        next_cells = 0.0
+        next_summary = 0.0
+        while not self.stop_event.wait(0.02):
+            now = time.monotonic()
+            if now >= next_cells:
+                next_cells = now + 0.18
+                self._emit_cells()
+            if now >= next_summary:
+                next_summary = now + 0.50
+                self._emit_summary()
+                self.tick += 1
+
+    def _cell_value(self, index: int) -> int:
+        slow = 23 * math.sin(self.tick / 18.0)
+        module_bias = (index // 23 - 2.5) * 3
+        ripple = 18 * math.sin(index * 0.43 + self.tick * 0.08)
+        return round(3835 + slow + module_bias + ripple)
+
+    def _temp_code(self, index: int) -> int:
+        return round(30 + 29 + 5 * math.sin(index * 0.67 + self.tick * 0.04))
+
+    def _emit_cells(self) -> None:
+        for slave in range(6):
+            values = [self._cell_value(slave * 23 + i) for i in range(23)]
+            first = b"\x00\x00" + b"".join(value.to_bytes(2, "little") for value in values[:3])
+            self._send(0x180050F3 + ((slave * 6) << 16), first)
+            for frame_index in range(1, 6):
+                start = 3 + (frame_index - 1) * 4
+                payload = b"".join(value.to_bytes(2, "little") for value in values[start:start + 4])
+                self._send(0x180050F3 + ((slave * 6 + frame_index) << 16), payload)
+            temps = bytes(self._temp_code(slave * 8 + i) for i in range(8))
+            self._send(0x184050F3 + (slave << 16), temps)
+
+    def _emit_summary(self) -> None:
+        cells = [self._cell_value(i) for i in range(138)]
+        temps = [self._temp_code(i) for i in range(48)]
+        voltage_01v = round(sum(cells) / 100)
+        current_01a = round(10000 + 25 + 8 * math.sin(self.tick / 4.0))
+        state_alarm = 0x30
+        self._send(0x186050F4, voltage_01v.to_bytes(2, "big") + current_01a.to_bytes(2, "big") + bytes([78, 0, state_alarm]))
+        self._send(0x186750F4, voltage_01v.to_bytes(2, "big"))
+        max_cell, min_cell = max(cells), min(cells)
+        self._send(0x186150F4, max_cell.to_bytes(2, "big") + min_cell.to_bytes(2, "big") + bytes([cells.index(max_cell), cells.index(min_cell)]))
+        max_temp, min_temp = max(temps), min(temps)
+        self._send(0x186250F4, bytes([max_temp, min_temp, temps.index(max_temp), temps.index(min_temp), 1, 42, 31, 0x07]))
+        self._send(0x186350F4, bytes([0, 0x08]) + self.request_voltage.to_bytes(2, "big") + self.request_current.to_bytes(2, "big") + (0).to_bytes(2, "big"))
+        self._send(0x187650F4, bytes([state_alarm, 0, 0, 0, 0, 0, 0, 2]))
+        self._send(0x187850F4, bytes(8))
+        self._send(0x187750F4, self.thresholds[0].to_bytes(2, "big") + self.thresholds[1].to_bytes(2, "big") + bytes(self.thresholds[2:]))
+        self._send(0x187F50F4, bytes(self.switch_bytes))
+        self._send(0x186850F4, bytes([0x01, 0xF8]) + (500).to_bytes(2, "big") + (820).to_bytes(2, "big") + (1000).to_bytes(2, "big"))
+        self._send(0x186950F4, bytes([0, 0, 0, 0, 0, 0, 0, 0]))
+        self._send(0x186A50F4, (1800).to_bytes(2, "big") + (80).to_bytes(2, "big") + (800).to_bytes(2, "big") + (80).to_bytes(2, "big"))
