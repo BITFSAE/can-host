@@ -10,7 +10,7 @@ from pathlib import Path
 import unittest
 
 from TOOLS.bms_host.can_service import CanService
-from TOOLS.bms_host.app import build_project_document, validate_project_document
+from TOOLS.bms_host.app import Api, build_project_document, validate_project_document
 from TOOLS.bms_host.protocol import BmsProtocol, CanFrame, build_command, command_ack_matches
 
 
@@ -219,6 +219,20 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(document["schema_version"], 1)
         with self.assertRaises(ValueError):
             validate_project_document({"format": "BITFSAE_BMS_PROJECT", "schema_version": 2})
+
+    def test_pywebview_api_does_not_expose_native_objects(self) -> None:
+        api = Api()
+        try:
+            public_state = [name for name in vars(api) if not name.startswith("_")]
+            self.assertEqual(public_state, [])
+        finally:
+            api.close()
+
+    def test_alarm_detail_reports_whether_level_frame_was_received(self) -> None:
+        protocol = BmsProtocol()
+        self.assertFalse(protocol.snapshot({"connected": False})["alarms"][0]["received"])
+        protocol.ingest(CanFrame(0x187850F4, bytes(8), True))
+        self.assertTrue(protocol.snapshot({"connected": True})["alarms"][0]["received"])
 
 
 if __name__ == "__main__":

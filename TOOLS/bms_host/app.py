@@ -8,7 +8,7 @@ import json
 import sys
 from typing import Any
 
-from . import __version__
+from . import __version__, __version_date__
 from .can_service import CanService
 from .protocol import switch_catalog
 
@@ -42,12 +42,15 @@ def validate_project_document(document: Any) -> dict[str, Any]:
 
 class Api:
     def __init__(self) -> None:
-        self.service = CanService()
-        self.window: Any = None
+        # PyWebView exposes every public member of js_api to JavaScript. Native
+        # Window/WinForms objects must remain private; walking AccessibilityObject
+        # recursively raises TYPE_E_CANTLOADLIBRARY on affected Windows systems.
+        self._service = CanService()
+        self._window: Any = None
 
     def bootstrap(self) -> dict[str, Any]:
         return {
-            "version": __version__, "switch_catalog": switch_catalog(),
+            "version": __version__, "version_date": __version_date__, "switch_catalog": switch_catalog(),
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
             "profiles": [
                 {"key": "can1", "name": "CAN1 · 主控 / 从控 / 工具", "bitrate": 500000, "writable": True},
@@ -57,67 +60,67 @@ class Api:
         }
 
     def connect_can(self, config: dict[str, Any]) -> dict[str, Any]:
-        return self.service.connect(config)
+        return self._service.connect(config)
 
     def disconnect_can(self) -> dict[str, Any]:
-        return self.service.disconnect()
+        return self._service.disconnect()
 
     def get_snapshot(self) -> dict[str, Any]:
-        return self.service.snapshot()
+        return self._service.snapshot()
 
     def send_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
-        return self.service.send_command(name, values, acknowledged)
+        return self._service.send_command(name, values, acknowledged)
 
     def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
-        return self.service.read_flash_fault_logs(limit)
+        return self._service.read_flash_fault_logs(limit)
 
     def choose_record_file(self) -> dict[str, Any]:
-        if not self.window:
+        if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
             import webview
             default = f"BMS_CAN_{datetime.now():%Y%m%d_%H%M%S}.bmslog"
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=default,
                 file_types=("BMS 数据记录 (*.bmslog)", "CSV 文件 (*.csv)"),
             )
             if not selected:
                 return {"ok": False, "cancelled": True}
             path = selected if isinstance(selected, str) else selected[0]
-            return self.service.start_recording(path)
+            return self._service.start_recording(path)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     def stop_recording(self) -> dict[str, Any]:
-        return self.service.stop_recording()
+        return self._service.stop_recording()
 
     def choose_replay_file(self) -> dict[str, Any]:
-        if not self.window:
+        if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
             import webview
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.OPEN_DIALOG, allow_multiple=False,
                 file_types=("BMS 数据记录 (*.bmslog;*.csv)", "BMS 原生记录 (*.bmslog)", "CSV 文件 (*.csv)"),
             )
             if not selected:
                 return {"ok": False, "cancelled": True}
             path = selected if isinstance(selected, str) else selected[0]
-            return self.service.load_replay(path)
+            return self._service.load_replay(path)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     def replay_control(self, action: str, value: float | None = None) -> dict[str, Any]:
-        return self.service.replay_control(action, value)
+        return self._service.replay_control(action, value)
 
     def export_project(self, project: dict[str, Any]) -> dict[str, Any]:
-        if not self.window:
+        if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
             import webview
             name = str(project.get("name") or "BMS_Project").strip()[:80]
             safe_name = "".join(char if char not in '<>:"/\\|?*' else "_" for char in name) or "BMS_Project"
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=f"{safe_name}.bmsproj",
                 file_types=("BMS 工程文件 (*.bmsproj)",),
             )
@@ -133,11 +136,11 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     def import_project(self) -> dict[str, Any]:
-        if not self.window:
+        if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
             import webview
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.OPEN_DIALOG, allow_multiple=False, file_types=("BMS 工程文件 (*.bmsproj)",),
             )
             if not selected:
@@ -151,7 +154,7 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     def close(self) -> None:
-        self.service.disconnect()
+        self._service.disconnect()
 
 
 def main() -> None:
@@ -162,9 +165,10 @@ def main() -> None:
     api = Api()
     window = webview.create_window(
         "BITFSAE · BMS Control Desk", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
-        width=1460, height=920, min_size=(1120, 720), background_color="#0C1519",
+        width=1460, height=920, min_size=(1120, 720), background_color="#0B0F12",
+        zoomable=True,
     )
-    api.window = window
+    api._window = window
     debug = "--debug" in sys.argv
     try:
         webview.start(debug=debug)

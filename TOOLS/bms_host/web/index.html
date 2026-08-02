@@ -7,219 +7,454 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="app">
+    <aside class="rail">
       <div class="brand">
-        <div class="brand-mark"><span></span><span></span><span></span></div>
-        <div><strong>BMS</strong><small>CONTROL DESK</small></div>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 28 28"><rect x="3.5" y="7.5" width="17" height="13" rx="2.5"/><path d="M20.5 12.5h3.5v3h-3.5"/><path d="M8 11v6M12 11v6M16 11v6"/></svg>
+        </span>
+        <span class="brand-text"><strong>BMS</strong><small>CONTROL DESK</small></span>
       </div>
+
       <nav id="nav" aria-label="主导航">
-        <button class="nav-item active" data-page="overview"><i>01</i><span>运行总览</span></button>
-        <button class="nav-item" data-page="cells"><i>02</i><span>单体监视</span><b id="cellNavBadge">138</b></button>
-        <button class="nav-item" data-page="alarms"><i>03</i><span>告警与配置</span><b id="alarmNavBadge" class="hidden">0</b></button>
-        <button class="nav-item" data-page="control"><i>04</i><span>充电与控制</span></button>
-        <button class="nav-item" data-page="frames"><i>05</i><span>CAN 监视器</span></button>
+        <span class="nav-group">监视</span>
+        <button class="nav-item active" type="button" data-page="overview" title="运行总览（Alt+1）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 14a8.5 8.5 0 0 1 17 0"/><path d="M12 14l4.2-3.6"/><circle cx="12" cy="14" r="1.3"/><path d="M3.5 18h17"/></svg>
+          <span>运行总览</span>
+        </button>
+        <button class="nav-item" type="button" data-page="cells" title="单体监视（Alt+2）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="7" height="7" rx="1.4"/><rect x="13.5" y="4.5" width="7" height="7" rx="1.4"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.4"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.4"/></svg>
+          <span>电芯与温度</span>
+          <b id="cellNavBadge" class="badge hidden">0</b>
+        </button>
+        <button class="nav-item" type="button" data-page="alarms" title="故障与记录（Alt+3）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.2 3.4 19.4h17.2L12 4.2Z"/><path d="M12 10.2v3.9"/><path d="M12 16.6h.01"/></svg>
+          <span>故障与记录</span>
+          <b id="alarmNavBadge" class="badge alert hidden">0</b>
+        </button>
+        <button class="nav-item" type="button" data-page="frames" title="CAN 监视器（Alt+4）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12h4l3-7.5 4.4 15 3.1-7.5h4.5"/></svg>
+          <span>CAN 监视器</span>
+        </button>
+        <span class="nav-group operation">操作</span>
+        <button class="nav-item" type="button" data-page="control" title="参数与命令（Alt+5）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h9M18.5 7.5h2M3.5 16.5h3M11.5 16.5h9"/><circle cx="15.5" cy="7.5" r="2.4"/><circle cx="8.5" cy="16.5" r="2.4"/></svg>
+          <span>参数与命令</span>
+        </button>
       </nav>
-      <div class="sidebar-foot">
-        <div class="bus-lamp"><span id="sideLamp"></span><div><small>当前通道</small><strong id="sideBus">未连接</strong></div></div>
-        <p>F405 · 138S / 48T</p>
+
+      <div class="rail-foot">
+        <div class="team-signature"><strong>BITFSAE</strong><span>FORMULA STUDENT</span></div>
+        <dl class="rail-facts">
+          <div><dt>Control Desk</dt><dd id="appVersion">v—</dd></div>
+          <div><dt>版本日期</dt><dd id="appVersionDate">—</dd></div>
+          <div><dt>目标主控</dt><dd>STM32F405</dd></div>
+        </dl>
       </div>
     </aside>
 
-    <section class="workspace">
+    <div class="workspace">
       <header class="topbar">
-        <div class="page-identity"><span id="pageKicker">LIVE SYSTEM</span><h1 id="pageTitle">运行总览</h1></div>
-        <div class="connection-strip">
-          <div class="traffic"><span>RX <b id="rxCount">0</b></span><span>TX <b id="txCount">0</b></span></div>
-          <button id="projectButton" class="project-button"><span>工程</span><b id="projectNameTop">未命名</b></button>
-          <button id="connectButton" class="connect-button"><span class="status-dot"></span><b>连接设备</b><small>PCAN / 模拟</small></button>
+        <div class="title-block">
+          <h1 id="pageTitle">运行总览</h1>
+          <p id="pageKicker">主控与六个从控的实时状态</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="projectButton" class="ghost-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2.5h9v10.5h-17Z"/></svg>
+            <span class="ghost-label">工程</span>
+            <b id="projectNameTop">未命名</b>
+          </button>
+          <button id="connectButton" class="connect-button" type="button">
+            <span class="status-dot" aria-hidden="true"></span>
+            <b>连接设备</b>
+            <small>PCAN / 模拟</small>
+          </button>
         </div>
       </header>
 
-      <main>
-        <section class="page active" id="page-overview">
-          <div class="system-banner" id="systemBanner">
-            <div><span class="eyebrow">PACK STATUS</span><h2 id="stateName">等待 CAN 数据</h2><p id="stateDescription">连接 PCAN 后开始监视主控与六个从控。</p></div>
-            <div class="banner-meta"><span id="busProfile">CAN1 · 500 kbit/s</span><b id="summaryAge">—</b><small id="firmwareIdentity">固件身份 —</small></div>
+      <main id="main">
+        <section class="page active" id="page-overview" aria-label="运行总览">
+          <div class="overview-status" id="systemBanner">
+            <div class="machine-state">
+              <span>状态机</span><strong id="stateName">等待 CAN 数据</strong><small id="stateDescription">连接后开始监视</small>
+            </div>
+            <dl class="status-register">
+              <div><dt>告警</dt><dd id="alarmLevelName">等待数据</dd></div>
+              <div><dt>故障码</dt><dd id="overviewFaultCode">0x00000000</dd></div>
+              <div><dt>活动项</dt><dd id="activeAlarmCount">—</dd></div>
+              <div><dt>运行模式</dt><dd id="heroChargeMode">—</dd></div>
+              <div><dt>本机时间</dt><dd id="overviewClock">—</dd></div>
+            </dl>
           </div>
 
-          <div class="metric-rail">
-            <article class="primary-metric voltage"><span>包电压</span><strong id="packVoltage">—</strong><em>V</em><small id="cellSumDelta">单体累加 —</small></article>
-            <article class="primary-metric current"><span>实时电流</span><strong id="packCurrent">—</strong><em>A</em><small>正值充电 · 负值放电</small></article>
-            <article class="primary-metric soc"><span>荷电状态</span><strong id="packSoc">—</strong><em>%</em><div class="soc-track"><i id="socBar"></i></div></article>
-            <article class="primary-metric delta"><span>单体压差</span><strong id="cellDelta">—</strong><em>mV</em><small id="cellExtremes">最高 / 最低 —</small></article>
+          <div class="primary-readouts">
+            <article><span>包电压</span><p><b id="packVoltage">—</b><em>V</em></p><small id="cellSumDelta">单体累加 —</small></article>
+            <article><span>总电流</span><p><b id="packCurrent">—</b><em>A</em></p><small>正值充电 / 负值放电</small></article>
+            <article><span>PRE 电压</span><p><b id="prechargeVoltage">—</b><em>V</em></p><small id="prechargeResult">未发生预充</small></article>
+            <article><span>单体压差</span><p><b id="cellDelta">—</b><em>mV</em></p><small id="cellExtremes">最高 / 最低 —</small></article>
+            <article><span>SOC</span><p><b id="packSoc">—</b><em>%</em></p><div class="meter"><i id="socBar"></i></div></article>
           </div>
 
-          <div class="overview-grid">
-            <article class="panel trend-panel">
-              <header><div><span class="eyebrow">RECENT TRACE</span><h3>电池实时曲线</h3></div><div class="legend"><span class="volt-line">电压</span><span class="curr-line">电流</span></div></header>
-              <canvas id="trendCanvas" aria-label="包电压和电流实时曲线"></canvas>
-            </article>
-            <article class="panel topology-panel">
-              <header><div><span class="eyebrow">HV PATH</span><h3>高压链路</h3></div><span id="prechargeResult" class="tag neutral">未发生预充</span></header>
-              <div class="hv-path">
-                <div class="hv-node"><small>PACK</small><b id="hvPackVoltage">— V</b></div>
-                <div class="contactor" id="negativeRelay"><i></i><span>主负</span></div>
-                <div class="hv-node"><small>DC LINK</small><b id="prechargeVoltage">— V</b></div>
-                <div class="contactor" id="positiveRelay"><i></i><span>主正</span></div>
-                <div class="hv-node"><small>OUTPUT</small><b id="hvOutput">断开</b></div>
+          <div class="overview-layout">
+            <article class="data-section hv-section">
+              <header><h3>高压与安全回路</h3><span id="hvOutput" class="state-text">断开</span></header>
+              <div class="state-table">
+                <div id="positiveRelay"><span>主正继电器</span><em>—</em></div>
+                <div id="negativeRelay"><span>主负继电器</span><em>—</em></div>
+                <div id="prechargeRelay"><span>预充继电器</span><em>—</em></div>
+                <div><span>HV_ACC</span><em id="hvAcc">—</em></div>
+                <div><span>充电信号</span><em id="chargeButton">—</em></div>
+                <div><span>安全回路</span><em id="safetyCircuit">—</em></div>
+                <div><span>预充耗时</span><em id="prechargeTime">—</em></div>
+                <div><span>继电器输出</span><em id="relayOutputState">—</em></div>
               </div>
-              <div class="hv-details"><span>HV_ACC <b id="hvAcc">—</b></span><span>充电按钮 <b id="chargeButton">—</b></span><span>预充耗时 <b id="prechargeTime">—</b></span></div>
             </article>
-            <article class="panel modules-panel">
-              <header><div><span class="eyebrow">SLAVE HEALTH</span><h3>从控完整性</h3></div><span id="moduleSummary">0 / 6 在线</span></header>
-              <div class="module-row" id="moduleRow"></div>
-              <p class="panel-note">每个从控需同时收到 6 帧电压和 1 帧温度；正式固件判定超时为 350 ms。</p>
+
+            <article class="data-section module-section">
+              <header><h3>六个模组</h3><span id="moduleSummary" class="state-text">—</span></header>
+              <div class="module-table-head"><span>模组</span><span>平均电压</span><span>平均温度</span><span>压差</span><span>状态</span></div>
+              <div id="moduleAverages" class="module-average-table"></div>
             </article>
-            <article class="panel limits-panel">
-              <header><div><span class="eyebrow">POWER ENVELOPE</span><h3>SOP 当前限值</h3></div></header>
-              <div class="limit-grid"><div><span>放电电流</span><b id="sopDisCurrent">—</b><small>A</small></div><div><span>充电电流</span><b id="sopChgCurrent">—</b><small>A</small></div><div><span>放电功率</span><b id="sopDisPower">—</b><small>kW</small></div><div><span>充电功率</span><b id="sopChgPower">—</b><small>kW</small></div></div>
+
+            <article class="data-section condition-section">
+              <header><h3>温度、风扇与 IMD</h3><span id="coolingTag" class="state-text">—</span></header>
+              <dl class="condition-list">
+                <div><dt>最高温度</dt><dd><b id="maxTemp">—</b><small id="maxTempNo"></small></dd></div>
+                <div><dt>最低温度</dt><dd><b id="minTemp">—</b><small id="minTempNo"></small></dd></div>
+                <div><dt>温差</dt><dd id="tempDelta">—</dd></div>
+                <div><dt>风扇</dt><dd><b id="fanDuty">—</b><small id="fanRpm"></small></dd></div>
+                <div><dt>IMD</dt><dd id="imdStatus">等待数据</dd></div>
+                <div><dt>绝缘阻值</dt><dd><b id="imdResistance">—</b><small>kΩ</small></dd></div>
+                <div><dt>IMD 频率</dt><dd id="imdFrequency">—</dd></div>
+                <div><dt>IMD 占空比</dt><dd id="imdDuty">—</dd></div>
+              </dl>
             </article>
-            <article class="panel alarm-brief">
-              <header><div><span class="eyebrow">ACTIVE ALARMS</span><h3>当前告警</h3></div><button class="text-button" data-goto="alarms">查看全部 →</button></header>
-              <div id="activeAlarmBrief" class="empty-state">未收到告警状态帧</div>
+
+            <article class="data-section trend-section">
+              <header>
+                <h3>包电压与总电流趋势</h3>
+                <span class="trend-legend"><i class="voltage"></i>电压 <i class="current"></i>电流</span>
+              </header>
+              <div class="trend-body"><canvas id="trendCanvas" aria-label="包电压和总电流实时曲线"></canvas></div>
             </article>
-            <article class="panel imd-panel">
-              <header><div><span class="eyebrow">INSULATION</span><h3>IMD 绝缘监视</h3></div><span id="imdStatus" class="tag neutral">等待数据</span></header>
-              <div class="imd-value"><strong id="imdResistance">—</strong><span>kΩ</span></div>
-              <div class="imd-details"><span>频率 <b id="imdFrequency">—</b></span><span>占空比 <b id="imdDuty">—</b></span></div>
-            </article>
+
+            <div class="overview-side-stack">
+              <article class="data-section charge-time-section">
+                <header><h3>本次充电时间</h3><span id="chargeTimingState">未充电</span></header>
+                <dl class="charge-time-grid">
+                  <div><dt>已计时</dt><dd id="chargeElapsed">00:00:00</dd></div>
+                  <div><dt>预计剩余</dt><dd id="chargeRemaining">—</dd></div>
+                  <div><dt>预计充满</dt><dd id="chargeExpectedAt">—</dd></div>
+                  <div><dt>估算电流</dt><dd id="chargeAverageCurrent">—</dd></div>
+                </dl>
+                <p id="chargeEstimateNote">检测到充电模式后开始计时；预计时间按当前SOC和本次平均电流估算。</p>
+              </article>
+
+              <article class="data-section fault-section">
+                <header><h3>当前故障与告警</h3><button class="link-button" type="button" data-goto="alarms">进入详情</button></header>
+                <div id="activeAlarmBrief" class="fault-brief">未收到告警状态帧</div>
+              </article>
+            </div>
           </div>
         </section>
 
-        <section class="page" id="page-cells">
-          <div class="section-tools">
-            <div class="segmented" id="cellMode"><button class="active" data-mode="voltage">单体电压 · 138</button><button data-mode="temperature">温度 · 48</button></div>
-            <div class="cell-summary"><span>最高 <b id="gridMax">—</b></span><span>最低 <b id="gridMin">—</b></span><span>极差 <b id="gridDelta">—</b></span></div>
-            <label class="quiet-toggle"><input id="onlyAbnormal" type="checkbox"><span></span>只看异常 / 缺失</label>
+        <section class="page" id="page-cells" aria-label="电芯与温度">
+          <div class="cell-overview-bar">
+            <dl class="cell-summary-register">
+              <div><dt>电压最高</dt><dd id="gridMax">—</dd></div>
+              <div><dt>电压最低</dt><dd id="gridMin">—</dd></div>
+              <div><dt>总压差</dt><dd id="gridDelta">—</dd></div>
+              <div><dt>温度最高</dt><dd id="tempGridMax">—</dd></div>
+              <div><dt>温度最低</dt><dd id="tempGridMin">—</dd></div>
+              <div><dt>总温差</dt><dd id="tempGridDelta">—</dd></div>
+            </dl>
+            <span id="cellDataIssue" class="cell-data-issue hidden">—</span>
+            <label class="switch">
+              <input id="onlyAbnormal" type="checkbox">
+              <i class="switch-track" aria-hidden="true"></i>
+              <span>只看异常 / 缺失</span>
+            </label>
           </div>
-          <div class="cell-scale"><span>低</span><i></i><span>正常</span><i></i><span>高</span><small>颜色按当前阈值计算，不代替主控延时告警结果</small></div>
+
+          <div class="threshold-register">
+            <strong>保护阈值</strong>
+            <dl>
+              <div><dt>过压</dt><dd id="displayOv">—</dd></div>
+              <div><dt>欠压</dt><dd id="displayUv">—</dd></div>
+              <div><dt>过温</dt><dd id="displayOt">—</dd></div>
+              <div><dt>低温</dt><dd id="displayUt">—</dd></div>
+            </dl>
+            <div class="cell-legend">
+            <span class="chip normal">正常</span>
+            <span class="chip low">低于下限</span>
+            <span class="chip high">高于上限</span>
+            <span class="chip invalid">断线 / 过期 / 越界</span>
+            </div>
+          </div>
+
           <div id="cellModules" class="cell-modules"></div>
         </section>
 
-        <section class="page" id="page-alarms">
-          <div class="alarm-layout">
-            <div class="alarm-main">
-              <div class="section-heading"><div><span class="eyebrow">FAULT MATRIX</span><h2>32 项告警状态</h2><p>等级来自 0x187850F4 / 0x4A2；故障码来自统一故障帧。</p></div><div class="fault-code"><small>FAULT CODE</small><b id="faultCode">0x00000000</b></div></div>
-              <div id="alarmMatrix" class="alarm-matrix"></div>
-              <article class="panel fault-history-panel">
-                <header><div><span class="eyebrow">FAULT TIMELINE</span><h3>故障码变化记录</h3></div><span>当前会话 / 历史回放</span></header>
-                <div id="faultHistory" class="fault-history"><div class="empty-state">故障码发生变化后在这里显示进入和清除记录。</div></div>
-              </article>
-              <article class="panel fault-history-panel">
-                <header><div><span class="eyebrow">FLASH EVENT LOG</span><h3>Flash 重要故障日志</h3></div><button class="text-button" id="readFlashLog">读取最近 50 条</button></header>
-                <div id="flashFaultLog" class="fault-history"><div class="empty-state">仅在自检、待机或故障保持态读取；不会在高压运行中访问 Flash。</div></div>
-              </article>
+        <section class="page" id="page-alarms" aria-label="故障与记录">
+          <div class="diagnostic-head">
+            <div class="fault-readout"><span>统一故障码</span><b id="faultCode">0x00000000</b><button class="link-button" type="button" id="copyFaultCode">复制</button></div>
+            <dl><div><dt>当前等级</dt><dd id="alarmPageLevel">—</dd></div><div><dt>活动告警</dt><dd id="alarmActiveCount">—</dd></div></dl>
+            <label class="switch"><input id="onlyActiveAlarms" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>只看活动项</span></label>
+          </div>
+
+          <div id="alarmMatrix" class="alarm-matrix"></div>
+
+          <article class="data-section protection-status">
+            <header><h3>保护开关</h3><span class="head-actions"><b id="switchStatusSummary">—</b><small id="switchVersion">回报 V—</small></span></header>
+            <div id="switchStatusList" class="switch-status-list"></div>
+          </article>
+
+          <div class="history-grid">
+            <article class="data-section">
+              <header><h3>故障码变化记录</h3><span>当前会话 / 历史回放</span></header>
+              <div id="faultHistory" class="event-list"><div class="empty-state">尚无故障码变化。</div></div>
+            </article>
+            <article class="data-section">
+              <header><h3>Flash 重要故障日志</h3><span class="head-actions"><small id="flashLogInfo">未读取</small><button class="outline-button" type="button" id="readFlashLog">读取最近 50 条</button></span></header>
+              <div id="flashFaultLog" class="event-list"><div class="empty-state">尚未读取。</div></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" id="page-control" aria-label="参数与命令">
+          <article class="panel interlock">
+            <header class="panel-head">
+              <h3>命令发送条件</h3>
+              <span class="head-actions">
+                <span id="lockConnected" class="lock"><i aria-hidden="true"></i>CAN1 已连接</span>
+                <span id="lockState" class="lock"><i aria-hidden="true"></i>主控处于允许状态</span>
+                <span id="lockFresh" class="lock"><i aria-hidden="true"></i>状态帧未超时</span>
+              </span>
+            </header>
+            <div class="panel-body">
+              <p class="note tight">配置、电流方向、充电机类型和 Flash 日志只在自检、待机或故障保持态处理。预充和高压闭合期间主控会明确拒绝并返回原因。所有写命令都需要逐次勾选确认。</p>
             </div>
-            <aside class="config-column">
-              <article class="panel config-panel">
-                <header><div><span class="eyebrow">THRESHOLDS</span><h3>单体告警阈值</h3></div><span id="thresholdSync" class="sync-state">等待主控</span></header>
+          </article>
+
+          <div class="grid">
+            <article class="panel span-6 command-panel">
+              <header class="panel-head">
+                <h3>写入单体保护阈值</h3>
+                <span id="thresholdSync" class="tag neutral">等待主控</span>
+              </header>
+              <div class="panel-body">
                 <div class="field-grid">
-                  <label>过压上限 <span><input id="ovInput" type="number" min="3011" max="4190"><em>mV</em></span></label>
-                  <label>欠压下限 <span><input id="uvInput" type="number" min="3010" max="4189"><em>mV</em></span></label>
-                  <label>过温上限 <span><input id="otInput" type="number" min="6" max="65"><em>°C</em></span></label>
-                  <label>低温下限 <span><input id="utInput" type="number" min="-25" max="49"><em>°C</em></span></label>
+                  <label class="field"><span class="field-label">过压上限</span><span class="field-input"><input id="ovInput" type="number" min="3011" max="4190"><em>mV</em></span><small>3011 .. 4190</small></label>
+                  <label class="field"><span class="field-label">欠压下限</span><span class="field-input"><input id="uvInput" type="number" min="3010" max="4189"><em>mV</em></span><small>3010 .. 4189</small></label>
+                  <label class="field"><span class="field-label">过温上限</span><span class="field-input"><input id="otInput" type="number" min="6" max="65"><em>°C</em></span><small>6 .. 65</small></label>
+                  <label class="field"><span class="field-label">低温下限</span><span class="field-input"><input id="utInput" type="number" min="-25" max="49"><em>°C</em></span><small>-25 .. 49</small></label>
                 </div>
-                <button class="action-button" id="sendThresholds">写入阈值</button>
-                <p class="form-note">充电模式下，固件还会把实际温度范围收紧为 5..50 °C。</p>
-              </article>
-              <article class="panel config-panel">
-                <header><div><span class="eyebrow">PROTECTION SWITCHES</span><h3>告警与蜂鸣器开关</h3></div><span id="switchVersion" class="sync-state">V—</span></header>
+                <button class="action-button" type="button" id="sendThresholds">确认并写入四项阈值</button>
+              </div>
+            </article>
+
+            <article class="panel span-6">
+              <header class="panel-head">
+                <h3>写入离车充电请求</h3>
+                <span class="tag neutral" id="chargeModeTag">模式未知</span>
+              </header>
+              <div class="panel-body">
+                <div class="duo-fields">
+                  <label class="field big">
+                    <span class="field-label">请求电压</span>
+                    <span class="field-input"><input id="chargeVoltage" type="number" min="415.4" max="578.2" step="0.1"><em>V</em></span>
+                    <small>允许 415.4 .. 578.2 V</small>
+                  </label>
+                  <label class="field big">
+                    <span class="field-label">请求电流</span>
+                    <span class="field-input"><input id="chargeCurrent" type="number" min="0" max="4.5" step="0.1"><em>A</em></span>
+                    <small>固件硬上限 4.5 A</small>
+                  </label>
+                </div>
+                <button class="action-button" type="button" id="sendChargeConfig">确认并写入充电请求</button>
+                <dl class="mini-facts spread">
+                  <div><dt>主控当前回报</dt><dd id="chargeEcho">— V / — A</dd></div>
+                </dl>
+              </div>
+            </article>
+
+            <article class="panel span-12 command-panel">
+              <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><small class="muted">19 项整组写入</small></header>
+              <div class="panel-body">
                 <div id="switchList" class="switch-list"></div>
-                <button class="action-button" id="sendSwitches">写入全部开关</button>
-                <p class="form-note">正式 Debug / Release 固件会强制保持基础保护开启；写入后以主控回报值为准。</p>
-              </article>
-            </aside>
+                <button class="action-button" type="button" id="sendSwitches">确认并写入全部开关</button>
+              </div>
+            </article>
+
+            <article class="panel span-6">
+              <header class="panel-head">
+                <h3>系统参数与维护命令</h3>
+                <span id="saveStatus" class="tag neutral">等待保存状态</span>
+              </header>
+              <div class="panel-body flush">
+                <ul class="action-list">
+                  <li>
+                    <span class="action-text"><b>RTC 校时</b><small>写入当前 Windows 本地时间</small></span>
+                    <span class="action-controls"><b class="mono" id="rtcReply">—</b><button class="outline-button" type="button" id="syncRtc">立即校时</button></span>
+                  </li>
+                  <li>
+                    <span class="action-text"><b>电流方向</b><small>周期状态帧会自动回读当前值</small></span>
+                    <span class="action-controls">
+                      <select id="currentDirection" aria-label="电流方向"><option value="0">正常</option><option value="1">反转</option></select>
+                      <button class="outline-button" type="button" id="sendCurrentDirection">写入</button>
+                    </span>
+                  </li>
+                  <li>
+                    <span class="action-text"><b>充电机类型</b><small>待机态切换 Legacy / Chroma，并保存到 Flash</small></span>
+                    <span class="action-controls">
+                      <select id="chargerType" aria-label="充电机类型"><option value="0">Legacy</option><option value="1">Chroma</option></select>
+                      <button class="outline-button" type="button" id="sendChargerType">写入</button>
+                    </span>
+                  </li>
+                </ul>
+                <div class="danger-zone">
+                  <span class="danger-title">需要谨慎的操作</span>
+                  <ul class="action-list">
+                    <li>
+                      <span class="action-text"><b>清除 Flash 故障日志</b><small>只清历史日志，不消除实时故障，也不解除故障保持</small></span>
+                      <span class="action-controls"><button class="danger-outline" type="button" id="clearFaultLog">请求清除</button></span>
+                    </li>
+                    <li>
+                      <span class="action-text"><b>故障保持复位</b><small>要求实时一级、二级告警已清除且 HV_ACC 已释放</small></span>
+                      <span class="action-controls"><button class="danger-outline" type="button" id="faultReset">请求复位</button></span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
           </div>
         </section>
 
-        <section class="page" id="page-control">
-          <div class="control-grid">
-            <article class="panel charge-control">
-              <header><div><span class="eyebrow">CHARGE REQUEST</span><h3>离车充电请求</h3></div><span class="tag" id="chargeModeTag">模式未知</span></header>
-              <div class="large-fields">
-                <label><span>请求电压</span><div><input id="chargeVoltage" type="number" min="415.4" max="578.2" step="0.1"><em>V</em></div><small>允许 415.4..578.2 V</small></label>
-                <label><span>请求电流</span><div><input id="chargeCurrent" type="number" min="0" max="4.5" step="0.1"><em>A</em></div><small>固件硬上限 4.5 A</small></label>
-              </div>
-              <button class="action-button" id="sendChargeConfig">写入充电请求</button>
-              <div class="echo-row"><span>主控当前回报</span><b id="chargeEcho">— V / — A</b></div>
-            </article>
-            <article class="panel control-actions">
-              <header><div><span class="eyebrow">MAINTENANCE</span><h3>维护命令</h3></div><span id="saveStatus" class="tag neutral">等待保存状态</span></header>
-              <div class="maintenance-list">
-                <div><span><b>RTC 校时</b><small>写入当前 Windows 本地时间</small></span><button id="syncRtc">立即校时</button></div>
-                <div><span><b>电流方向</b><small>周期状态会自动回读当前值</small></span><span class="inline-command"><select id="currentDirection"><option value="0">正常</option><option value="1">反转</option></select><button id="sendCurrentDirection">写入</button></span></div>
-                <div><span><b>充电机类型</b><small>待机态切换 Legacy / Chroma，并保存到 Flash</small></span><span class="inline-command"><select id="chargerType"><option value="0">Legacy</option><option value="1">Chroma</option></select><button id="sendChargerType">写入</button></span></div>
-                <div><span><b>清除 Flash 故障日志</b><small>只清历史日志，不消除实时故障</small></span><button class="danger-outline" id="clearFaultLog">请求清除</button></div>
-                <div><span><b>故障保持复位</b><small>要求实时告警清除且 HV_ACC 已释放</small></span><button class="danger-outline" id="faultReset">请求复位</button></div>
-              </div>
-            </article>
-            <article class="panel interlock-panel">
-              <header><div><span class="eyebrow">COMMAND INTERLOCK</span><h3>命令发送条件</h3></div></header>
-              <div class="interlock-list"><span id="lockConnected"><i></i>CAN1 已连接</span><span id="lockState"><i></i>主控处于允许状态</span><span id="lockFresh"><i></i>状态帧未超时</span></div>
-              <p>配置、电流方向、充电机类型和 Flash 日志只在自检、待机或故障保持态处理。预充和高压闭合期间，主控会明确拒绝并返回原因。</p>
-            </article>
-            <article class="panel ivt-panel">
-              <header><div><span class="eyebrow">CANB · IVT-S</span><h3>能量计数据</h3></div><span id="ivtValidity" class="tag neutral">等待数据</span></header>
-              <div class="ivt-grid"><div><span>U1 电池侧</span><b id="ivtU1">—</b><small>V</small></div><div><span>U2 DC-link</span><b id="ivtU2">—</b><small>V</small></div><div><span>电流</span><b id="ivtCurrent">—</b><small>A</small></div><div><span>瞬时功率</span><b id="ivtPower">—</b><small>W</small></div><div><span>电荷计数</span><b id="ivtCharge">—</b><small>As</small></div><div><span>能量计数</span><b id="ivtEnergy">—</b><small>Wh</small></div></div>
-            </article>
+        <section class="page" id="page-frames" aria-label="CAN 监视器">
+          <div class="toolbar">
+            <label class="search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6 20 20"/></svg>
+              <input id="frameSearch" placeholder="按 CAN ID、帧名称或数据筛选" aria-label="筛选报文">
+            </label>
+            <div class="segmented small" id="frameType" role="group" aria-label="方向筛选">
+              <button class="active" type="button" data-kind="all">全部</button>
+              <button type="button" data-kind="rx">接收</button>
+              <button type="button" data-kind="tx">发送</button>
+            </div>
+            <label class="switch">
+              <input id="pauseFrames" type="checkbox">
+              <i class="switch-track" aria-hidden="true"></i>
+              <span>暂停列表</span>
+            </label>
+            <span class="toolbar-actions">
+              <button class="outline-button" type="button" id="replayButton">打开历史</button>
+              <button class="outline-button record" type="button" id="recordButton">● 记录数据</button>
+            </span>
           </div>
-        </section>
 
-        <section class="page" id="page-frames">
-          <div class="frame-toolbar">
-            <label class="search-box"><span>⌕</span><input id="frameSearch" placeholder="按 ID、名称或数据筛选"></label>
-            <div class="segmented small" id="frameType"><button class="active" data-kind="all">全部</button><button data-kind="rx">RX</button><button data-kind="tx">TX</button></div>
-            <label class="quiet-toggle"><input id="pauseFrames" type="checkbox"><span></span>暂停列表</label>
-            <button class="outline-button" id="replayButton">打开历史</button>
-            <button class="outline-button" id="recordButton">● 记录数据</button>
-          </div>
           <div id="replayBar" class="replay-bar hidden">
-            <button id="replayPlay">Ⅱ</button><span id="replayFile">历史记录</span>
-            <b id="replayPosition">00:00 / 00:00</b><input id="replaySeek" type="range" min="0" max="1000" value="0">
-            <label>速度<select id="replaySpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select></label>
+            <button id="replayPlay" type="button" aria-label="播放或暂停">Ⅱ</button>
+            <span id="replayFile">历史记录</span>
+            <b id="replayPosition">00:00 / 00:00</b>
+            <input id="replaySeek" type="range" min="0" max="1000" value="0" aria-label="回放位置">
+            <label>速度
+              <select id="replaySpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
+            </label>
           </div>
-          <div class="frame-table-wrap">
-            <table class="frame-table"><thead><tr><th>时间</th><th>方向</th><th>CAN ID</th><th>类型</th><th>DLC</th><th>数据</th><th>说明</th></tr></thead><tbody id="frameRows"></tbody></table>
-            <div id="frameEmpty" class="table-empty">连接设备后，这里显示最近 320 帧。</div>
+
+          <div class="table-wrap">
+            <table class="frame-table">
+              <thead><tr><th>时间</th><th>方向</th><th>CAN ID</th><th>类型</th><th>DLC</th><th>数据</th><th>说明</th></tr></thead>
+              <tbody id="frameRows"></tbody>
+            </table>
+            <div id="frameEmpty" class="empty-state large">连接设备后，这里显示最近 320 帧。</div>
           </div>
         </section>
       </main>
-    </section>
+
+      <footer class="statusbar">
+        <span class="status-item"><i id="sideLamp" class="lamp" aria-hidden="true"></i><b id="sideBus">未连接</b></span>
+        <span class="status-item"><span class="label">总线</span><b id="busProfile">CAN1 · 500 kbit/s</b></span>
+        <span class="status-item"><span class="label">状态帧</span><b id="summaryAge">—</b></span>
+        <span class="status-item"><span class="label">RX</span><b id="rxCount">0</b><span class="label">TX</span><b id="txCount">0</b></span>
+        <span class="status-item"><span class="label">固件</span><b id="firmwareIdentity">—</b></span>
+        <span class="status-item push" id="recordingState"></span>
+      </footer>
+    </div>
   </div>
 
   <dialog id="connectDialog" class="modal">
     <form method="dialog">
-      <header><div><span class="eyebrow">CAN CONNECTION</span><h2>连接总线</h2></div><button value="cancel" aria-label="关闭">×</button></header>
-      <label>工作模式<select id="connectMode"><option value="pcan">PCAN-USB 实体设备</option><option value="simulation">内置模拟数据</option></select></label>
-      <label>总线用途<select id="connectProfile"></select></label>
-      <label id="channelField">PCAN 通道<select id="connectChannel"></select></label>
-      <div class="bitrate-note"><span>位速率</span><b id="connectBitrate">500 kbit/s</b></div>
-      <div id="connectError" class="modal-error hidden"></div>
-      <footer><button type="button" class="danger-outline hidden" id="disconnectButton">断开当前连接</button><button value="cancel" class="outline-button">取消</button><button type="button" class="action-button" id="doConnect">连接</button></footer>
-    </form>
-  </dialog>
-
-  <dialog id="confirmDialog" class="modal confirm-modal">
-    <form method="dialog">
-      <header><div><span class="eyebrow">CAN WRITE</span><h2 id="confirmTitle">确认发送</h2></div><button value="cancel">×</button></header>
-      <div class="warning-glyph">!</div><p id="confirmMessage"></p><div id="confirmPayload" class="payload-preview"></div>
-      <label class="confirm-check"><input id="confirmCheck" type="checkbox"><span>我已核对总线、主控状态和参数，本次操作由我确认。</span></label>
-      <footer><button value="cancel" class="outline-button">取消</button><button type="button" class="danger-button" id="doConfirm" disabled>确认发送</button></footer>
-    </form>
-  </dialog>
-
-  <dialog id="projectDialog" class="modal project-modal">
-    <form method="dialog">
-      <header><div><span class="eyebrow">PROJECT FILE</span><h2>工程参数文件</h2></div><button value="cancel">×</button></header>
-      <label>工程名称<input id="projectName" maxlength="80" placeholder="例如：26E 充电检查"></label>
-      <label>说明<textarea id="projectNotes" maxlength="4000" rows="4" placeholder="记录电池箱、车辆、测试目的和注意事项"></textarea></label>
-      <div class="project-content">
-        <b>工程文件包含</b>
-        <p>连接用途和通道、单体阈值、19个告警开关、充电请求、电流方向、充电机类型和页面偏好。</p>
-        <span>导入只填充界面，不连接设备，也不会自动向主控发送任何命令。</span>
+      <header><h2>连接总线</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">工作模式</span>
+          <select id="connectMode"><option value="pcan">PCAN-USB 实体设备</option><option value="simulation">内置模拟数据</option></select>
+        </label>
+        <label class="field">
+          <span class="field-label">总线用途</span>
+          <select id="connectProfile"></select>
+        </label>
+        <label class="field" id="channelField">
+          <span class="field-label">PCAN 通道</span>
+          <select id="connectChannel"></select>
+        </label>
+        <dl class="mini-facts spread boxed">
+          <div><dt>位速率</dt><dd id="connectBitrate">500 kbit/s</dd></div>
+        </dl>
+        <p class="note tight">只有 CAN1 允许发送工具命令。CANB 与历史回放为只读。</p>
+        <div id="connectError" class="modal-error hidden"></div>
       </div>
-      <footer><button type="button" class="outline-button" id="importProject">导入工程</button><button type="button" class="action-button" id="exportProject">导出工程</button></footer>
+      <footer>
+        <button type="button" class="danger-outline hidden" id="disconnectButton">断开当前连接</button>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="doConnect">连接</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal">
+    <form method="dialog">
+      <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <p class="confirm-text" id="confirmMessage"></p>
+        <pre id="confirmPayload" class="payload"></pre>
+        <label class="checkbox">
+          <input id="confirmCheck" type="checkbox">
+          <span>我已核对总线、主控状态和参数，本次操作由我确认。</span>
+        </label>
+      </div>
+      <footer>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="danger-button" id="doConfirm" disabled>确认发送</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="projectDialog" class="modal">
+    <form method="dialog">
+      <header><h2>工程参数文件</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">工程名称</span>
+          <input id="projectName" maxlength="80" placeholder="例如：26E 充电检查">
+        </label>
+        <label class="field">
+          <span class="field-label">说明</span>
+          <textarea id="projectNotes" maxlength="4000" rows="4" placeholder="记录电池箱、车辆、测试目的和注意事项"></textarea>
+        </label>
+        <div class="callout">
+          <b>工程文件包含</b>
+          <p>连接用途和通道、单体阈值、19 个告警开关、充电请求、电流方向、充电机类型和页面偏好。</p>
+          <p class="callout-warn">导入只填充界面，不连接设备，也不会自动向主控发送任何命令。</p>
+        </div>
+      </div>
+      <footer>
+        <button type="button" class="outline-button" id="importProject">导入工程</button>
+        <button type="button" class="action-button" id="exportProject">导出工程</button>
+      </footer>
     </form>
   </dialog>
 

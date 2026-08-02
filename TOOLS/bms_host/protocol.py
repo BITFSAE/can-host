@@ -209,6 +209,7 @@ class BmsProtocol:
         self.config: dict[str, Any] = {"thresholds": {}, "switches": {}, "switch_version": None}
         self.fault: dict[str, Any] = {"code": 0, "version": None, "flags": {}, "slave_offline": [False] * 6}
         self.alarm_levels: list[int] = [0] * 32
+        self.alarm_levels_received = False
         self.balance: list[int] = [0] * 18
         self.rtc_reply: dict[str, Any] = {}
         self.runtime_diag: dict[str, Any] = {}
@@ -287,6 +288,7 @@ class BmsProtocol:
             self.last_summary_monotonic = now_mono
         elif can_id in (0x187850F4, 0x4A2) and len(data) >= 8:
             self.alarm_levels = [(data[index // 4] >> ((index % 4) * 2)) & 0x03 for index in range(32)]
+            self.alarm_levels_received = True
         elif can_id == 0x187750F4 and len(data) >= 6:
             self.config["thresholds"] = {"ov_mv": _u16be(data), "uv_mv": _u16be(data, 2),
                                            "ot_c": data[4] - 30, "ut_c": data[5] - 30}
@@ -559,6 +561,8 @@ class BmsProtocol:
         alarms = [{"index": i, "name": ALARM_NAMES[i], "level": self.alarm_levels[i],
                    "level_name": ALARM_LEVEL_NAMES[self.alarm_levels[i]], "in_fault_code": bool(self.fault.get("code", 0) & (1 << i))}
                   for i in range(32)]
+        for alarm in alarms:
+            alarm["received"] = self.alarm_levels_received
         return {
             "connection": {**connection, "rx_count": self.rx_count, "tx_count": self.tx_count,
                            "last_rx_age": _age(now, self.last_rx_monotonic),
