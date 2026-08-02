@@ -40,7 +40,7 @@
         <section class="page active" id="page-overview">
           <div class="system-banner" id="systemBanner">
             <div><span class="eyebrow">PACK STATUS</span><h2 id="stateName">等待 CAN 数据</h2><p id="stateDescription">连接 PCAN 后开始监视主控与六个从控。</p></div>
-            <div class="banner-meta"><span id="busProfile">CAN1 · 500 kbit/s</span><b id="summaryAge">—</b><small>主控状态帧时间</small></div>
+            <div class="banner-meta"><span id="busProfile">CAN1 · 500 kbit/s</span><b id="summaryAge">—</b><small id="firmwareIdentity">固件身份 —</small></div>
           </div>
 
           <div class="metric-rail">
@@ -106,6 +106,10 @@
                 <header><div><span class="eyebrow">FAULT TIMELINE</span><h3>故障码变化记录</h3></div><span>当前会话 / 历史回放</span></header>
                 <div id="faultHistory" class="fault-history"><div class="empty-state">故障码发生变化后在这里显示进入和清除记录。</div></div>
               </article>
+              <article class="panel fault-history-panel">
+                <header><div><span class="eyebrow">FLASH EVENT LOG</span><h3>Flash 重要故障日志</h3></div><button class="text-button" id="readFlashLog">读取最近 50 条</button></header>
+                <div id="flashFaultLog" class="fault-history"><div class="empty-state">仅在自检、待机或故障保持态读取；不会在高压运行中访问 Flash。</div></div>
+              </article>
             </div>
             <aside class="config-column">
               <article class="panel config-panel">
@@ -141,10 +145,11 @@
               <div class="echo-row"><span>主控当前回报</span><b id="chargeEcho">— V / — A</b></div>
             </article>
             <article class="panel control-actions">
-              <header><div><span class="eyebrow">MAINTENANCE</span><h3>维护命令</h3></div></header>
+              <header><div><span class="eyebrow">MAINTENANCE</span><h3>维护命令</h3></div><span id="saveStatus" class="tag neutral">等待保存状态</span></header>
               <div class="maintenance-list">
                 <div><span><b>RTC 校时</b><small>写入当前 Windows 本地时间</small></span><button id="syncRtc">立即校时</button></div>
-                <div><span><b>电流方向</b><small>无只读命令，必须明确选择后写入</small></span><span class="inline-command"><select id="currentDirection"><option value="0">正常</option><option value="1">反转</option></select><button id="sendCurrentDirection">写入</button></span></div>
+                <div><span><b>电流方向</b><small>周期状态会自动回读当前值</small></span><span class="inline-command"><select id="currentDirection"><option value="0">正常</option><option value="1">反转</option></select><button id="sendCurrentDirection">写入</button></span></div>
+                <div><span><b>充电机类型</b><small>待机态切换 Legacy / Chroma，并保存到 Flash</small></span><span class="inline-command"><select id="chargerType"><option value="0">Legacy</option><option value="1">Chroma</option></select><button id="sendChargerType">写入</button></span></div>
                 <div><span><b>清除 Flash 故障日志</b><small>只清历史日志，不消除实时故障</small></span><button class="danger-outline" id="clearFaultLog">请求清除</button></div>
                 <div><span><b>故障保持复位</b><small>要求实时告警清除且 HV_ACC 已释放</small></span><button class="danger-outline" id="faultReset">请求复位</button></div>
               </div>
@@ -152,7 +157,7 @@
             <article class="panel interlock-panel">
               <header><div><span class="eyebrow">COMMAND INTERLOCK</span><h3>命令发送条件</h3></div></header>
               <div class="interlock-list"><span id="lockConnected"><i></i>CAN1 已连接</span><span id="lockState"><i></i>主控处于允许状态</span><span id="lockFresh"><i></i>状态帧未超时</span></div>
-              <p>配置、电流方向只在自检、待机或故障保持态处理。预充和高压闭合期间，主控会忽略这些命令。</p>
+              <p>配置、电流方向、充电机类型和 Flash 日志只在自检、待机或故障保持态处理。预充和高压闭合期间，主控会明确拒绝并返回原因。</p>
             </article>
             <article class="panel ivt-panel">
               <header><div><span class="eyebrow">CANB · IVT-S</span><h3>能量计数据</h3></div><span id="ivtValidity" class="tag neutral">等待数据</span></header>
@@ -211,7 +216,7 @@
       <label>说明<textarea id="projectNotes" maxlength="4000" rows="4" placeholder="记录电池箱、车辆、测试目的和注意事项"></textarea></label>
       <div class="project-content">
         <b>工程文件包含</b>
-        <p>连接用途和通道、单体阈值、16个告警开关、充电请求、电流方向和页面偏好。</p>
+        <p>连接用途和通道、单体阈值、19个告警开关、充电请求、电流方向、充电机类型和页面偏好。</p>
         <span>导入只填充界面，不连接设备，也不会自动向主控发送任何命令。</span>
       </div>
       <footer><button type="button" class="outline-button" id="importProject">导入工程</button><button type="button" class="action-button" id="exportProject">导出工程</button></footer>

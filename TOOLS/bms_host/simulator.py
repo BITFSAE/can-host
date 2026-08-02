@@ -17,11 +17,13 @@ class BmsSimulator:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.thresholds = [4190, 3100, 90, 30]
-        self.switch_bytes = [0xF3, 0x3F, 0x02]
+        self.switch_bytes = [0xF3, 0x3F, 0xE0]
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = False
+        self.charger_type = 0
         self.tick = 0
+        self.log_clear_pending_cycles = 0
         self.random = random.Random(405)
 
     def start(self) -> None:
@@ -36,18 +38,58 @@ class BmsSimulator:
 
     def on_command(self, frame: CanFrame) -> None:
         data = frame.data
-        if frame.arbitration_id == 0x188050F5 and len(data) >= 5:
-            self.request_voltage = int.from_bytes(data[:2], "big")
-            self.request_current = int.from_bytes(data[2:4], "big")
-        elif frame.arbitration_id == 0x188150F5 and len(data) >= 6:
-            self.thresholds = [int.from_bytes(data[:2], "big"), int.from_bytes(data[2:4], "big"), data[4], data[5]]
-        elif frame.arbitration_id == 0x188250F5 and len(data) >= 3:
-            self.switch_bytes = list(data[:3])
-        elif frame.arbitration_id == 0x18A150F5 and data:
-            self.current_inverted = bool(data[0])
-            self.sink(CanFrame(0x18A250F4, bytes([data[0] != 0]), True))
+        if frame.arbitration_id != 0x18A350F5 and (len(data) < 2 or data[0] != 3):
+            return
+        sequence = data[1] if len(data) >= 2 else 0xFF
+        command = 0
+        result = 1
+        detail = 0
+        if frame.arbitration_id == 0x188050F5 and len(data) == 6:
+            command = 1
+            self.request_voltage = int.from_bytes(data[2:4], "big")
+            self.request_current = int.from_bytes(data[4:6], "big")
+            detail = self.request_current
+        elif frame.arbitration_id == 0x188150F5 and len(data) == 8:
+            command = 2
+            self.thresholds = [int.from_bytes(data[2:4], "big"), int.from_bytes(data[4:6], "big"), data[6], data[7]]
+            detail = self.thresholds[0]
+        elif frame.arbitration_id == 0x188250F5 and len(data) == 5:
+            command = 3
+            self.switch_bytes = list(data[2:5])
+        elif frame.arbitration_id == 0x188350F5 and len(data) == 6:
+            command = 4
+            result = 0
+        elif frame.arbitration_id == 0x18A150F5 and len(data) == 3:
+            command = 5
+            self.current_inverted = bool(data[2])
+            detail = int(self.current_inverted)
         elif frame.arbitration_id == 0x18A350F5 and len(data) == 8:
             self.sink(CanFrame(0x18A450F4, bytes([0]) + data[:7], True))
+            return
+        elif frame.arbitration_id == 0x18A550F5 and len(data) >= 3:
+            operation = data[2]
+            command = 0x80 | operation
+            if operation == 1 and len(data) == 3:
+                if self.log_clear_pending_cycles:
+                    self._send(0x18A650F4, bytes([3, sequence, command, 5, 3, 9, 0, 0]))
+                    return
+                result = 0
+                self._send(0x18A650F4, bytes([3, sequence, command, result, 3, 1, 0, 0]))
+                self._send(0x18A750F4, bytes([3, sequence, 1, 0, 0, 0, 0, 1]))
+                return
+            if operation == 3 and len(data) == 6:
+                self.log_clear_pending_cycles = 2
+                detail = 0
+            elif operation == 4 and len(data) == 4:
+                self.charger_type = data[3]
+                detail = self.charger_type
+            else:
+                result = 5
+        else:
+            return
+        status_flags = 1 | (8 if self.log_clear_pending_cycles else 0)
+        self._send(0x18A650F4, bytes([3, sequence, command, result, 3, status_flags,
+                                     (detail >> 8) & 0xFF, detail & 0xFF]))
 
     def _send(self, can_id: int, data: bytes, extended: bool = True) -> None:
         self.sink(CanFrame(can_id, data, extended))
@@ -99,10 +141,18 @@ class BmsSimulator:
         max_temp, min_temp = max(temps), min(temps)
         self._send(0x186250F4, bytes([max_temp, min_temp, temps.index(max_temp), temps.index(min_temp), 1, 42, 31, 0x07]))
         self._send(0x186350F4, bytes([0, 0x08]) + self.request_voltage.to_bytes(2, "big") + self.request_current.to_bytes(2, "big") + (0).to_bytes(2, "big"))
-        self._send(0x187650F4, bytes([state_alarm, 0, 0, 0, 0, 0, 0, 2]))
+        log_flags = 0x08 if self.log_clear_pending_cycles else 0
+        self._send(0x187650F4, bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 2]))
+        if self.log_clear_pending_cycles:
+            self.log_clear_pending_cycles -= 1
         self._send(0x187850F4, bytes(8))
         self._send(0x187750F4, self.thresholds[0].to_bytes(2, "big") + self.thresholds[1].to_bytes(2, "big") + bytes(self.thresholds[2:]))
-        self._send(0x187F50F4, bytes(self.switch_bytes))
+        self._send(0x187F50F4, bytes(self.switch_bytes) + bytes([3]))
+        runtime_flags = (1 if self.current_inverted else 0) | (2 if self.charger_type else 0) | 0x90
+        self._send(0x186B50F4, bytes([3, runtime_flags]) + (5680).to_bytes(2, "big")
+                   + (28).to_bytes(2, "big") + bytes([0, 0x80]))
+        self._send(0x186C50F4, bytes.fromhex("03 80 12 34 56 78 9A BC"))
+        self._send(0x186D50F4, bytes.fromhex("03 F6 01 00 00 00 00 0C"))
         self._send(0x186850F4, bytes([0x01, 0xF8]) + (500).to_bytes(2, "big") + (820).to_bytes(2, "big") + (1000).to_bytes(2, "big"))
         self._send(0x186950F4, bytes([0, 0, 0, 0, 0, 0, 0, 0]))
         self._send(0x186A50F4, (1800).to_bytes(2, "big") + (80).to_bytes(2, "big") + (800).to_bytes(2, "big") + (80).to_bytes(2, "big"))

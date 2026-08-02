@@ -12,7 +12,8 @@ import time
 from collections import deque
 from typing import Any
 
-from .protocol import CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS, BmsProtocol, CanFrame, build_command
+from .protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
+                       BmsProtocol, CanFrame, build_command, command_ack_matches)
 from .simulator import BmsSimulator
 
 
@@ -47,6 +48,7 @@ class CanService:
         self.replay_total = 0
         self.replay_next_seq = 1
         self.replay_db_buffer: deque[tuple[Any, ...]] = deque()
+        self.command_sequence = 0
 
     def connect(self, config: dict[str, Any]) -> dict[str, Any]:
         self.disconnect()
@@ -125,14 +127,28 @@ class CanService:
                 return {"ok": False, "error": "历史回放为只读，不能发送 CAN 命令"}
             profile = self.connection.get("bus_profile")
             state = self.protocol.overview.get("state")
+            charge_mode = bool(self.protocol.fault.get("flags", {}).get("charge_mode"))
         if profile != "can1":
             return {"ok": False, "error": "F405 工具命令只在 CAN1 接收；当前连接不是 CAN1"}
-        if name in {"charge_config", "alarm_thresholds", "alarm_switches", "current_direction"} and state not in {2, 3, 7}:
+        if name in {"charge_config", "alarm_thresholds", "alarm_switches", "current_direction",
+                    "charger_type", "log_info", "log_read", "log_clear"} and state not in {2, 3, 7}:
             return {"ok": False, "error": "主控仅在自检、待机或故障保持状态接受此命令"}
         if name == "fault_reset" and state != 7:
             return {"ok": False, "error": "故障复位命令仅在故障保持状态处理"}
+        if name == "charger_type" and charge_mode:
+            return {"ok": False, "error": "必须先释放实体充电按钮并退出充电模式，才能切换充电机类型"}
         try:
-            frame = build_command(name, values)
+            command_values = dict(values)
+            expects_unified_ack = name != "rtc"
+            if expects_unified_ack:
+                with self.lock:
+                    self.command_sequence = (self.command_sequence + 1) & 0xFF
+                    sequence = self.command_sequence
+                    self.protocol.command_acks.pop(sequence, None)
+                    if name == "log_read":
+                        self.protocol._flash_record_parts.pop(sequence, None)
+                command_values["_sequence"] = sequence
+            frame = build_command(name, command_values)
             if self.simulator:
                 self.simulator.on_command(frame)
             else:
@@ -143,9 +159,64 @@ class CanService:
             with self.lock:
                 self.protocol.ingest(frame)
                 self._record(frame)
-            return {"ok": True, "message": f"已发送 {frame.arbitration_id:#010x}"}
+            if not expects_unified_ack:
+                return {"ok": True, "message": f"已发送 {frame.arbitration_id:#010x}，等待专用应答"}
+
+            deadline = time.monotonic() + 1.0
+            ack = None
+            while time.monotonic() < deadline:
+                with self.lock:
+                    candidate = self.protocol.command_acks.get(sequence)
+                    ack = candidate if candidate is not None and command_ack_matches(name, candidate) else None
+                if ack is not None:
+                    break
+                time.sleep(0.01)
+            if ack is None:
+                return {"ok": False, "error": f"命令 {frame.arbitration_id:#010x} 在 1.0s 内没有收到统一应答"}
+            if not ack.get("accepted"):
+                return {"ok": False, "error": f"主控拒绝：{ack.get('result_name')}（detail={ack.get('detail')}）", "ack": ack}
+            return {"ok": True, "message": ack.get("result_name", "主控已接受"), "ack": ack}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
+        with self.lock:
+            if self.protocol.fault.get("flags", {}).get("log_clear_pending"):
+                return {"ok": False, "error": "主控正在分阶段清除 Flash 故障日志，请等待清除完成"}
+            self.protocol.flash_log_info.clear()
+        info_result = self.send_command("log_info", {}, True)
+        if not info_result.get("ok"):
+            return info_result
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with self.lock:
+                info = dict(self.protocol.flash_log_info)
+            if info.get("sequence") == info_result.get("ack", {}).get("sequence"):
+                break
+            time.sleep(0.01)
+        else:
+            return {"ok": False, "error": "已收到日志信息应答，但没有收到日志数量数据帧"}
+
+        count = int(info.get("count", 0))
+        start = max(0, count - max(1, min(int(limit), 200)))
+        with self.lock:
+            self.protocol.flash_log_records.clear()
+        for index in range(start, count):
+            result = self.send_command("log_read", {"index": index}, True)
+            if not result.get("ok"):
+                return {"ok": False, "error": f"读取日志 {index} 失败：{result.get('error')}", "read": index - start}
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                with self.lock:
+                    complete = index in self.protocol.flash_log_records
+                if complete:
+                    break
+                time.sleep(0.01)
+            else:
+                return {"ok": False, "error": f"日志 {index} 的四个数据分片未收齐", "read": index - start}
+        with self.lock:
+            records = [self.protocol.flash_log_records[key] for key in sorted(self.protocol.flash_log_records)]
+        return {"ok": True, "count": count, "dropped": int(info.get("dropped", 0)), "records": records}
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -478,7 +549,7 @@ class CanService:
             self.replay_position = max(0.0, frame.timestamp - self.replay_first_timestamp)
             self.protocol.ingest(frame)
 
-        for can_id in (0x18A250F4, 0x18A450F4):
+        for can_id in (0x186B50F4, 0x186C50F4, 0x186D50F4, 0x18A450F4):
             prior = self.replay_db.execute(
                 "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
                 "WHERE timestamp < ? AND direction = 'rx' AND arbitration_id = ? ORDER BY seq DESC LIMIT 1",

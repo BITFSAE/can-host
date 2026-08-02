@@ -102,6 +102,7 @@ main { overflow: auto; min-height: 0; background-color: var(--paper); background
 .topology-panel { min-height: 280px; }
 .tag { padding: 5px 8px; background: #e4e7df; color: #58656a; border-radius: 3px; font: 700 9px var(--data-font); }
 .tag.ok { color: #176d49; background: #d9eee3; }
+.tag.warn { color: #8a5a18; background: #faead4; }
 .tag.bad { color: #9b352b; background: #f4ddd8; }
 .hv-path { display: grid; grid-template-columns: 1fr 44px 1fr 44px 1fr; align-items: center; padding: 34px 18px 20px; }
 .hv-node { min-width: 0; text-align: center; border: 1px solid #ced3cb; padding: 10px 4px; background: white; }

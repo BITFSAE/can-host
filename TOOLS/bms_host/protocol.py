@@ -35,15 +35,22 @@ CAN1_IDS = {
     0x186850F4: "IMD 诊断",
     0x186950F4: "高压状态",
     0x186A50F4: "SOP 限值",
+    0x186B50F4: "运行配置与充电反馈",
+    0x186C50F4: "固件身份",
+    0x186D50F4: "IVT 与 SOC 诊断",
     0x187650F4: "统一故障状态",
     0x187750F4: "告警阈值",
     0x187850F4: "告警等级明细",
     0x187F50F4: "告警开关",
     0x18A250F4: "电流方向应答",
     0x18A450F4: "RTC 校时应答",
+    0x18A650F4: "工具命令统一应答",
+    0x18A750F4: "工具命令数据",
 }
 
-CAN1_TOOL_IDS = {0x188050F5, 0x188150F5, 0x188250F5, 0x188350F5, 0x18A150F5, 0x18A350F5}
+CAN1_TOOL_IDS = {0x188050F5, 0x188150F5, 0x188250F5, 0x188350F5,
+                 0x18A150F5, 0x18A350F5, 0x18A550F5}
+TOOL_PROTOCOL_VERSION = 3
 
 CANB_IDS = {
     0x401: "放电功率 / Chroma 电压",
@@ -92,7 +99,35 @@ SWITCH_DEFS = [
     ("pack_measure", "总压测量异常", 1, 5), ("current_sensor", "电流传感器异常", 1, 4),
     ("pack_ov", "电池包总压过压", 1, 3), ("pack_uv", "电池包总压欠压", 1, 2),
     ("beep", "蜂鸣器", 1, 1), ("soc_low", "SOC 过低", 1, 0),
+    ("ivt_voltage_loss", "IVT 包电压失联", 2, 7),
+    ("lv1_blocked", "一级故障全部受阻", 2, 6),
+    ("lv2_blocked", "二级告警全部受阻", 2, 5),
 ]
+
+COMMAND_RESULT_NAMES = {
+    0: "已接受", 1: "已生效，等待 Flash 保存", 2: "当前状态不允许",
+    3: "DLC 错误", 4: "协议版本不匹配", 5: "参数无效",
+    6: "确认码错误", 7: "Flash 不可用或读取失败", 8: "日志序号越界", 9: "上一条查询仍在发送",
+    10: "日志记录版本或 CRC 错误",
+}
+
+COMMAND_CODES = {
+    "charge_config": 0x01,
+    "alarm_thresholds": 0x02,
+    "alarm_switches": 0x03,
+    "fault_reset": 0x04,
+    "current_direction": 0x05,
+    "log_info": 0x81,
+    "log_read": 0x82,
+    "log_clear": 0x83,
+    "charger_type": 0x84,
+}
+
+
+def command_ack_matches(name: str, ack: dict[str, Any]) -> bool:
+    """Return whether an ACK belongs to the named command, not only its 8-bit sequence."""
+    expected = COMMAND_CODES.get(name)
+    return expected is not None and int(ack.get("command", -1)) == expected
 
 IMD_STATUS_NAMES = {
     0: "正常", 1: "PB8 数字故障", 2: "PWM 无信号", 3: "绝缘不通过",
@@ -176,6 +211,13 @@ class BmsProtocol:
         self.alarm_levels: list[int] = [0] * 32
         self.balance: list[int] = [0] * 18
         self.rtc_reply: dict[str, Any] = {}
+        self.runtime_diag: dict[str, Any] = {}
+        self.sensor_diag: dict[str, Any] = {}
+        self.firmware: dict[str, Any] = {}
+        self.command_acks: dict[int, dict[str, Any]] = {}
+        self.flash_log_info: dict[str, Any] = {}
+        self.flash_log_records: dict[int, dict[str, Any]] = {}
+        self._flash_record_parts: dict[int, dict[int, bytes]] = {}
         self.fault_history: deque[dict[str, Any]] = deque(maxlen=200)
         self._fault_seen = False
         self.raw_frames: deque[dict[str, Any]] = deque(maxlen=320)
@@ -248,9 +290,47 @@ class BmsProtocol:
         elif can_id == 0x187750F4 and len(data) >= 6:
             self.config["thresholds"] = {"ov_mv": _u16be(data), "uv_mv": _u16be(data, 2),
                                            "ot_c": data[4] - 30, "ut_c": data[5] - 30}
-        elif can_id == 0x187F50F4 and len(data) >= 3:
+        elif can_id == 0x187F50F4 and len(data) >= 4:
             self.config["switches"] = {key: bool(data[byte] & (1 << bit)) for key, _, byte, bit in SWITCH_DEFS}
-            self.config["switch_version"] = data[2]
+            self.config["switch_version"] = data[3]
+        elif can_id == 0x186B50F4 and len(data) >= 8:
+            flags = data[1]
+            feedback_flags = data[7]
+            self.runtime_diag = {
+                "protocol_version": data[0], "current_direction_inverted": bool(flags & 0x01),
+                "charger_type": "Chroma" if flags & 0x02 else "Legacy",
+                "balance_compiled": bool(flags & 0x04), "balance_enabled": bool(flags & 0x08),
+                "flash_ready": bool(flags & 0x10), "config_save_pending": bool(flags & 0x20),
+                "current_direction_save_pending": bool(flags & 0x40), "rtc_valid": bool(flags & 0x80),
+                "charger_feedback_voltage_v": _u16be(data, 2) / 10.0,
+                "charger_feedback_current_a": _u16be(data, 4) / 10.0,
+                "charger_feedback_state": data[6], "charger_feedback_fresh": bool(feedback_flags & 0x80),
+                "chroma_voltage_fresh": bool(feedback_flags & 0x40),
+                "chroma_current_fresh": bool(feedback_flags & 0x20),
+                "chroma_protect_fresh": bool(feedback_flags & 0x10),
+                "chroma_output_fresh": bool(feedback_flags & 0x08),
+                "chroma_output_state": feedback_flags & 0x07,
+            }
+            self.config["current_direction_inverted"] = bool(flags & 0x01)
+            self.config["charger_type"] = 1 if flags & 0x02 else 0
+            self.relay.update({key: value for key, value in self.runtime_diag.items()
+                               if key.startswith("charger_") or key == "chroma_output_state"})
+        elif can_id == 0x186C50F4 and len(data) >= 8:
+            variants = {0: "Debug", 1: "Release", 2: "Debug-Bringup"}
+            variant = data[1] & 0x03
+            self.firmware = {"protocol_version": data[0], "variant_code": variant,
+                             "variant": variants.get(variant, f"未知 {variant}"),
+                             "dirty": bool(data[1] & 0x80), "git": data[2:8].hex()}
+        elif can_id == 0x186D50F4 and len(data) >= 8:
+            flags = data[1]
+            self.sensor_diag = {
+                "protocol_version": data[0], "current_online": bool(flags & 0x80),
+                "current_error": bool(flags & 0x40), "u1_ready": bool(flags & 0x20),
+                "u2_ready": bool(flags & 0x10), "u3_online": bool(flags & 0x08),
+                "as_online": bool(flags & 0x04), "power_online": bool(flags & 0x02),
+                "wh_online": bool(flags & 0x01), "soc_source": data[2],
+                "soc_zero_bias_ma": int.from_bytes(data[4:8], "big", signed=True),
+            }
         elif can_id == 0x186850F4 and len(data) >= 8:
             status = (data[0] >> 4) & 0x0F
             self.imd = {"status": status, "status_name": IMD_STATUS_NAMES.get(status, f"未知 {status}"),
@@ -304,6 +384,41 @@ class BmsProtocol:
         elif can_id == 0x18A450F4 and len(data) >= 8:
             self.rtc_reply = {"status": data[0], "year": _u16be(data, 1), "month": data[3], "day": data[4],
                               "hour": data[5], "minute": data[6], "second": data[7]}
+        elif can_id == 0x18A650F4 and len(data) >= 8 and data[0] == TOOL_PROTOCOL_VERSION:
+            flags = data[5]
+            ack = {"protocol_version": data[0], "sequence": data[1], "command": data[2],
+                   "result": data[3], "result_name": COMMAND_RESULT_NAMES.get(data[3], f"未知 {data[3]}"),
+                   "accepted": data[3] in (0, 1), "bms_state": data[4],
+                   "flags": {"flash_ready": bool(flags & 0x01), "config_save_pending": bool(flags & 0x02),
+                             "current_direction_save_pending": bool(flags & 0x04),
+                             "log_clear_pending": bool(flags & 0x08), "error_log_write_pending": bool(flags & 0x10),
+                             "protection_disable_allowed": bool(flags & 0x20)},
+                   "detail": _u16be(data, 6), "timestamp": frame.timestamp}
+            self.command_acks[data[1]] = ack
+            self.fault.setdefault("flags", {})["log_clear_pending"] = bool(flags & 0x08)
+            if len(self.command_acks) > 64:
+                self.command_acks.pop(next(iter(self.command_acks)))
+        elif can_id == 0x18A750F4 and len(data) >= 8 and data[0] == TOOL_PROTOCOL_VERSION:
+            sequence, response_type = data[1], data[2]
+            if response_type == 1:
+                self.flash_log_info = {"count": _u16be(data, 3), "dropped": _u16be(data, 5),
+                                       "status_flags": data[7], "sequence": sequence}
+            elif response_type == 2 and data[3] < 4:
+                parts = self._flash_record_parts.setdefault(sequence, {})
+                parts[data[3]] = bytes(data[4:8])
+                if len(parts) == 4:
+                    raw = b"".join(parts[index] for index in range(4))
+                    ack = self.command_acks.get(sequence, {})
+                    index = int(ack.get("detail", 0))
+                    year = 2000 + raw[0] if raw[0] else None
+                    self.flash_log_records[index] = {
+                        "index": index, "timestamp": (f"{year:04d}-{raw[1]:02d}-{raw[2]:02d} "
+                                                       f"{raw[3]:02d}:{raw[4]:02d}:{raw[5]:02d}") if year else "RTC 未校时",
+                        "fault_code": f"0x{int.from_bytes(raw[6:10], 'big'):08X}",
+                        "event_type": raw[10], "event_detail": raw[11], "record_version": raw[12],
+                        "raw": raw.hex(" ").upper(),
+                    }
+                    self._flash_record_parts.pop(sequence, None)
         elif not frame.is_extended_id and 0x512 <= can_id <= 0x519 and len(data) >= 6:
             self._decode_ivt(can_id, data)
         elif can_id == 0x18FF50E5 and len(data) >= 5:
@@ -452,6 +567,9 @@ class BmsProtocol:
             "sop": dict(self.sop), "ivt": dict(self.ivt), "config": self.config, "fault": self.fault,
             "alarms": alarms, "cells": cell_values, "temps": temp_values, "modules": modules,
             "balance": list(self.balance), "rtc_reply": dict(self.rtc_reply),
+            "runtime_diag": dict(self.runtime_diag), "sensor_diag": dict(self.sensor_diag),
+            "firmware": dict(self.firmware), "flash_log_info": dict(self.flash_log_info),
+            "flash_log_records": [self.flash_log_records[key] for key in sorted(self.flash_log_records)],
             "fault_history": list(self.fault_history), "raw_frames": list(self.raw_frames), "trends": list(self.trends),
         }
 
@@ -463,13 +581,14 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     """
     values = values or {}
     now = time.time()
+    sequence = int(values.get("_sequence", 0)) & 0xFF
+    envelope = bytes([TOOL_PROTOCOL_VERSION, sequence])
     if name == "charge_config":
         voltage = round(float(values["voltage_v"]) * 10)
         current = round(float(values["current_a"]) * 10)
         if not 4154 <= voltage <= 5782 or not 0 <= current <= 45:
             raise ValueError("充电请求范围为 415.4..578.2 V、0..4.5 A")
-        flag = 0x20 if bool(values.get("clear_error_log")) else 0
-        data = voltage.to_bytes(2, "big") + current.to_bytes(2, "big") + bytes([flag])
+        data = envelope + voltage.to_bytes(2, "big") + current.to_bytes(2, "big")
         return CanFrame(0x188050F5, data, True, now, "tx")
     if name == "alarm_thresholds":
         ov, uv = int(values["ov_mv"]), int(values["uv_mv"])
@@ -478,19 +597,33 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
             raise ValueError("电压阈值超出范围，或过压阈值未高于欠压阈值")
         if not (36 <= ot <= 95 and 5 <= ut <= 79 and ot > ut):
             raise ValueError("温度阈值超出范围，或过温阈值未高于低温阈值")
-        return CanFrame(0x188150F5, ov.to_bytes(2, "big") + uv.to_bytes(2, "big") + bytes([ot, ut]), True, now, "tx")
+        return CanFrame(0x188150F5, envelope + ov.to_bytes(2, "big") + uv.to_bytes(2, "big")
+                        + bytes([ot, ut]), True, now, "tx")
     if name == "alarm_switches":
         switches = values.get("switches", values)
         data = bytearray(3)
         for key, _, byte, bit in SWITCH_DEFS:
             if bool(switches.get(key)):
                 data[byte] |= 1 << bit
-        data[2] = 0x02
-        return CanFrame(0x188250F5, bytes(data), True, now, "tx")
+        return CanFrame(0x188250F5, envelope + bytes(data), True, now, "tx")
     if name == "fault_reset":
-        return CanFrame(0x188350F5, bytes.fromhex("A5 5A 3C C3"), True, now, "tx")
+        return CanFrame(0x188350F5, envelope + bytes.fromhex("A5 5A 3C C3"), True, now, "tx")
     if name == "current_direction":
-        return CanFrame(0x18A150F5, bytes([1 if values.get("inverted") else 0]), True, now, "tx")
+        return CanFrame(0x18A150F5, envelope + bytes([1 if values.get("inverted") else 0]), True, now, "tx")
+    if name == "log_info":
+        return CanFrame(0x18A550F5, envelope + bytes([1]), True, now, "tx")
+    if name == "log_read":
+        index = int(values.get("index", -1))
+        if not 0 <= index <= 0xFFFF:
+            raise ValueError("故障日志序号必须在 0..65535")
+        return CanFrame(0x18A550F5, envelope + bytes([2]) + index.to_bytes(2, "big"), True, now, "tx")
+    if name == "log_clear":
+        return CanFrame(0x18A550F5, envelope + bytes.fromhex("03 C3 3C A5"), True, now, "tx")
+    if name == "charger_type":
+        charger_type = int(values.get("charger_type", -1))
+        if charger_type not in (0, 1):
+            raise ValueError("充电机类型必须是 0=Legacy 或 1=Chroma")
+        return CanFrame(0x18A550F5, envelope + bytes([4, charger_type]), True, now, "tx")
     if name == "rtc":
         value = values.get("datetime")
         dt = datetime.fromisoformat(value) if value else datetime.now()

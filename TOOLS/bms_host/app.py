@@ -68,6 +68,9 @@ class Api:
     def send_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self.service.send_command(name, values, acknowledged)
 
+    def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
+        return self.service.read_flash_fault_logs(limit)
+
     def choose_record_file(self) -> dict[str, Any]:
         if not self.window:
             return {"ok": False, "error": "窗口尚未就绪"}

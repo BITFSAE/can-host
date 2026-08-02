@@ -113,7 +113,7 @@ function bindControls() {
   $("#sendSwitches").addEventListener("click", () => {
     const switches = {};
     $$("#switchList input").forEach(input => switches[input.dataset.key] = input.checked);
-    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的 16 个开关作为一组写入主控。写入后以周期回报值为准。");
+    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的 19 个开关作为一组写入主控。写入后以周期回报值为准。");
   });
   $("#sendChargeConfig").addEventListener("click", () => confirmCommand(
     "charge_config", { voltage_v: +$("#chargeVoltage").value, current_a: +$("#chargeCurrent").value },
@@ -127,11 +127,22 @@ function bindControls() {
     const inverted = $("#currentDirection").value === "1";
     confirmCommand("current_direction", { inverted }, "写入电流方向", `明确设置为“${inverted ? "反转" : "正常"}”。此设置保存到 Flash Sector2。`);
   });
+  $("#sendChargerType").addEventListener("click", () => {
+    const charger_type = +$("#chargerType").value;
+    confirmCommand("charger_type", { charger_type }, "切换充电机类型",
+      `设置为“${charger_type ? "Chroma · 500 kbit/s" : "Legacy · 250 kbit/s"}”。实体充电按钮决定是否进入充电模式。`);
+  });
   $("#clearFaultLog").addEventListener("click", () => {
-    const relay = state.snapshot?.relay || {};
-    if (relay.request_voltage_v == null || relay.request_current_a == null) return toast("尚未收到当前充电参数，不能安全构造日志清除帧", true);
-    confirmCommand("charge_config", { voltage_v: relay.request_voltage_v, current_a: relay.request_current_a, clear_error_log: true },
-      "清除 Flash 故障日志", "发送置位式清除请求。不会清除当前实时告警，也不会解除故障保持。", true);
+    confirmCommand("log_clear", {}, "清除 Flash 故障日志",
+      "发送独立的三字节确认请求。不会清除当前实时告警，也不会解除故障保持。", true);
+  });
+  $("#readFlashLog").addEventListener("click", async () => {
+    $("#readFlashLog").disabled = true;
+    const result = await state.api.read_flash_fault_logs(50);
+    $("#readFlashLog").disabled = false;
+    if (!result.ok) return toast(result.error || "读取 Flash 日志失败", true);
+    toast(`已读取 ${result.records.length} / ${result.count} 条重要故障日志`);
+    await poll();
   });
   $("#faultReset").addEventListener("click", () => confirmCommand("fault_reset", {}, "故障保持复位", "只有实时一级、二级告警已清除且 HV_ACC 释放时，主控才会执行复位。", true));
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
@@ -261,6 +272,8 @@ function renderOverview() {
   text("#imdStatus", imd.status_name || "等待数据"); text("#imdResistance", fmt(imd.resistance_kohm, 0));
   text("#imdFrequency", imd.frequency_hz == null ? "—" : `${fmt(imd.frequency_hz, 2)} Hz`); text("#imdDuty", imd.duty_pct == null ? "—" : `${fmt(imd.duty_pct, 1)} %`);
   $("#imdStatus").className = `tag ${imd.status === 0 ? "ok" : imd.status == null ? "neutral" : "bad"}`;
+  const firmware = state.snapshot.firmware || {};
+  text("#firmwareIdentity", firmware.git ? `${firmware.variant} · ${firmware.git}${firmware.dirty ? " · dirty" : ""}` : "固件身份 —");
   drawTrend();
 }
 
@@ -288,6 +301,13 @@ function renderAlarms() {
   $("#activeAlarmBrief").innerHTML = active.length ? active.map(item => `<div class="brief-alarm ${item.level === 1 ? "lv1" : ""}"><b>${item.name}</b><span>${item.level_name}</span></div>`).join("") : "当前没有活动告警";
   const history = state.snapshot.fault_history || [];
   $("#faultHistory").innerHTML = history.length ? history.map(event => `<div class="fault-event"><time>${event.time}</time><b>${event.previous} → ${event.code}</b><p>${event.added.length ? `<span class="added">进入：${event.added.join("、")}</span>` : ""}${event.added.length && event.cleared.length ? "<br>" : ""}${event.cleared.length ? `<span class="cleared">清除：${event.cleared.join("、")}</span>` : ""}</p></div>`).join("") : `<div class="empty-state">故障码发生变化后在这里显示进入和清除记录。</div>`;
+  const flashRecords = state.snapshot.flash_log_records || [];
+  const logClearPending = !!state.snapshot.fault?.flags?.log_clear_pending;
+  $("#readFlashLog").disabled = logClearPending;
+  $("#clearFaultLog").disabled = logClearPending;
+  $("#flashFaultLog").innerHTML = flashRecords.length ? [...flashRecords].reverse().map(event =>
+    `<div class="fault-event"><time>${event.timestamp}</time><b>${event.fault_code}</b><p>类型 ${event.event_type} · 详情 ${event.event_detail}</p></div>`
+  ).join("") : `<div class="empty-state">尚未读取，或 Flash 中没有重要故障日志。</div>`;
 }
 
 function renderConfig() {
@@ -316,6 +336,18 @@ function renderControls() {
     $("#chargeVoltage").value = relay.request_voltage_v; $("#chargeCurrent").value = relay.request_current_a; state.inputsInitialized.charge = true;
   }
   text("#chargeEcho", relay.request_voltage_v == null ? "— V / — A" : `${fmt(relay.request_voltage_v, 1)} V / ${fmt(relay.request_current_a, 1)} A`);
+  const runtime = state.snapshot.runtime_diag || {};
+  const savePending = runtime.config_save_pending || runtime.current_direction_save_pending;
+  text("#saveStatus", runtime.flash_ready == null ? "等待保存状态" : !runtime.flash_ready ? "Flash 离线" : savePending ? "等待 Flash 保存" : "保存队列空");
+  $("#saveStatus").className = `tag ${runtime.flash_ready == null ? "neutral" : !runtime.flash_ready ? "bad" : savePending ? "warn" : "ok"}`;
+  if (state.snapshot.config?.charger_type != null && document.activeElement !== $("#chargerType")) {
+    $("#chargerType").value = String(state.snapshot.config.charger_type);
+  }
+  if (runtime.charger_feedback_voltage_v != null && runtime.charger_feedback_fresh) {
+    text("#chargeEcho", `${fmt(relay.request_voltage_v, 1)} V / ${fmt(relay.request_current_a, 1)} A · 反馈 ${fmt(runtime.charger_feedback_voltage_v, 1)} V / ${fmt(runtime.charger_feedback_current_a, 1)} A`);
+  } else if (runtime.charger_feedback_voltage_v != null) {
+    text("#chargeEcho", `${fmt(relay.request_voltage_v, 1)} V / ${fmt(relay.request_current_a, 1)} A · 反馈已超时`);
+  }
   const charge = fault.flags?.charge_mode;
   text("#chargeModeTag", charge == null ? "模式未知" : charge ? `充电 · ${fault.flags.charger_type}` : "放电 / 待机");
   const connectedCan1 = connection.connected && connection.bus_profile === "can1";
@@ -481,6 +513,7 @@ function collectProject() {
       switches,
       charge: { voltage_v: valueOrNull("#chargeVoltage"), current_a: valueOrNull("#chargeCurrent") },
       current_direction_inverted: $("#currentDirection").value === "1",
+      charger_type: +$("#chargerType").value,
     },
     view: { cell_mode: state.cellMode, only_abnormal: $("#onlyAbnormal").checked },
   };
@@ -513,6 +546,7 @@ async function importProject() {
   if (charge.voltage_v != null) $("#chargeVoltage").value = charge.voltage_v;
   if (charge.current_a != null) $("#chargeCurrent").value = charge.current_a;
   if (typeof parameters.current_direction_inverted === "boolean") $("#currentDirection").value = parameters.current_direction_inverted ? "1" : "0";
+  if (parameters.charger_type === 0 || parameters.charger_type === 1) $("#chargerType").value = String(parameters.charger_type);
   state.dirty = { thresholds: true, switches: true, charge: true, direction: true };
   text("#thresholdSync", "工程值待写入");
   if (["voltage", "temperature"].includes(view.cell_mode)) {
