@@ -12,7 +12,9 @@ a = Analysis(
     hiddenimports=["can.interfaces.pcan"],
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    # The field release is connected to real PCAN hardware.  Keep the
+    # simulator available to source runs, but do not ship it in the EXE.
+    excludes=["TOOLS.bms_host.simulator"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

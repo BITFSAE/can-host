@@ -14,17 +14,17 @@ from typing import Any
 
 from .protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                        BmsProtocol, CanFrame, build_command, command_ack_matches)
-from .simulator import BmsSimulator
 
 
 class CanService:
-    def __init__(self) -> None:
+    def __init__(self, allow_simulation: bool = True) -> None:
         self.lock = threading.RLock()
+        self.allow_simulation = allow_simulation
         self.protocol = BmsProtocol()
         self.bus: Any = None
         self.worker: threading.Thread | None = None
         self.stop_event = threading.Event()
-        self.simulator: BmsSimulator | None = None
+        self.simulator: Any = None
         self.connection: dict[str, Any] = {
             "connected": False, "mode": None, "channel": None, "bitrate": None,
             "bus_profile": "can1", "status": "未连接", "error": None,
@@ -62,6 +62,9 @@ class CanService:
                                     "bitrate": bitrate, "bus_profile": profile, "status": "正在连接", "error": None})
         try:
             if mode == "simulation":
+                if not self.allow_simulation:
+                    raise RuntimeError("当前发布版仅支持真实 PCAN 设备")
+                from .simulator import BmsSimulator
                 self.simulator = BmsSimulator(self._ingest)
                 self.simulator.start()
             else:
@@ -549,7 +552,7 @@ class CanService:
             self.replay_position = max(0.0, frame.timestamp - self.replay_first_timestamp)
             self.protocol.ingest(frame)
 
-        for can_id in (0x186B50F4, 0x186C50F4, 0x186D50F4, 0x18A450F4):
+        for can_id in (0x186B50F4, 0x186C50F4, 0x186C51F4, 0x186D50F4, 0x18A450F4):
             prior = self.replay_db.execute(
                 "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
                 "WHERE timestamp < ? AND direction = 'rx' AND arbitration_id = ? ORDER BY seq DESC LIMIT 1",

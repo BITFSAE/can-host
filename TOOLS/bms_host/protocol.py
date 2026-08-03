@@ -37,6 +37,7 @@ CAN1_IDS = {
     0x186A50F4: "SOP 限值",
     0x186B50F4: "运行配置与充电反馈",
     0x186C50F4: "固件身份",
+    0x186C51F4: "固件构建日期",
     0x186D50F4: "IVT 与 SOC 诊断",
     0x187650F4: "统一故障状态",
     0x187750F4: "告警阈值",
@@ -76,7 +77,10 @@ CANB_IDS = {
     0x18FF50E5: "Legacy 充电反馈",
 }
 
-STATE_NAMES = {2: "自检", 3: "待机", 4: "预充", 5: "高压闭合", 7: "故障保持"}
+# Keep the names aligned with the firmware state constants and the DOC status
+# tables.  The short English names are easier to scan in the large overview
+# state readout and remain unambiguous in command confirmations.
+STATE_NAMES = {2: "SELF_TEST", 3: "STANDBY", 4: "PRECHARGE", 5: "HV_ON", 7: "FAULT"}
 ALARM_LEVEL_NAMES = {0: "正常", 1: "一级故障", 2: "二级告警", 3: "保留值"}
 
 ALARM_NAMES = [
@@ -85,23 +89,32 @@ ALARM_NAMES = [
     "电池包总压过高", "电池包总压过低", "辅助外设异常", "SOC 过低",
     "充电持续过流", "放电持续过流", "充电瞬时过流（保留）", "放电瞬时过流（保留）",
     "从控通信离线", "预充失败", "关键控制外设异常", "总压测量异常",
-    "电流传感器异常", "CAN 运行异常", "安全回路断开", "Chroma 测量失联",
+    "电流传感器异常", "CAN 运行异常", "外部安全回路中断事件", "Chroma 测量失联",
     "Chroma 命令失败", "从控 1 离线", "从控 2 离线", "从控 3 离线",
     "从控 4 离线", "从控 5 离线", "从控 6 离线", "IVT 包电压通道失联",
 ]
 
 SWITCH_DEFS = [
-    ("cell_ov", "单体过压", 0, 7), ("cell_uv", "单体欠压", 0, 6),
-    ("cell_ot", "单体过温", 0, 5), ("cell_ut", "单体低温", 0, 4),
-    ("cell_dv", "单体压差", 0, 3), ("cell_dt", "温差", 0, 2),
-    ("charge_ocs", "充电持续过流", 0, 1), ("discharge_ocs", "放电持续过流", 0, 0),
-    ("aux", "辅助外设异常", 1, 7), ("can_runtime", "CAN 运行异常", 1, 6),
-    ("pack_measure", "总压测量异常", 1, 5), ("current_sensor", "电流传感器异常", 1, 4),
-    ("pack_ov", "电池包总压过压", 1, 3), ("pack_uv", "电池包总压欠压", 1, 2),
-    ("beep", "蜂鸣器", 1, 1), ("soc_low", "SOC 过低", 1, 0),
-    ("ivt_voltage_loss", "IVT 包电压失联", 2, 7),
-    ("lv1_blocked", "一级故障全部受阻", 2, 6),
-    ("lv2_blocked", "二级告警全部受阻", 2, 5),
+    # key, Chinese label, DOC/CLI short name, firmware variable, byte, bit
+    ("cell_ov", "单体过压", "ov", "ALM_CELL_OV_SWITCH", 0, 7),
+    ("cell_uv", "单体欠压", "uv", "ALM_CELL_UV_SWITCH", 0, 6),
+    ("cell_ot", "单体过温", "ot", "ALM_CELL_OT_SWITCH", 0, 5),
+    ("cell_ut", "单体低温", "ut", "ALM_CELL_UT_SWITCH", 0, 4),
+    ("cell_dv", "单体压差", "dv", "ALM_BATT_DV_SWITCH", 0, 3),
+    ("cell_dt", "温差", "dt", "ALM_BATT_DT_SWITCH", 0, 2),
+    ("charge_ocs", "充电持续过流", "chgocs", "ALM_CHRG_OCS_SWITCH", 0, 1),
+    ("discharge_ocs", "放电持续过流", "dischocs", "ALM_DSCH_OCS_SWITCH", 0, 0),
+    ("aux", "辅助外设异常", "aux", "ALM_AUX_FAIL_SWITCH", 1, 7),
+    ("can_runtime", "CAN 运行异常", "canruntime", "ALM_CAN_RUNTIME_FAIL_SWITCH", 1, 6),
+    ("pack_measure", "总压测量异常", "hvrel", "ALM_HVREL_FAIL_SWITCH", 1, 5),
+    ("current_sensor", "电流传感器异常", "hall", "ALM_HALL_BREAK_SWITCH", 1, 4),
+    ("pack_ov", "电池包总压过压", "battov", "ALM_BATT_OV_SWITCH", 1, 3),
+    ("pack_uv", "电池包总压欠压", "battuv", "ALM_BATT_UV_SWITCH", 1, 2),
+    ("beep", "蜂鸣器", "beep", "BeepSwitch", 1, 1),
+    ("soc_low", "SOC 过低", "soclo", "ALM_BATT_UC_SWITCH", 1, 0),
+    ("ivt_voltage_loss", "IVT 包电压失联", "ivtloss", "ALM_IVT_VOLT_LOSS_SWITCH", 2, 7),
+    ("lv1_blocked", "一级故障全部受阻", "lv1blk", "ALM_LV1_ALL_BLOCKED_SWITCH", 2, 6),
+    ("lv2_blocked", "二级告警全部受阻", "lv2blk", "ALM_LV2_ALL_BLOCKED_SWITCH", 2, 5),
 ]
 
 COMMAND_RESULT_NAMES = {
@@ -130,7 +143,7 @@ def command_ack_matches(name: str, ack: dict[str, Any]) -> bool:
     return expected is not None and int(ack.get("command", -1)) == expected
 
 IMD_STATUS_NAMES = {
-    0: "正常", 1: "PB8 数字故障", 2: "PWM 无信号", 3: "绝缘不通过",
+    0: "正常", 1: "OK_HS 故障", 2: "PWM 无效", 3: "绝缘不通过",
     4: "SST Bad", 5: "40Hz 设备错误", 6: "50Hz 接地线错误",
     7: "未知频率", 8: "PWM 状态无效",
 }
@@ -226,6 +239,13 @@ class BmsProtocol:
         self.tx_count = 0
         self.last_rx_monotonic: float | None = None
         self.last_summary_monotonic: float | None = None
+        self.last_fault_monotonic: float | None = None
+        self.last_alarm_levels_monotonic: float | None = None
+        self.last_relay_command_monotonic: float | None = None
+        self.last_thermal_monotonic: float | None = None
+        self.last_hv_monotonic: float | None = None
+        self.last_imd_monotonic: float | None = None
+        self.last_runtime_diag_monotonic: float | None = None
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
 
@@ -278,22 +298,26 @@ class BmsProtocol:
             self.relay.update({"cooling": bool(data[4]), "fan_duty_pct": data[5] if len(data) > 5 else None,
                                "fan_rpm": data[6] * 100 if len(data) > 6 else None,
                                "fan_flags": data[7] if len(data) > 7 else None})
+            self.last_thermal_monotonic = now_mono
         elif can_id == 0x186350F4 and len(data) >= 8:
             self.relay.update({"positive": bool((data[0] >> 6) & 0x03), "negative": bool((data[0] >> 4) & 0x03),
                                "precharge": bool((data[0] >> 2) & 0x03), "charger_state": bool(data[1] & 0x10),
                                "charger_communication": bool(data[1] & 0x08), "request_voltage_v": _u16be(data, 2) / 10.0,
                                "request_current_a": _u16be(data, 4) / 10.0, "precharge_voltage_v": _u16be(data, 6) / 10.0})
+            self.last_relay_command_monotonic = now_mono
         elif can_id in (0x187650F4, 0x4A1) and len(data) >= 8:
             self._decode_fault(data, frame.timestamp)
+            self.last_fault_monotonic = now_mono
             self.last_summary_monotonic = now_mono
         elif can_id in (0x187850F4, 0x4A2) and len(data) >= 8:
             self.alarm_levels = [(data[index // 4] >> ((index % 4) * 2)) & 0x03 for index in range(32)]
             self.alarm_levels_received = True
+            self.last_alarm_levels_monotonic = now_mono
         elif can_id == 0x187750F4 and len(data) >= 6:
             self.config["thresholds"] = {"ov_mv": _u16be(data), "uv_mv": _u16be(data, 2),
                                            "ot_c": data[4] - 30, "ut_c": data[5] - 30}
         elif can_id == 0x187F50F4 and len(data) >= 4:
-            self.config["switches"] = {key: bool(data[byte] & (1 << bit)) for key, _, byte, bit in SWITCH_DEFS}
+            self.config["switches"] = {key: bool(data[byte] & (1 << bit)) for key, _, _, _, byte, bit in SWITCH_DEFS}
             self.config["switch_version"] = data[3]
         elif can_id == 0x186B50F4 and len(data) >= 8:
             flags = data[1]
@@ -313,6 +337,7 @@ class BmsProtocol:
                 "chroma_output_fresh": bool(feedback_flags & 0x08),
                 "chroma_output_state": feedback_flags & 0x07,
             }
+            self.last_runtime_diag_monotonic = now_mono
             self.config["current_direction_inverted"] = bool(flags & 0x01)
             self.config["charger_type"] = 1 if flags & 0x02 else 0
             self.relay.update({key: value for key, value in self.runtime_diag.items()
@@ -320,9 +345,25 @@ class BmsProtocol:
         elif can_id == 0x186C50F4 and len(data) >= 8:
             variants = {0: "Debug", 1: "Release", 2: "Debug-Bringup"}
             variant = data[1] & 0x03
+            build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),
-                             "dirty": bool(data[1] & 0x80), "git": data[2:8].hex()}
+                             "dirty": bool(data[1] & 0x80), "git": data[2:8].hex(),
+                             "build_date": build_date}
+        elif can_id == 0x186C51F4 and len(data) >= 4:
+            # Companion identity frame: Beijing build date (year-2000, month, day).
+            if not isinstance(self.firmware.get("variant"), str):
+                self.firmware = {"variant_code": None, "variant": None, "dirty": None, "git": None}
+            year = 2000 + data[1]
+            month_days = {1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
+                          7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+            leap_year = (year % 4 == 0) and (year % 100 != 0 or year % 400 == 0)
+            if not leap_year:
+                month_days[2] = 28
+            if data[1] <= 99 and 1 <= data[2] <= 12 and 1 <= data[3] <= month_days[data[2]]:
+                self.firmware["build_date"] = f"{year:04d}-{data[2]:02d}-{data[3]:02d}"
+            else:
+                self.firmware["build_date"] = None
         elif can_id == 0x186D50F4 and len(data) >= 8:
             flags = data[1]
             self.sensor_diag = {
@@ -335,9 +376,27 @@ class BmsProtocol:
             }
         elif can_id == 0x186850F4 and len(data) >= 8:
             status = (data[0] >> 4) & 0x0F
+            flags = data[1]
+            pwm_signal_ok = bool(flags & 0x40)
+            insulation_valid = bool(flags & 0x20)
+            resistance_raw = _u16be(data, 4)
+            duty_raw = _u16be(data, 2)
+            frequency_raw = _u16be(data, 6)
             self.imd = {"status": status, "status_name": IMD_STATUS_NAMES.get(status, f"未知 {status}"),
-                        "frequency_class": data[0] & 0x0F, "flags": data[1], "duty_pct": _u16be(data, 2) / 10.0,
-                        "resistance_kohm": _u16be(data, 4), "frequency_hz": _u16be(data, 6) / 100.0}
+                        "frequency_class": data[0] & 0x0F, "flags": flags,
+                        "digital_ok": bool(flags & 0x80), "pwm_signal_ok": pwm_signal_ok,
+                        "insulation_valid": insulation_valid, "insulation_pass": bool(flags & 0x10),
+                        "sst_good": bool(flags & 0x08), "sst_bad": bool(flags & 0x04),
+                        "duty_integrity_ok": bool(flags & 0x02), "pa8_level": bool(flags & 0x01),
+                        # Byte2..7 contain zeroed/cleared values when the
+                        # corresponding validity bit is false. Do not expose
+                        # those placeholders as measurements to the UI.
+                        "duty_pct": duty_raw / 10.0 if pwm_signal_ok else None,
+                        "frequency_hz": frequency_raw / 100.0 if pwm_signal_ok else None,
+                        "resistance_kohm": (resistance_raw if insulation_valid and resistance_raw != 0xFFFF else None),
+                        "resistance_saturated": bool(insulation_valid and resistance_raw == 0xFFFF),
+                        "resistance_raw_kohm": resistance_raw}
+            self.last_imd_monotonic = now_mono
         elif can_id == 0x186950F4 and len(data) >= 5:
             results = {0: "未发生", 1: "成功", 2: "失败"}
             self.hv = {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
@@ -345,6 +404,7 @@ class BmsProtocol:
                        "precharge_result_name": results.get((data[0] >> 2) & 0x03, "保留值"),
                        "positive": bool(data[0] & 0x10), "negative": bool(data[0] & 0x20),
                        "precharge": bool(data[0] & 0x40), "success_ms": _u16be(data, 1), "failure_ms": _u16be(data, 3)}
+            self.last_hv_monotonic = now_mono
         elif can_id == 0x186A50F4 and len(data) >= 8:
             self.sop = {"discharge_current_a": _u16be(data) / 10.0, "charge_current_a": _u16be(data, 2) / 10.0,
                         "discharge_power_kw": _u16be(data, 4) / 10.0, "charge_power_kw": _u16be(data, 6) / 10.0}
@@ -446,8 +506,10 @@ class BmsProtocol:
 
         if now_mono - self._last_trend >= 0.45:
             self._last_trend = now_mono
+            relay_age = _age(now_mono, self.last_relay_command_monotonic)
             self.trends.append({"t": round(now_mono - self.started_monotonic, 1), "voltage": self.overview.get("voltage_v"),
-                                "current": self.overview.get("current_a"), "soc": self.overview.get("soc_pct")})
+                                "current": self.overview.get("current_a"), "soc": self.overview.get("soc_pct"),
+                                "precharge": self.relay.get("precharge_voltage_v") if relay_age is not None and relay_age <= 1.5 else None})
 
     def _decode_cells(self, can_id: int, data: bytes, now: float) -> bool:
         delta = can_id - CAN1_CELL_VOLT_BASE
@@ -563,15 +625,28 @@ class BmsProtocol:
                   for i in range(32)]
         for alarm in alarms:
             alarm["received"] = self.alarm_levels_received
+            alarm["age"] = _age(now, self.last_alarm_levels_monotonic)
+        hv = dict(self.hv)
+        hv["age"] = _age(now, self.last_hv_monotonic)
+        relay = dict(self.relay)
+        relay["command_age"] = _age(now, self.last_relay_command_monotonic)
+        relay["thermal_age"] = _age(now, self.last_thermal_monotonic)
+        imd = dict(self.imd)
+        imd["age"] = _age(now, self.last_imd_monotonic)
+        runtime_diag = dict(self.runtime_diag)
+        runtime_diag["age"] = _age(now, self.last_runtime_diag_monotonic)
+        fault = dict(self.fault)
+        fault["received"] = self.last_fault_monotonic is not None
+        fault["age"] = _age(now, self.last_fault_monotonic)
         return {
             "connection": {**connection, "rx_count": self.rx_count, "tx_count": self.tx_count,
                            "last_rx_age": _age(now, self.last_rx_monotonic),
                            "summary_age": _age(now, self.last_summary_monotonic)},
-            "overview": dict(self.overview), "relay": dict(self.relay), "hv": dict(self.hv), "imd": dict(self.imd),
-            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": self.config, "fault": self.fault,
+            "overview": dict(self.overview), "relay": relay, "hv": hv, "imd": imd,
+            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": self.config, "fault": fault,
             "alarms": alarms, "cells": cell_values, "temps": temp_values, "modules": modules,
             "balance": list(self.balance), "rtc_reply": dict(self.rtc_reply),
-            "runtime_diag": dict(self.runtime_diag), "sensor_diag": dict(self.sensor_diag),
+            "runtime_diag": runtime_diag, "sensor_diag": dict(self.sensor_diag),
             "firmware": dict(self.firmware), "flash_log_info": dict(self.flash_log_info),
             "flash_log_records": [self.flash_log_records[key] for key in sorted(self.flash_log_records)],
             "fault_history": list(self.fault_history), "raw_frames": list(self.raw_frames), "trends": list(self.trends),
@@ -606,7 +681,7 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     if name == "alarm_switches":
         switches = values.get("switches", values)
         data = bytearray(3)
-        for key, _, byte, bit in SWITCH_DEFS:
+        for key, _, _, _, byte, bit in SWITCH_DEFS:
             if bool(switches.get(key)):
                 data[byte] |= 1 << bit
         return CanFrame(0x188250F5, envelope + bytes(data), True, now, "tx")
@@ -641,4 +716,5 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
 
 
 def switch_catalog() -> list[dict[str, Any]]:
-    return [{"key": key, "name": label} for key, label, _, _ in SWITCH_DEFS]
+    return [{"key": key, "name": label, "code": code, "variable": variable}
+            for key, label, code, variable, _, _ in SWITCH_DEFS]

@@ -24,6 +24,8 @@ class BmsSimulator:
         self.charger_type = 0
         self.tick = 0
         self.log_clear_pending_cycles = 0
+        self.config_save_pending_cycles = 0
+        self.direction_save_pending_cycles = 0
         self.random = random.Random(405)
 
     def start(self) -> None:
@@ -48,20 +50,24 @@ class BmsSimulator:
             command = 1
             self.request_voltage = int.from_bytes(data[2:4], "big")
             self.request_current = int.from_bytes(data[4:6], "big")
+            self.config_save_pending_cycles = 2
             detail = self.request_current
         elif frame.arbitration_id == 0x188150F5 and len(data) == 8:
             command = 2
             self.thresholds = [int.from_bytes(data[2:4], "big"), int.from_bytes(data[4:6], "big"), data[6], data[7]]
+            self.config_save_pending_cycles = 2
             detail = self.thresholds[0]
         elif frame.arbitration_id == 0x188250F5 and len(data) == 5:
             command = 3
             self.switch_bytes = list(data[2:5])
+            self.config_save_pending_cycles = 2
         elif frame.arbitration_id == 0x188350F5 and len(data) == 6:
             command = 4
             result = 0
         elif frame.arbitration_id == 0x18A150F5 and len(data) == 3:
             command = 5
             self.current_inverted = bool(data[2])
+            self.direction_save_pending_cycles = 2
             detail = int(self.current_inverted)
         elif frame.arbitration_id == 0x18A350F5 and len(data) == 8:
             self.sink(CanFrame(0x18A450F4, bytes([0]) + data[:7], True))
@@ -82,12 +88,16 @@ class BmsSimulator:
                 detail = 0
             elif operation == 4 and len(data) == 4:
                 self.charger_type = data[3]
+                self.config_save_pending_cycles = 2
                 detail = self.charger_type
             else:
                 result = 5
         else:
             return
-        status_flags = 1 | (8 if self.log_clear_pending_cycles else 0)
+        status_flags = (1
+                        | (2 if self.config_save_pending_cycles else 0)
+                        | (4 if self.direction_save_pending_cycles else 0)
+                        | (8 if self.log_clear_pending_cycles else 0))
         self._send(0x18A650F4, bytes([3, sequence, command, result, 3, status_flags,
                                      (detail >> 8) & 0xFF, detail & 0xFF]))
 
@@ -132,27 +142,63 @@ class BmsSimulator:
         cells = [self._cell_value(i) for i in range(138)]
         temps = [self._temp_code(i) for i in range(48)]
         voltage_01v = round(sum(cells) / 100)
-        current_01a = round(10000 + 25 + 8 * math.sin(self.tick / 4.0))
-        state_alarm = 0x30
+        # A 90-second demo cycle: 30 s standby, 30 s precharge (PRE ramps to the
+        # pack voltage), then 30 s high-voltage charging. The final phase keeps
+        # charge_mode set so the overview timer and remaining-time estimate can
+        # be checked without injecting a raw fault frame by hand.
+        phase = (self.tick // 60) % 3
+        progress = (self.tick % 60) / 60.0
+        state = (3, 4, 5)[phase]
+        current_01a = round(25 + 8 * math.sin(self.tick / 4.0)) if phase == 2 else round(
+            10000 - 25 + 8 * math.sin(self.tick / 4.0))
+        state_alarm = (state << 4) | 0
+        if phase == 0:
+            relay_byte0 = 0x00
+            precharge_01v = 0
+        elif phase == 1:
+            relay_byte0 = 0x04
+            precharge_01v = round(voltage_01v * progress)
+        else:
+            relay_byte0 = 0x50
+            precharge_01v = voltage_01v
         self._send(0x186050F4, voltage_01v.to_bytes(2, "big") + current_01a.to_bytes(2, "big") + bytes([78, 0, state_alarm]))
         self._send(0x186750F4, voltage_01v.to_bytes(2, "big"))
         max_cell, min_cell = max(cells), min(cells)
         self._send(0x186150F4, max_cell.to_bytes(2, "big") + min_cell.to_bytes(2, "big") + bytes([cells.index(max_cell), cells.index(min_cell)]))
         max_temp, min_temp = max(temps), min(temps)
         self._send(0x186250F4, bytes([max_temp, min_temp, temps.index(max_temp), temps.index(min_temp), 1, 42, 31, 0x07]))
-        self._send(0x186350F4, bytes([0, 0x08]) + self.request_voltage.to_bytes(2, "big") + self.request_current.to_bytes(2, "big") + (0).to_bytes(2, "big"))
-        log_flags = 0x08 if self.log_clear_pending_cycles else 0
+        self._send(0x186350F4, bytes([relay_byte0, 0x08]) + self.request_voltage.to_bytes(2, "big")
+                   + self.request_current.to_bytes(2, "big") + max(0, precharge_01v).to_bytes(2, "big"))
+        log_flags = (0x08 if self.log_clear_pending_cycles else 0) | (0x04 if phase == 2 else 0)
         self._send(0x187650F4, bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 2]))
-        if self.log_clear_pending_cycles:
-            self.log_clear_pending_cycles -= 1
         self._send(0x187850F4, bytes(8))
         self._send(0x187750F4, self.thresholds[0].to_bytes(2, "big") + self.thresholds[1].to_bytes(2, "big") + bytes(self.thresholds[2:]))
         self._send(0x187F50F4, bytes(self.switch_bytes) + bytes([3]))
-        runtime_flags = (1 if self.current_inverted else 0) | (2 if self.charger_type else 0) | 0x90
+        runtime_flags = ((1 if self.current_inverted else 0)
+                         | (2 if self.charger_type else 0)
+                         | (0x20 if self.config_save_pending_cycles else 0)
+                         | (0x40 if self.direction_save_pending_cycles else 0)
+                         | 0x90)
         self._send(0x186B50F4, bytes([3, runtime_flags]) + (5680).to_bytes(2, "big")
                    + (28).to_bytes(2, "big") + bytes([0, 0x80]))
+        if self.log_clear_pending_cycles:
+            self.log_clear_pending_cycles -= 1
+        if self.config_save_pending_cycles:
+            self.config_save_pending_cycles -= 1
+        if self.direction_save_pending_cycles:
+            self.direction_save_pending_cycles -= 1
         self._send(0x186C50F4, bytes.fromhex("03 80 12 34 56 78 9A BC"))
+        self._send(0x186C51F4, bytes.fromhex("03 1A 08 03 00 00 00 00"))
         self._send(0x186D50F4, bytes.fromhex("03 F6 01 00 00 00 00 0C"))
         self._send(0x186850F4, bytes([0x01, 0xF8]) + (500).to_bytes(2, "big") + (820).to_bytes(2, "big") + (1000).to_bytes(2, "big"))
-        self._send(0x186950F4, bytes([0, 0, 0, 0, 0, 0, 0, 0]))
+        if phase == 1:
+            hv_byte0 = 0x40
+            precharge_ms = round(progress * 5000)
+        elif phase == 2:
+            hv_byte0 = 0x34  # positive + negative closed, precharge result "成功"
+            precharge_ms = 5000
+        else:
+            hv_byte0 = 0x00
+            precharge_ms = 0
+        self._send(0x186950F4, bytes([hv_byte0]) + precharge_ms.to_bytes(2, "big") + (0).to_bytes(2, "big") + bytes([0, 0, 0]))
         self._send(0x186A50F4, (1800).to_bytes(2, "big") + (80).to_bytes(2, "big") + (800).to_bytes(2, "big") + (80).to_bytes(2, "big"))
