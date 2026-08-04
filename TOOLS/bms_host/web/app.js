@@ -5,6 +5,7 @@ const state = {
   api: null,
   bootstrap: null,
   snapshot: null,
+  toolSnapshots: { bench: null, ivt: null },
   page: "overview",
   cellMode: "voltage",
   frameKind: "all",
@@ -13,13 +14,14 @@ const state = {
   pollTimer: null,
   pollInFlight: false,
   pendingCommand: null,
+  pendingIvtAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false, chargerType: false },
   recording: false,
   onlyActiveAlarms: false,
   uiScale: 1,
   lastZoomWheelAt: 0,
-  chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0 },
+  chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0, connectionKey: null },
   saveWatch: null,
 };
 
@@ -57,18 +59,28 @@ const ALARM_RULE_TEXTS = [
   "IVT U1失联约360 ms",
 ];
 
-const PAGE_ORDER = ["overview", "cells", "alarms", "frames", "control"];
+const PAGE_ORDER = ["overview", "cells", "alarms", "frames", "control", "bench", "ivt"];
+const DATA_FRESH_MAX_S = 1.5;
+const SLOW_DATA_FRESH_MAX_S = 2.5;
+const RTC_REPLY_FRESH_MAX_S = 5;
 
 function fmt(value, digits = 1, fallback = "—") {
   return value === null || value === undefined || Number.isNaN(value) ? fallback : Number(value).toFixed(digits);
 }
+function isFresh(age, limit = DATA_FRESH_MAX_S) { return age != null && age <= limit; }
 function text(id, value) { const node = $(id); if (node) node.textContent = value; }
 function setClass(id, className, enabled) { const node = $(id); if (node) node.classList.toggle(className, !!enabled); }
 function liveFaultState(snapshot) {
   const fault = snapshot?.fault || {};
-  const faultFresh = fault.received === true && fault.age != null && fault.age <= 1.5;
-  const alarmLevelsFresh = (snapshot?.alarms || []).some(item => item.received === true && item.age != null && item.age <= 1.5);
-  return { fault, faultFresh, alarmLevelsFresh, known: faultFresh || alarmLevelsFresh };
+  const faultFresh = fault.received === true && isFresh(fault.age);
+  const alarmLevelsFresh = (snapshot?.alarms || []).some(item => item.received === true && isFresh(item.age, SLOW_DATA_FRESH_MAX_S));
+  return { fault, faultFresh, alarmLevelsFresh, completeFresh: faultFresh && alarmLevelsFresh,
+    anyFresh: faultFresh || alarmLevelsFresh };
+}
+
+function resetChargeTiming() {
+  state.chargeTiming = { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null,
+    currentSumA: 0, currentSamples: 0, connectionKey: null };
 }
 function toast(message, error = false) {
   const node = document.createElement("div");
@@ -121,14 +133,18 @@ async function init() {
     text("#appVersion", `v${state.bootstrap.version || "—"}`);
     text("#appVersionDate", state.bootstrap.version_date || "—");
     populateConnectionOptions();
+    populateToolChannelOptions();
     buildSwitchList();
     await poll();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
-    populateConnectionOptions({ simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [
-      { key: "can1", name: "CAN1 · 主控 / 从控 / 工具", bitrate: 500000 },
-      { key: "canb", name: "CANB · IVT / ECU / Chroma", bitrate: 500000 },
-    ]});
+    const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [
+      { key: "can1", name: "CAN1 · F405 主控 / 从控 / 工具", bitrate: 500000 },
+      { key: "canb", name: "CANB · IVT / ECU / Chroma · 500 kbit/s", bitrate: 500000 },
+      { key: "canb_legacy", name: "CANB · Legacy / IVT · 250 kbit/s", bitrate: 250000 },
+    ]};
+    populateConnectionOptions(fallback);
+    populateToolChannelOptions(fallback);
   }
 }
 
@@ -143,6 +159,7 @@ function bindNavigation() {
 function showPage(page) {
   if (!PAGE_ORDER.includes(page)) return;
   state.page = page;
+  if (["bench", "ivt"].includes(page)) $(".nav-tools")?.setAttribute("open", "");
   $$(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.page === page));
   $$(".page").forEach(node => node.classList.toggle("active", node.id === `page-${page}`));
   // Every page owns a different information depth. Keeping the previous page's
@@ -154,10 +171,13 @@ function showPage(page) {
 
 function bindControls() {
   $("#connectButton").addEventListener("click", () => $("#connectDialog").showModal());
-  $("#connectMode").addEventListener("change", updateConnectionDialog);
   $("#connectProfile").addEventListener("change", updateConnectionDialog);
   $("#doConnect").addEventListener("click", connectCan);
   $("#disconnectButton").addEventListener("click", disconnectCan);
+  $("#connectBenchButton").addEventListener("click", connectBench);
+  $("#disconnectBenchButton").addEventListener("click", disconnectBench);
+  $("#connectIvtButton").addEventListener("click", connectIvt);
+  $("#disconnectIvtButton").addEventListener("click", disconnectIvt);
   $("#onlyAbnormal").addEventListener("change", renderCells);
   $("#frameType").addEventListener("click", event => {
     const button = event.target.closest("button"); if (!button) return;
@@ -190,11 +210,15 @@ function bindControls() {
     confirmCommand("rtc", { datetime: local }, "RTC 校时", `写入上位机本地时间：${local.replace("T", " ")}`);
   });
   $("#sendCurrentDirection").addEventListener("click", () => {
-    const inverted = $("#currentDirection").value === "1";
+    const value = $("#currentDirection").value;
+    if (!["0", "1"].includes(value)) return toast("尚未收到电流方向，暂不能写入", true);
+    const inverted = value === "1";
     confirmCommand("current_direction", { inverted }, "写入电流方向", `明确设置为“${inverted ? "反转" : "正常"}”。此设置保存到 Flash Sector2。`);
   });
   $("#sendChargerType").addEventListener("click", () => {
-    const charger_type = +$("#chargerType").value;
+    const value = $("#chargerType").value;
+    if (!["0", "1"].includes(value)) return toast("尚未收到充电机类型，暂不能写入", true);
+    const charger_type = +value;
     confirmCommand("charger_type", { charger_type }, "切换充电机类型",
       `设置为“${charger_type ? "Chroma · 500 kbit/s" : "Legacy · 250 kbit/s"}”。实体充电按钮决定是否进入充电模式。`);
   });
@@ -211,6 +235,22 @@ function bindControls() {
     await poll();
   });
   $("#faultReset").addEventListener("click", () => confirmCommand("fault_reset", {}, "故障保持复位", "只有实时一级、二级告警已清除且 HV_ACC 释放时，主控才会执行复位。", true));
+  $("#readIvtConfig").addEventListener("click", readIvtConfig);
+  $("#configureIvt").addEventListener("click", () => {
+    const options = readIvtOptions();
+    if (!options) return;
+    confirmIvtAction("configure", options, "配置 IVT 为 BMS CANB",
+      "将停止 IVT，写入 8 个通道和 10 个 CAN ID，保存到 IVT 非易失存储，重启后再逐项读回核对。执行前确认 CANB 上只有目标 IVT。", true);
+  });
+  $("#switchIvt250").addEventListener("click", () => confirmIvtBitrate(250000));
+  $("#switchIvt500").addEventListener("click", () => confirmIvtBitrate(500000));
+  $("#sendBenchCommand").addEventListener("click", sendBenchCommand);
+  $("#benchCommand").addEventListener("keydown", event => {
+    if (event.key === "Enter") sendBenchCommand();
+  });
+  $$("#page-bench [data-bench-command]").forEach(button => {
+    button.addEventListener("click", () => runBenchCommand(button.dataset.benchCommand));
+  });
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#doConfirm").addEventListener("click", sendPendingCommand);
   $("#recordButton").addEventListener("click", toggleRecording);
@@ -278,39 +318,47 @@ function bindControls() {
 
 function populateConnectionOptions(fallback) {
   const data = state.bootstrap || fallback;
-  const simulationEnabled = data?.simulation_enabled === true;
-  const modeField = $("#connectModeField");
-  const modeSelect = $("#connectMode");
-  if (modeField) modeField.classList.toggle("hidden", !simulationEnabled);
-  if (simulationEnabled && modeSelect && !modeSelect.querySelector('option[value="simulation"]')) {
-    modeSelect.insertAdjacentHTML("beforeend", '<option value="simulation">内置模拟数据</option>');
+  if (!data) return;
+  const profiles = [...(data.profiles || [])];
+  if (data.simulation_enabled === true && !profiles.some(item => item.key === "simulation")) {
+    profiles.unshift({ key: "simulation", mode: "simulation", name: "内置模拟数据 · CAN1 / 开发测试", bitrate: 500000 });
   }
-  if (!simulationEnabled && modeSelect) modeSelect.value = "pcan";
-  $("#connectProfile").innerHTML = data.profiles.map(item => `<option value="${item.key}" data-bitrate="${item.bitrate}">${item.name}</option>`).join("");
+  $("#connectProfile").innerHTML = profiles.map(item =>
+    `<option value="${item.key}" data-mode="${item.mode || "pcan"}" data-bitrate="${item.bitrate}">${item.name}</option>`
+  ).join("");
   $("#connectChannel").innerHTML = data.channels.map(item => `<option>${item}</option>`).join("");
   updateConnectionDialog();
 }
 
+function populateToolChannelOptions(fallback) {
+  const data = state.bootstrap || fallback;
+  if (!data?.channels) return;
+  const options = data.channels.map(item => `<option>${item}</option>`).join("");
+  ["#benchChannelSelect", "#ivtChannelSelect"].forEach(id => { if ($(id)) $(id).innerHTML = options; });
+}
+
 function updateConnectionDialog() {
-  const simulation = state.bootstrap?.simulation_enabled === true && $("#connectMode").value === "simulation";
-  $("#channelField").classList.toggle("hidden", simulation);
   const option = $("#connectProfile").selectedOptions[0];
-  text("#connectBitrate", `${Number(option?.dataset.bitrate || 500000) / 1000} kbit/s`);
+  const simulation = option?.dataset.mode === "simulation";
+  $("#channelField").classList.toggle("hidden", simulation);
+  text("#connectBitrate", simulation ? "虚拟 CAN1" : `${Number(option?.dataset.bitrate || 500000) / 1000} kbit/s`);
 }
 
 async function connectCan() {
   if (!state.api) return toast("应用后端未就绪", true);
   const option = $("#connectProfile").selectedOptions[0];
-  const simulationEnabled = state.bootstrap?.simulation_enabled === true;
+  const mode = option?.dataset.mode || "pcan";
+  resetChargeTiming();
   $("#doConnect").disabled = true; text("#doConnect", "连接中…");
   $("#connectError").classList.add("hidden");
   const result = await state.api.connect_can({
-    mode: simulationEnabled ? $("#connectMode").value : "pcan", bus_profile: $("#connectProfile").value,
-    channel: $("#connectChannel").value, bitrate: Number(option.dataset.bitrate),
+    mode, bus_profile: mode === "simulation" ? "can1" : $("#connectProfile").value,
+    channel: mode === "simulation" ? null : $("#connectChannel").value,
+    bitrate: Number(option?.dataset.bitrate || 500000),
   });
   $("#doConnect").disabled = false; text("#doConnect", "连接");
   if (result.ok) {
-    $("#connectDialog").close(); toast(result.connection.mode === "simulation" ? "模拟数据已启动" : "PCAN 已连接"); await poll();
+    $("#connectDialog").close(); toast("上位机已连接"); await poll();
   } else {
     text("#connectError", result.error); $("#connectError").classList.remove("hidden");
   }
@@ -318,9 +366,51 @@ async function connectCan() {
 
 async function disconnectCan() {
   if (!state.api) return;
+  resetChargeTiming();
   await state.api.disconnect_can();
   $("#connectDialog").close();
   toast("CAN 已断开");
+  await poll();
+}
+
+async function connectBench() {
+  if (!state.api) return toast("应用后端未就绪", true);
+  const button = $("#connectBenchButton");
+  button.disabled = true; button.textContent = "连接中…";
+  const result = await state.api.connect_bench({ channel: $("#benchChannelSelect").value });
+  button.disabled = false; button.textContent = "连接";
+  if (!result.ok) return toast(result.error || "台架连接失败", true);
+  toast("台架已连接到 F405 CAN1");
+  await poll();
+}
+
+async function disconnectBench() {
+  if (!state.api) return;
+  await state.api.disconnect_bench();
+  toast("台架已断开");
+  await poll();
+}
+
+async function connectIvt() {
+  if (!state.api) return toast("应用后端未就绪", true);
+  const bitrate = Number($("#ivtBitrateSelect").value || 500000);
+  const button = $("#connectIvtButton");
+  button.disabled = true; button.textContent = "连接中…";
+  const result = await state.api.connect_ivt({
+    channel: $("#ivtChannelSelect").value,
+    bitrate,
+    bus_profile: bitrate === 250000 ? "canb_legacy" : "canb",
+  });
+  button.disabled = false; button.textContent = "连接";
+  if (!result.ok) return toast(result.error || "IVT 连接失败", true);
+  toast(`IVT 配置通道已连接 · ${bitrate / 1000} kbit/s`);
+  await poll();
+}
+
+async function disconnectIvt() {
+  if (!state.api) return;
+  await state.api.disconnect_ivt();
+  toast("IVT 配置通道已断开");
   await poll();
 }
 
@@ -335,7 +425,8 @@ function buildSwitchList() {
 
 /** Refresh the visible on/off state of every alarm switch row on the control page. */
 function updateSwitchRowState() {
-  const hasReport = Object.keys(state.snapshot?.config?.switches || {}).length > 0;
+  const config = state.snapshot?.config || {};
+  const hasReport = isFresh(config.switches_age, SLOW_DATA_FRESH_MAX_S) && Object.keys(config.switches || {}).length > 0;
   $$("#switchList input").forEach(input => {
     const row = input.closest(".switch-row");
     const label = row.querySelector(".switch-state");
@@ -373,6 +464,11 @@ async function poll() {
   state.pollInFlight = true;
   try {
     state.snapshot = await state.api.get_snapshot();
+    if (state.page === "bench" && state.api.get_bench_snapshot) {
+      state.toolSnapshots.bench = await state.api.get_bench_snapshot();
+    } else if (state.page === "ivt" && state.api.get_ivt_snapshot) {
+      state.toolSnapshots.ivt = await state.api.get_ivt_snapshot();
+    }
     if (state.snapshot) {
       renderChargeTiming(state.snapshot.overview, state.snapshot.connection, state.snapshot.fault || {});
     }
@@ -399,6 +495,10 @@ function render() {
     renderAlarms(); renderConfig();
   } else if (state.page === "control") {
     renderConfig(); renderControls();
+  } else if (state.page === "bench") {
+    renderBench();
+  } else if (state.page === "ivt") {
+    renderIvtConfig();
   } else if (state.page === "frames") {
     renderReplay();
     if (!state.framePaused) renderFrames();
@@ -414,18 +514,21 @@ function renderConnection(connection) {
   setClass("#connectButton", "connected", connection.connected);
   setClass("#connectButton", "simulation", connection.mode === "simulation");
   setClass("#connectButton", "replay", connection.mode === "replay");
-  const profileNames = { can1: "CAN1", canb: "CANB", canb_legacy: "CANB" };
+  const profileNames = { can1: "CAN1 · F405", canb: "CANB · 500", canb_legacy: "CANB Legacy · 250" };
   const modeName = connection.mode === "simulation" ? "内置模拟数据"
+    : connection.mode === "bench" ? "CAN1 从控台架"
     : connection.mode === "replay" ? "历史回放" : connection.channel || "PCAN";
-  $("#connectButton b").textContent = connection.connected ? modeName : "连接设备";
+  $("#connectButton b").textContent = connection.connected ? modeName : "连接上位机";
   $("#connectButton small").textContent = connection.connected
-    ? `${profileNames[connection.bus_profile] || "CAN"} · ${(connection.bitrate || 500000) / 1000} kbit/s`
-    : state.bootstrap?.simulation_enabled === true ? "选择连接方式" : "选择 PCAN 通道";
+    ? connection.mode === "simulation" ? "虚拟 CAN1 · 开发测试"
+      : `${profileNames[connection.bus_profile] || "CAN"} · ${(connection.bitrate || 500000) / 1000} kbit/s`
+    : "选择 CAN 总线";
   $("#disconnectButton").classList.toggle("hidden", !connection.connected);
 
   const firmware = state.snapshot?.firmware || {};
   const firmwareText = [
     firmware.variant,
+    firmware.charger_variant && firmware.charger_variant !== "Runtime" ? firmware.charger_variant : "",
     firmware.git,
     firmware.build_date ? `构建 ${firmware.build_date}` : "",
   ].filter(Boolean).join(" · ") || "—";
@@ -441,6 +544,12 @@ function renderOverview() {
   const faultState = liveFaultState(state.snapshot);
   const overviewFresh = connection.summary_age != null && connection.summary_age <= 1.5;
   const stale = !overviewFresh;
+  const voltageFresh = overviewFresh && o.voltage_valid;
+  const currentFresh = overviewFresh && o.current_valid;
+  const socFresh = overviewFresh && o.soc_valid;
+  const cellDataFresh = overviewFresh && o.cell_voltage_complete;
+  const cellExtremesFresh = cellDataFresh && isFresh(o.cell_extremes_age);
+  const cellSumFresh = cellDataFresh && isFresh(o.cell_sum_age);
   const stateName = !overviewFresh ? "等待 CAN 数据" : o.state_name || "等待 CAN 数据";
   text("#stateName", stateName);
   const stateNode = $("#stateName");
@@ -452,14 +561,17 @@ function renderOverview() {
   text("#stateDescription", stale ? "主控周期状态帧缺失或已经超时。" : descriptions[o.state] || "正在读取主控状态。");
   text("#overviewClock", new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   text("#overviewFaultCode", faultState.faultFresh ? faultState.fault.code_hex : "等待数据");
-  text("#alarmLevelName", faultState.known ? o.alarm_level_name || "未知" : "等待数据");
-  $("#alarmLevelName").className = !faultState.known || o.alarm_level == null ? "" : o.alarm_level === 1 ? "bad" : o.alarm_level === 2 ? "warn" : "ok";
-  text("#packVoltage", fmt(o.voltage_v, 1)); text("#packCurrent", fmt(o.current_a, 1)); text("#packSoc", fmt(o.soc_pct, 0));
-  $("#socBar").style.width = `${Math.max(0, Math.min(100, o.soc_pct || 0))}%`;
-  const delta = o.max_cell_mv != null && o.min_cell_mv != null ? o.max_cell_mv - o.min_cell_mv : null;
-  text("#cellDelta", fmt(delta, 0)); text("#cellExtremes", o.max_cell_mv == null ? "最高 / 最低 —" : `${o.max_cell_mv} / ${o.min_cell_mv} mV`);
-  const sumDelta = o.voltage_v != null && o.cell_sum_v != null ? o.voltage_v - o.cell_sum_v : null;
-  text("#cellSumDelta", o.cell_sum_v == null ? "单体累加 —" : `单体累加 ${fmt(o.cell_sum_v, 1)} V · 差 ${fmt(sumDelta, 1)} V`);
+  text("#alarmLevelName", faultState.faultFresh ? o.alarm_level_name || "未知" : "等待数据");
+  $("#alarmLevelName").className = !faultState.faultFresh || o.alarm_level == null ? "" : o.alarm_level === 1 ? "bad" : o.alarm_level === 2 ? "warn" : "ok";
+  text("#packVoltage", voltageFresh ? fmt(o.voltage_v, 1) : "等待数据");
+  text("#packCurrent", currentFresh ? fmt(o.current_a, 1) : "等待数据");
+  text("#packSoc", socFresh ? fmt(o.soc_pct, 0) : "等待数据");
+  $("#socBar").style.width = socFresh ? `${Math.max(0, Math.min(100, o.soc_pct))}%` : "0%";
+  const delta = cellExtremesFresh && o.max_cell_mv != null && o.min_cell_mv != null ? o.max_cell_mv - o.min_cell_mv : null;
+  text("#cellDelta", delta == null ? "等待数据" : fmt(delta, 0));
+  text("#cellExtremes", delta == null ? "最高 / 最低 —" : `${o.max_cell_mv} / ${o.min_cell_mv} mV`);
+  const sumDelta = voltageFresh && cellSumFresh && o.cell_sum_v != null ? o.voltage_v - o.cell_sum_v : null;
+  text("#cellSumDelta", sumDelta == null ? "单体累加 —" : `单体累加 ${fmt(o.cell_sum_v, 1)} V · 差 ${fmt(sumDelta, 1)} V`);
   const relayFresh = relay.command_age != null && relay.command_age <= 1.5;
   const hvFresh = hv.age != null && hv.age <= 1.5;
   text("#prechargeVoltage", relayFresh ? fmt(relay.precharge_voltage_v, 1) : "等待数据");
@@ -479,8 +591,8 @@ function renderOverview() {
   text("#hvAcc", !hvFresh ? "等待数据" : hv.hv_acc ? "请求" : "已释放");
   text("#chargeButton", !hvFresh ? "等待数据" : hv.charge_button ? "已按下" : "已释放");
   const safetyAlarm = (state.snapshot.alarms || []).find(item => item.index === 22);
-  const safetyEventKnown = faultState.known;
-  const safetyEventActive = !!(safetyAlarm?.level || (faultState.faultFresh && safetyAlarm?.in_fault_code));
+  const safetyEventKnown = faultState.completeFresh;
+  const safetyEventActive = safetyEventKnown && !!(safetyAlarm?.level || safetyAlarm?.in_fault_code);
   text("#safetyEvent", !safetyEventKnown ? "等待数据" : safetyEventActive ? "已触发" : "未触发");
   setClass("#safetyEvent", "bad", safetyEventKnown && safetyEventActive);
   setClass("#safetyEvent", "ok", safetyEventKnown && !safetyEventActive);
@@ -494,18 +606,19 @@ function renderOverview() {
   text("#prechargeTime", prechargeTime);
   text("#prechargeResult", !hvFresh ? "等待数据" : hv.precharge_result_name || "未发生预充");
   $("#prechargeResult").className = `state-note ${hvFresh && hv.precharge_result === 1 ? "ok" : hvFresh && hv.precharge_result === 2 ? "bad" : ""}`;
-  renderThermal(o, relay);
+  renderThermal(o, relay, overviewFresh);
   renderImd(imd);
   drawTrend();
 }
 
-function renderThermal(overview, relay) {
+function renderThermal(overview, relay, overviewFresh) {
   const thermalFresh = relay.thermal_age != null && relay.thermal_age <= 1.5;
-  text("#maxTemp", !thermalFresh || overview.max_temp_c == null ? "等待数据" : `${overview.max_temp_c} °C`);
-  text("#minTemp", !thermalFresh || overview.min_temp_c == null ? "等待数据" : `${overview.min_temp_c} °C`);
-  text("#maxTempNo", !thermalFresh || overview.max_temp_no == null ? "" : `T${overview.max_temp_no}`);
-  text("#minTempNo", !thermalFresh || overview.min_temp_no == null ? "" : `T${overview.min_temp_no}`);
-  const spread = thermalFresh && overview.max_temp_c != null && overview.min_temp_c != null
+  const temperatureFresh = thermalFresh && overviewFresh && overview.temperature_complete;
+  text("#maxTemp", !temperatureFresh || overview.max_temp_c == null ? "等待数据" : `${overview.max_temp_c} °C`);
+  text("#minTemp", !temperatureFresh || overview.min_temp_c == null ? "等待数据" : `${overview.min_temp_c} °C`);
+  text("#maxTempNo", !temperatureFresh || overview.max_temp_no == null ? "" : `T${overview.max_temp_no}`);
+  text("#minTempNo", !temperatureFresh || overview.min_temp_no == null ? "" : `T${overview.min_temp_no}`);
+  const spread = temperatureFresh && overview.max_temp_c != null && overview.min_temp_c != null
     ? overview.max_temp_c - overview.min_temp_c : null;
   text("#tempDelta", spread == null ? "等待数据" : `${spread} °C`);
   text("#fanDuty", !thermalFresh || relay.fan_duty_pct == null ? "等待数据" : `${relay.fan_duty_pct} %`);
@@ -526,11 +639,6 @@ function renderThermal(overview, relay) {
 
 function renderImd(imd) {
   const fresh = imd.age != null && imd.age <= 1.5;
-  const status = !fresh ? "等待数据" : imd.status_name || "等待数据";
-  text("#imdStatus", status);
-  $("#imdStatus").className = !fresh ? "" : imd.status === 0 ? "ok" : "bad";
-  $("#imdStatus").title = fresh ? "IMD 综合诊断状态。" : "等待 IMD 数据。";
-
   const digital = !fresh ? "等待数据" : imd.digital_ok ? "正常" : "故障";
   text("#imdDigital", digital);
   $("#imdDigital").className = !fresh ? "" : imd.digital_ok ? "ok" : "bad";
@@ -550,6 +658,12 @@ function renderImd(imd) {
 }
 
 function renderModules() {
+  if (state.snapshot.raw_cell_data_available !== true) {
+    $("#moduleAverages").innerHTML = "";
+    text("#moduleSummary", "CANB 无单体原始数据");
+    $("#moduleSummary").className = "state-text";
+    return;
+  }
   const modules = state.snapshot.modules || [];
   const cells = state.snapshot.cells || [], temps = state.snapshot.temps || [];
   $("#moduleAverages").innerHTML = modules.map(item => {
@@ -575,6 +689,12 @@ function durationLabel(totalSeconds) {
 }
 
 function renderChargeTiming(overview, connection, fault) {
+  const connectionKey = [connection.connected, connection.mode, connection.channel,
+    connection.bus_profile, connection.bitrate].join("|");
+  if (state.chargeTiming.connectionKey !== connectionKey) {
+    resetChargeTiming();
+    state.chargeTiming.connectionKey = connectionKey;
+  }
   const timing = state.chargeTiming;
   if (connection.mode === "replay") {
     text("#chargeTimingState", "历史回放");
@@ -593,7 +713,8 @@ function renderChargeTiming(overview, connection, fault) {
   }
 
   const chargeActive = !!fault.flags?.charge_mode;
-  const fresh = true;
+  const currentFresh = overview.current_valid === true;
+  const socFresh = overview.soc_valid === true;
   const chargeCurrent = Number(overview.current_a);
 
   if (chargeActive && !timing.active) {
@@ -608,22 +729,30 @@ function renderChargeTiming(overview, connection, fault) {
     timing.lastTickMs = null;
   }
 
+  if (!currentFresh) {
+    timing.lastTickMs = null;
+    text("#chargeTimingState", chargeActive ? "等待数据" : timing.elapsedMs ? "本次已停止" : "未充电");
+    text("#chargeElapsed", durationLabel(timing.elapsedMs / 1000));
+    text("#chargeRemaining", "—");
+    return;
+  }
+
   if (timing.active) {
-    if (fresh && timing.lastTickMs != null) timing.elapsedMs += Math.min(1500, now - timing.lastTickMs);
+    if (timing.lastTickMs != null) timing.elapsedMs += Math.min(1500, now - timing.lastTickMs);
     timing.lastTickMs = now;
-    if (fresh && Number.isFinite(chargeCurrent) && chargeCurrent > 0.05) {
+    if (Number.isFinite(chargeCurrent) && chargeCurrent > 0.05) {
       timing.currentSumA += chargeCurrent;
       timing.currentSamples++;
       timing.averageCurrentA = timing.currentSumA / timing.currentSamples;
     }
   }
 
-  text("#chargeTimingState", chargeActive ? fresh ? "充电计时中" : "状态帧超时" : timing.elapsedMs ? "本次已停止" : "未充电");
+  text("#chargeTimingState", chargeActive ? "充电计时中" : timing.elapsedMs ? "本次已停止" : "未充电");
   text("#chargeElapsed", durationLabel(timing.elapsedMs / 1000));
 
   const soc = Number(overview.soc_pct);
   const estimateCurrent = timing.averageCurrentA;
-  if (!chargeActive || !fresh || !Number.isFinite(soc) || estimateCurrent == null || estimateCurrent <= .1) {
+  if (!chargeActive || !socFresh || !Number.isFinite(soc) || estimateCurrent == null || estimateCurrent <= .1) {
     text("#chargeRemaining", "—");
     return;
   }
@@ -637,7 +766,7 @@ function renderChargeTiming(overview, connection, fault) {
   }
 }
 
-const TREND_COLORS = { voltage: "#42c4d5", current: "#f0b429", precharge: "#8ab4f8" };
+const TREND_COLORS = { voltage: "#aeb6b2", current: "#f0b429", precharge: "#858d89" };
 
 function trendAxisRange(values, minimumSpan) {
   if (!values.length) return null;
@@ -664,14 +793,22 @@ function drawTrend() {
   ctx.clearRect(0, 0, width, height);
 
   const latest = trends[trends.length - 1] || {};
-  text("#trendVoltage", Number.isFinite(latest.voltage) ? `${fmt(latest.voltage, 1)} V` : "—");
-  text("#trendCurrent", Number.isFinite(latest.current) ? `${fmt(latest.current, 1)} A` : "—");
-  text("#trendPrecharge", Number.isFinite(latest.precharge) ? `${fmt(latest.precharge, 1)} V` : "—");
+  const overview = state.snapshot?.overview || {};
+  const connection = state.snapshot?.connection || {};
+  const relay = state.snapshot?.relay || {};
+  const summaryFresh = isFresh(connection.summary_age);
+  const relayFresh = isFresh(relay.command_age);
+  const latestVoltage = summaryFresh && overview.voltage_valid ? latest.voltage : null;
+  const latestCurrent = summaryFresh && overview.current_valid ? latest.current : null;
+  const latestPrecharge = relayFresh ? latest.precharge : null;
+  text("#trendVoltage", Number.isFinite(latestVoltage) ? `${fmt(latestVoltage, 1)} V` : "等待数据");
+  text("#trendCurrent", Number.isFinite(latestCurrent) ? `${fmt(latestCurrent, 1)} A` : "等待数据");
+  text("#trendPrecharge", Number.isFinite(latestPrecharge) ? `${fmt(latestPrecharge, 1)} V` : "等待数据");
 
   const pad = { left: 48, right: 48, top: 12, bottom: 24 };
   const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
   const axisFont = '10px "SF Mono", "Cascadia Mono", Consolas, monospace';
-  const labelColor = "#718087", gridColor = "#223039";
+  const labelColor = "#7c7f7d", gridColor = "#2d2f31";
 
   // Horizontal grid, five bands, plus the left/right axis tick labels.
   const left = trendAxisRange(trends.flatMap(item => [item.voltage, item.precharge]).filter(Number.isFinite), 8);
@@ -727,7 +864,7 @@ function drawTrend() {
   // Dashed zero line on the current axis when the window crosses zero.
   if (right && Number.isFinite(right.min) && right.min < 0 && right.max > 0) {
     const y = Math.round(yRight(0)) + .5;
-    ctx.strokeStyle = "#4a5b65"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "#55585a"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -757,8 +894,8 @@ function drawTrend() {
   };
 
   if (left) {
-    drawSeries("precharge", TREND_COLORS.precharge, yLeft, "rgba(138, 180, 248, .10)");
-    drawSeries("voltage", TREND_COLORS.voltage, yLeft, "rgba(66, 196, 213, .13)");
+    drawSeries("precharge", TREND_COLORS.precharge, yLeft, "rgba(133, 141, 137, .10)");
+    drawSeries("voltage", TREND_COLORS.voltage, yLeft, "rgba(174, 182, 178, .13)");
   }
   if (right) drawSeries("current", TREND_COLORS.current, yRight, null);
 }
@@ -767,19 +904,23 @@ function renderAlarmSummary() {
   const alarms = state.snapshot.alarms || [];
   const faultState = liveFaultState(state.snapshot);
   text("#faultCode", faultState.faultFresh ? faultState.fault.code_hex : "等待数据");
-  const activeItems = alarms.filter(item => (faultState.alarmLevelsFresh && item.level) || (faultState.faultFresh && item.in_fault_code));
+  const activeItems = faultState.completeFresh
+    ? alarms.filter(item => item.level || item.in_fault_code) : [];
   const activeCount = activeItems.length;
   text("#alarmNavBadge", activeCount); $("#alarmNavBadge").classList.toggle("hidden", activeCount === 0);
-  const alarmCountText = activeCount ? `${activeCount} 项` : faultState.known ? "无" : "等待数据";
+  const alarmCountText = activeCount ? `${activeCount} 项`
+    : faultState.completeFresh ? "无"
+    : faultState.faultFresh ? "等待等级"
+    : faultState.alarmLevelsFresh ? "等待故障码" : "等待数据";
   text("#alarmActiveCount", alarmCountText);
-  text("#alarmPageLevel", faultState.known ? state.snapshot.overview?.alarm_level_name || "未知" : "等待数据");
-  $("#alarmPageLevel")?.classList.toggle("bad", faultState.known && state.snapshot.overview?.alarm_level === 1);
-  $("#alarmPageLevel")?.classList.toggle("warn", faultState.known && state.snapshot.overview?.alarm_level === 2);
+  text("#alarmPageLevel", faultState.faultFresh ? state.snapshot.overview?.alarm_level_name || "未知" : "等待数据");
+  $("#alarmPageLevel")?.classList.toggle("bad", faultState.faultFresh && state.snapshot.overview?.alarm_level === 1);
+  $("#alarmPageLevel")?.classList.toggle("warn", faultState.faultFresh && state.snapshot.overview?.alarm_level === 2);
   text("#activeAlarmCount", alarmCountText);
   const active = activeItems.slice(0, 3);
   $("#activeAlarmBrief").className = active.length ? "fault-brief" : "fault-brief empty-state";
   $("#activeAlarmBrief").innerHTML = active.length ? active.map(item => `<div class="brief-alarm ${item.level === 1 ? "lv1" : ""}"><b>${item.name}</b><span>${item.level_name}</span></div>`).join("")
-    : faultState.known ? "当前没有活动告警" : "未收到告警状态帧";
+    : faultState.completeFresh ? "当前没有活动告警" : "故障码与告警等级尚未同时更新";
 }
 
 function alarmRuleText(index, thresholds) {
@@ -799,12 +940,13 @@ function alarmRuleText(index, thresholds) {
 function renderAlarms() {
   const alarms = state.snapshot.alarms || [];
   const faultState = liveFaultState(state.snapshot);
-  const thresholds = state.snapshot.config?.thresholds || {};
+  const config = state.snapshot.config || {};
+  const thresholds = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S) ? (config.thresholds || {}) : {};
   alarms.forEach(alarm => {
     const node = $(`[data-alarm="${alarm.index}"]`); if (!node) return;
     const levelReceived = faultState.alarmLevelsFresh;
-    const faultCodeActive = faultState.faultFresh && alarm.in_fault_code;
-    const active = !!((levelReceived && alarm.level) || faultCodeActive);
+    const faultCodeActive = faultState.completeFresh && alarm.in_fault_code;
+    const active = !!(faultState.completeFresh && (alarm.level || alarm.in_fault_code));
     const classes = ["alarm-item"];
     if (levelReceived && alarm.level === 1) classes.push("lv1");
     else if (levelReceived && alarm.level === 2) classes.push("lv2");
@@ -838,24 +980,41 @@ function renderAlarms() {
 }
 
 function renderConfig() {
-  const config = state.snapshot.config || {}, thresholds = config.thresholds || {}, switches = config.switches || {};
-  text("#displayOv", thresholds.ov_mv == null ? "—" : `${thresholds.ov_mv} mV`);
-  text("#displayUv", thresholds.uv_mv == null ? "—" : `${thresholds.uv_mv} mV`);
-  text("#displayOt", thresholds.ot_c == null ? "—" : `${thresholds.ot_c} °C`);
-  text("#displayUt", thresholds.ut_c == null ? "—" : `${thresholds.ut_c} °C`);
-  if (Object.keys(thresholds).length) {
-    text("#thresholdSync", state.dirty.thresholds ? "页面值待写入" : "已从主控同步");
-    $("#thresholdSync").className = `tag ${state.dirty.thresholds ? "warn" : "ok"}`;
-    if (!state.dirty.thresholds && (!state.inputsInitialized.thresholds || ![$("#ovInput"), $("#uvInput"), $("#otInput"), $("#utInput")].includes(document.activeElement))) {
-      $("#ovInput").value = thresholds.ov_mv; $("#uvInput").value = thresholds.uv_mv;
-      $("#otInput").value = thresholds.ot_c; $("#utInput").value = thresholds.ut_c;
-      state.inputsInitialized.thresholds = true;
-    }
+  const config = state.snapshot.config || {};
+  const rawThresholds = config.thresholds || {};
+  const thresholdsFresh = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S);
+  const thresholds = thresholdsFresh ? rawThresholds : {};
+  const hasThresholdReport = thresholdsFresh && Object.keys(thresholds).length > 0;
+  const rawSwitches = config.switches || {};
+  const switchesFresh = isFresh(config.switches_age, SLOW_DATA_FRESH_MAX_S);
+  const switches = switchesFresh ? rawSwitches : {};
+  const hasSwitchReport = switchesFresh && Object.keys(switches).length > 0;
+  const runtimeFresh = isFresh(config.runtime_age);
+  const directionKnown = runtimeFresh && config.current_direction_inverted != null;
+  const chargerTypeKnown = runtimeFresh && config.charger_type != null;
+
+  text("#displayOv", hasThresholdReport ? `${thresholds.ov_mv} mV` : "等待数据");
+  text("#displayUv", hasThresholdReport ? `${thresholds.uv_mv} mV` : "等待数据");
+  text("#displayOt", hasThresholdReport ? `${thresholds.ot_c} °C` : "等待数据");
+  text("#displayUt", hasThresholdReport ? `${thresholds.ut_c} °C` : "等待数据");
+  const thresholdLabel = state.dirty.thresholds ? "页面值待写入" : hasThresholdReport ? "已从主控同步" : "等待主控回报";
+  text("#thresholdSync", thresholdLabel);
+  $("#thresholdSync").className = `tag ${state.dirty.thresholds ? "warn" : hasThresholdReport ? "ok" : "neutral"}`;
+  if (!hasThresholdReport && !state.dirty.thresholds) {
+    ["#ovInput", "#uvInput", "#otInput", "#utInput"].forEach(id => $(id).value = "");
+    state.inputsInitialized.thresholds = false;
+  } else if (hasThresholdReport && !state.dirty.thresholds
+      && (!state.inputsInitialized.thresholds || ![$("#ovInput"), $("#uvInput"), $("#otInput"), $("#utInput")].includes(document.activeElement))) {
+    $("#ovInput").value = thresholds.ov_mv; $("#uvInput").value = thresholds.uv_mv;
+    $("#otInput").value = thresholds.ot_c; $("#utInput").value = thresholds.ut_c;
+    state.inputsInitialized.thresholds = true;
   }
-  text("#switchVersion", config.switch_version == null ? "回报 V—" : `回报 V${config.switch_version}`);
+  $("#sendThresholds").disabled = !hasThresholdReport && !state.dirty.thresholds;
+
+  text("#switchVersion", hasSwitchReport && config.switch_version != null
+    ? `回报 V${config.switch_version}` : "等待数据");
   const statusList = $("#switchStatusList");
   if (statusList && state.bootstrap?.switch_catalog) {
-    const hasSwitchReport = Object.keys(switches).length > 0;
     const enabledCount = state.bootstrap.switch_catalog.filter(item => switches[item.key]).length;
     text("#switchStatusSummary", hasSwitchReport ? `启用 ${enabledCount} / ${state.bootstrap.switch_catalog.length}` : "等待回报");
     statusList.innerHTML = state.bootstrap.switch_catalog.map(item => {
@@ -866,14 +1025,31 @@ function renderConfig() {
         + `<i></i><span class="protection-label"><b>${item.name}</b><small>${item.code}</small></span><b>${stateText}</b></span>`;
     }).join("");
   }
-  if (Object.keys(switches).length && !state.dirty.switches && (!state.inputsInitialized.switches || !$("#switchList").contains(document.activeElement))) {
+  if (!hasSwitchReport && !state.dirty.switches) {
+    $$("#switchList input").forEach(input => input.checked = false);
+    state.inputsInitialized.switches = false;
+  } else if (hasSwitchReport && !state.dirty.switches
+      && (!state.inputsInitialized.switches || !$("#switchList").contains(document.activeElement))) {
     $$("#switchList input").forEach(input => input.checked = !!switches[input.dataset.key]);
     state.inputsInitialized.switches = true;
   }
+  $$("#switchList input").forEach(input => input.disabled = !hasSwitchReport && !state.dirty.switches);
+  $("#sendSwitches").disabled = !hasSwitchReport && !state.dirty.switches;
   updateSwitchRowState();
-  if (config.current_direction_inverted != null && !state.dirty.direction && document.activeElement !== $("#currentDirection")) {
+  if (directionKnown && !state.dirty.direction && document.activeElement !== $("#currentDirection")) {
     $("#currentDirection").value = config.current_direction_inverted ? "1" : "0";
+  } else if (!directionKnown && !state.dirty.direction) {
+    $("#currentDirection").value = "";
   }
+  if (chargerTypeKnown && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
+    $("#chargerType").value = String(config.charger_type);
+  } else if (!chargerTypeKnown && !state.dirty.chargerType) {
+    $("#chargerType").value = "";
+  }
+  $("#currentDirection").disabled = !directionKnown && !state.dirty.direction;
+  $("#sendCurrentDirection").disabled = !directionKnown && !state.dirty.direction;
+  $("#chargerType").disabled = !chargerTypeKnown && !state.dirty.chargerType;
+  $("#sendChargerType").disabled = !chargerTypeKnown && !state.dirty.chargerType;
 }
 
 function watchFlashSave(command, ack) {
@@ -952,17 +1128,25 @@ function renderSaveStatus(runtime) {
 
 function renderControls() {
   const { relay, fault, connection, overview } = state.snapshot;
-  if (relay.request_voltage_v != null && !state.dirty.charge && (!state.inputsInitialized.charge || ![$("#chargeVoltage"), $("#chargeCurrent")].includes(document.activeElement))) {
+  const requestFresh = isFresh(relay.command_age);
+  if (requestFresh && relay.request_voltage_v != null && !state.dirty.charge
+      && (!state.inputsInitialized.charge || ![$("#chargeVoltage"), $("#chargeCurrent")].includes(document.activeElement))) {
     $("#chargeVoltage").value = relay.request_voltage_v; $("#chargeCurrent").value = relay.request_current_a; state.inputsInitialized.charge = true;
   }
-  const requestText = relay.request_voltage_v == null || relay.request_current_a == null
-    ? "— V / — A"
+  if (!requestFresh && !state.dirty.charge) {
+    $("#chargeVoltage").value = ""; $("#chargeCurrent").value = "";
+    state.inputsInitialized.charge = false;
+  }
+  const requestText = !requestFresh || relay.request_voltage_v == null || relay.request_current_a == null
+    ? "等待数据"
     : `${fmt(relay.request_voltage_v, 1)} V / ${fmt(relay.request_current_a, 1)} A`;
   text("#chargeRequestEcho", requestText);
   const runtime = state.snapshot.runtime_diag || {};
   renderSaveStatus(runtime);
-  if (state.snapshot.config?.charger_type != null && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
-    $("#chargerType").value = String(state.snapshot.config.charger_type);
+  const config = state.snapshot.config || {};
+  if (isFresh(config.runtime_age) && config.charger_type != null
+      && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
+    $("#chargerType").value = String(config.charger_type);
   }
   const runtimeFresh = runtime.age != null && runtime.age <= 1.5;
   if (runtimeFresh && runtime.charger_feedback_voltage_v != null && runtime.charger_feedback_current_a != null && runtime.charger_feedback_fresh) {
@@ -972,29 +1156,267 @@ function renderControls() {
   } else {
     text("#chargeFeedbackEcho", "等待数据");
   }
-  const charge = fault.flags?.charge_mode;
+  const faultFresh = fault.received === true && fault.age != null && fault.age <= 1.5;
+  const charge = faultFresh ? fault.flags?.charge_mode : null;
   const chargeLabel = charge == null ? "模式未知" : charge ? `充电 · ${fault.flags.charger_type}` : "放电 / 待机";
   text("#chargeModeTag", chargeLabel);
   $("#chargeModeTag").className = `tag ${charge == null ? "neutral" : charge ? "warn" : "neutral"}`;
   text("#heroChargeMode", chargeLabel);
   renderRtcReply(state.snapshot.rtc_reply || {});
   const connectedCan1 = connection.connected && connection.bus_profile === "can1";
-  const allowedState = [2, 3, 7].includes(overview.state);
   const fresh = connection.summary_age != null && connection.summary_age <= 1.5;
+  const allowedState = fresh && [2, 3, 7].includes(overview.state);
   setClass("#lockConnected", "ok", connectedCan1); setClass("#lockState", "ok", allowedState); setClass("#lockFresh", "ok", fresh);
 }
 
 const RTC_STATUS_NAMES = {
-  0: "设置成功", 1: "请求帧长度错误", 2: "校验错误",
+  0: "设置成功", 1: "请求帧长度错误",
   3: "日期时间参数非法", 4: "RTC 未就绪", 5: "设置时间或日期失败",
+  6: "工具协议版本错误", 7: "RTC 请求忙",
 };
 
 function renderRtcReply(reply) {
-  if (reply.status == null) return text("#rtcReply", "—");
+  if (reply.status == null || !isFresh(reply.age, RTC_REPLY_FRESH_MAX_S)) return text("#rtcReply", "等待新回复");
   const name = RTC_STATUS_NAMES[reply.status] || `未知 ${reply.status}`;
   if (!reply.year) return text("#rtcReply", `${name} · 时间读取失败`);
   const pad = value => String(value).padStart(2, "0");
   text("#rtcReply", `${name} · ${reply.year}-${pad(reply.month)}-${pad(reply.day)} ${pad(reply.hour)}:${pad(reply.minute)}:${pad(reply.second)}`);
+}
+
+function parseIvtNumber(id, label, maximum = 0xFFFF) {
+  const raw = $(id)?.value?.trim() ?? "";
+  if (!raw) {
+    toast(label + "不能为空", true);
+    return null;
+  }
+  const value = /^0x/i.test(raw) ? Number.parseInt(raw.slice(2), 16) : Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    toast(label + "格式或范围错误", true);
+    return null;
+  }
+  return value;
+}
+
+function readIvtOptions() {
+  const commandRaw = $("#ivtCommandId")?.value?.trim() || "";
+  const responseRaw = $("#ivtResponseId")?.value?.trim() || "";
+  const cmdId = commandRaw ? parseIvtNumber("#ivtCommandId", "Command ID", 0x7FF) : undefined;
+  const rspId = responseRaw ? parseIvtNumber("#ivtResponseId", "Response ID", 0x7FF) : undefined;
+  const positive = parseIvtNumber("#ivtPositiveThreshold", "正向过流阈值");
+  const positiveReset = parseIvtNumber("#ivtPositiveResetThreshold", "正向复位阈值");
+  const negative = parseIvtNumber("#ivtNegativeThreshold", "负向过流阈值");
+  const negativeReset = parseIvtNumber("#ivtNegativeResetThreshold", "负向复位阈值");
+  if ([positive, positiveReset, negative, negativeReset].some(value => value == null)) return null;
+  return {
+    ...(cmdId == null ? {} : { cmd_id: cmdId }),
+    ...(rspId == null ? {} : { rsp_id: rspId }),
+    startup: $("#ivtStartupMode").value,
+    positive_threshold_a: positive,
+    positive_reset_threshold_a: positiveReset,
+    negative_threshold_a: negative,
+    negative_reset_threshold_a: negativeReset,
+  };
+}
+
+async function readIvtConfig() {
+  if (!state.api) return;
+  const options = readIvtOptions();
+  if (!options) return;
+  $("#readIvtConfig").disabled = true;
+  const result = await state.api.read_ivt_config(options);
+  $("#readIvtConfig").disabled = false;
+  if (!result.ok) return toast(result.error || "读取 IVT 配置失败", true);
+  toast("IVT 读回完成：" + (result.readback?.comparison?.status_name || "已读取"));
+  await poll();
+}
+
+function ivtConnectionAvailable() {
+  const connection = state.toolSnapshots.ivt?.connection;
+  return connection?.connected === true && connection.mode === "pcan"
+    && ["canb", "canb_legacy"].includes(connection.bus_profile);
+}
+
+function confirmIvtAction(kind, options, title, message, destructive = false) {
+  if (!ivtConnectionAvailable()) return toast("请先连接真实 CANB PCAN", true);
+  state.pendingCommand = null;
+  state.pendingIvtAction = { kind, options };
+  const conn = state.toolSnapshots.ivt.connection;
+  const cmdId = options.cmd_id ?? state.toolSnapshots.ivt.ivt_config?.command_id ?? 0x411;
+  const rspId = options.rsp_id ?? state.toolSnapshots.ivt.ivt_config?.response_id ?? 0x511;
+  text("#confirmTitle", title);
+  text("#confirmMessage", message);
+  const operation = kind === "configure" ? "完整配置并重启 IVT"
+    : "切换到 " + (options.target_bitrate / 1000) + " kbit/s";
+  text("#confirmPayload", "通道：" + (conn.channel || "PCAN") + "\n"
+    + "总线：CANB · " + ((conn.bitrate || 500000) / 1000) + " kbit/s\n"
+    + "Command：0x" + cmdId.toString(16).toUpperCase() + "\n"
+    + "Response：0x" + rspId.toString(16).toUpperCase() + "\n"
+    + "操作：" + operation);
+  $("#confirmCheck").checked = false;
+  $("#doConfirm").disabled = true;
+  $("#doConfirm").className = destructive ? "danger-button" : "action-button";
+  $("#confirmDialog").showModal();
+}
+
+function confirmIvtBitrate(targetBitrate) {
+  const options = readIvtOptions();
+  if (!options) return;
+  options.target_bitrate = targetBitrate;
+  confirmIvtAction("bitrate", options, "切换 IVT 到 " + (targetBitrate / 1000) + " kbit/s",
+    "IVT 会停止并重启到目标位率。上位机会关闭当前 PCAN，再用目标位率重新打开并等待 Alive。执行前确认 CANB 上只有目标 IVT。", true);
+}
+
+function renderIvtConfig() {
+  const snapshot = state.toolSnapshots.ivt || {};
+  const connection = snapshot.connection || {};
+  const available = ivtConnectionAvailable();
+  const currentBitrate = Number(connection.bitrate || 0);
+  text("#ivtCurrentBus", available
+    ? "当前 CANB：" + (currentBitrate / 1000) + " kbit/s · " + (connection.channel || "PCAN")
+    : "CANB：等待真实 PCAN 连接");
+  if (currentBitrate && document.activeElement !== $("#ivtBitrateSelect")) {
+    $("#ivtBitrateSelect").value = String(currentBitrate);
+  }
+  const readback = snapshot?.ivt_config;
+  const comparison = readback?.comparison;
+  $("#connectIvtButton").classList.toggle("hidden", available);
+  $("#disconnectIvtButton").classList.toggle("hidden", !available);
+  if ($("#readIvtConfig")) $("#readIvtConfig").disabled = !available;
+  const configureButton = $("#configureIvt");
+  if (configureButton) {
+    const alreadyConfigured = comparison?.status === "configured";
+    configureButton.disabled = !available || !readback || alreadyConfigured;
+    configureButton.title = !available
+      ? "请先连接真实 IVT-S"
+      : !readback
+        ? "请先读取并核对当前配置"
+        : alreadyConfigured
+          ? "当前配置已与 BMS CANB 对齐，无需重复配置"
+          : "写入 BMS CANB 目标配置并重启 IVT";
+  }
+  if ($("#switchIvt250")) $("#switchIvt250").disabled = !available || currentBitrate === 250000;
+  if ($("#switchIvt500")) $("#switchIvt500").disabled = !available || currentBitrate === 500000;
+
+  const statusNode = $("#ivtConfigStatus");
+  if (!statusNode) return;
+  const statusClasses = { configured: "ok", unconfigured: "warn", mismatch: "bad" };
+  statusNode.className = "tag " + (statusClasses[comparison?.status] || "neutral");
+  statusNode.textContent = comparison?.status_name || "未读取";
+  const readbackNode = $("#ivtReadback");
+  if (!readback) {
+    text("#ivtCheckSummary", available ? "点击读取，自动尝试出厂地址和 BMS 目标地址。" : "连接后读取设备信息、通道和 CAN ID。");
+    readbackNode?.classList.add("hidden");
+    return;
+  }
+  readbackNode?.classList.remove("hidden");
+  const device = readback.device_id || {};
+  const mode = readback.mode || {};
+  const positive = readback.thresholds?.positive || {};
+  const negative = readback.thresholds?.negative || {};
+  const resultNames = ["I", "U1", "U2", "U3", "T", "W", "As", "Wh"];
+  const resultIds = resultNames.map(name => readback.can_ids?.[name]).filter(value => value != null);
+  const resultRange = resultIds.length === 8
+    ? `0x${Math.min(...resultIds).toString(16).toUpperCase()}–0x${Math.max(...resultIds).toString(16).toUpperCase()}` : "—";
+  const format = readback.channels?.[0]
+    ? `${readback.channels[0].byte_order === "little" ? "小端" : "大端"} · ${readback.channels[0].mode_name || "—"}` : "—";
+  const statusText = comparison?.status_name || "已读取";
+  const summaryText = comparison?.status === "configured"
+    ? "目标已对齐，可以断开配置通道并接入 F405。"
+    : comparison?.status === "unconfigured"
+      ? "读到出厂配置；首次接入 F405 前请执行一次 BMS CANB 配置。"
+      : "发现配置差异；展开逐通道核对后决定是否重新配置。";
+  text("#ivtCheckSummary", statusText + " · " + summaryText);
+  text("#ivtConfigResult",
+    statusText + " · 序列号 " + (readback.serial_number_hex || "—")
+    + " · 当前 " + (mode.current_name || "—") + " / 上电 " + (mode.startup_name || "—")
+    + " · 位率 " + (readback.bitrate == null ? "—" : readback.bitrate / 1000 + " kbit/s")
+    + " · 结果 " + resultRange + " · " + format);
+  $("#ivtIdentity").innerHTML = [
+    ["设备", device.device_type_name || "—"],
+    ["额定电流", device.nominal_current_a == null ? "—" : device.nominal_current_a + " A"],
+    ["软件版本", readback.software_version?.payload_hex || "—"],
+    ["物料号", readback.article_number?.payload_hex || "—"],
+    ["当前地址", "0x" + (readback.command_id ?? readback.can_ids?.command ?? 0).toString(16).toUpperCase()
+      + " / 0x" + (readback.response_id ?? readback.can_ids?.response ?? 0).toString(16).toUpperCase()],
+    ["过流阈值", "+" + (positive.threshold_a ?? "—") + " / −" + (negative.threshold_a ?? "—") + " A"],
+  ].map(([label, value]) => "<div><span>" + escapeHtml(label) + "</span><b>" + escapeHtml(value) + "</b></div>").join("");
+
+  const detectedCommand = readback.command_id ?? readback.can_ids?.command;
+  const detectedResponse = readback.response_id ?? readback.can_ids?.response;
+  if (detectedCommand != null && document.activeElement !== $("#ivtCommandId")) $("#ivtCommandId").value = "0x" + Number(detectedCommand).toString(16).toUpperCase();
+  if (detectedResponse != null && document.activeElement !== $("#ivtResponseId")) $("#ivtResponseId").value = "0x" + Number(detectedResponse).toString(16).toUpperCase();
+
+  const expectedChannels = readback.expected?.channels || {};
+  const diffFields = new Set((comparison?.differences || []).map(item => item.field));
+  const channelRows = (readback.channels || []).map(channel => {
+    const expected = expectedChannels[channel.name] || {};
+    const id = readback.can_ids?.[channel.name];
+    const mismatch = ["db1", "period_ms", "mode_name", "byte_order", "report_errors", "invert_sign"]
+      .some(key => diffFields.has("channel." + channel.name + "." + key))
+      || diffFields.has("can_id." + channel.name);
+    return "<tr class=\"" + (mismatch ? "mismatch" : "") + "\">"
+      + "<td>" + escapeHtml(channel.name) + "</td><td>" + (channel.period_ms ?? "—") + " / " + (expected.period_ms ?? "—") + " ms</td>"
+      + "<td>" + escapeHtml(channel.mode_name || "—") + "</td><td>" + escapeHtml(channel.byte_order || "—") + "</td>"
+      + "<td>" + (channel.invert_sign ? "反转" : "正常") + "</td><td>" + (channel.report_errors ? "启用" : "关闭") + "</td>"
+      + "<td>0x" + (id ?? 0).toString(16).toUpperCase() + "</td></tr>";
+  }).join("");
+  $("#ivtConfigTable").innerHTML = "<table><thead><tr><th>通道</th><th>周期 / 目标</th><th>模式</th><th>字节序</th><th>符号</th><th>报错位</th><th>CAN ID</th></tr></thead><tbody>" + channelRows + "</tbody></table>";
+  const differences = comparison?.differences || [];
+  $("#ivtConfigDifferences").innerHTML = differences.length
+    ? "<b>差异 " + differences.length + " 项</b><ul>" + differences.map(item => "<li>" + escapeHtml(item.field) + "：实际 " + escapeHtml(item.actual_text) + "，期望 " + escapeHtml(item.expected_text) + "</li>").join("") + "</ul>"
+    : "<span class=\"ok-text\">所有目标字段与期望值一致。</span>";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "—").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+function renderBench() {
+  const snapshot = state.toolSnapshots.bench || {};
+  const bench = snapshot.bench;
+  const connection = snapshot.connection || {};
+  const active = connection.connected === true && connection.mode === "bench" && bench?.active === true;
+  const controls = $$("#page-bench [data-bench-command], #sendBenchCommand, #benchCommand");
+  controls.forEach(node => { node.disabled = !active; });
+  $("#connectBenchButton").classList.toggle("hidden", active);
+  $("#disconnectBenchButton").classList.toggle("hidden", !active);
+  text("#benchConnectionInfo", active
+    ? `${connection.channel || "PCAN"} · CAN1 · 500 kbit/s`
+    : "等待连接 CAN1");
+  if (!active) {
+    text("#benchStatus", "未连接");
+    text("#benchFrameSummary", "未连接");
+    $("#benchStatus").className = "tag neutral";
+    $("#benchSlaves").innerHTML = '<div class="empty-state">连接 CAN1 后显示六个从控模型。</div>';
+    return;
+  }
+  const online = (bench.slaves || []).filter(slave => slave.online).length;
+  text("#benchStatus", "运行中 · " + online + "/6 在线");
+  $("#benchStatus").className = "tag " + (online === 6 ? "ok" : "warn");
+  text("#benchFrameSummary", `36 帧电压 + 6 帧温度 · 断线 ${bench.open_wire_cells || 0} 串 / ${bench.open_wire_temps || 0} 路`);
+  $("#benchSlaves").innerHTML = (bench.slaves || []).map(slave =>
+    `<div class="bench-slave ${slave.online ? "online" : "offline"}">`
+    + `<span>从控 ${slave.id}</span><b>${slave.online ? "在线" : "离线"}</b>`
+    + `<small>${slave.base_cell_mv} mV · ${slave.base_temp_c} °C</small></div>`
+  ).join("");
+}
+
+async function runBenchCommand(command) {
+  if (!state.api) return;
+  const result = await state.api.bench_command(command);
+  if (!result.ok) return toast(result.error || "台架命令失败", true);
+  text("#benchResult", result.message || "命令已执行");
+  await poll();
+}
+
+async function sendBenchCommand() {
+  const input = $("#benchCommand");
+  const command = input.value.trim();
+  if (!command) return;
+  await runBenchCommand(command);
+  input.value = "";
 }
 
 /** Classify one cell or temperature against the thresholds currently reported by the master. */
@@ -1027,6 +1449,12 @@ function renderCellBadge() {
 
 function renderCells() {
   if (!state.snapshot) return;
+  if (state.snapshot.raw_cell_data_available !== true) {
+    ["#gridMax", "#gridMin", "#gridDelta", "#tempGridMax", "#tempGridMin", "#tempGridDelta"].forEach(id => text(id, "—"));
+    $("#cellDataIssue").classList.add("hidden");
+    $("#cellModules").innerHTML = '<div class="filter-empty"><b>CANB 无单体原始数据</b><span>请连接 CAN1 查看 138 串电压和 48 路温度。</span></div>';
+    return;
+  }
   const cells = state.snapshot.cells || [], temps = state.snapshot.temps || [];
   const cellTotal = extremes(cells), tempTotal = extremes(temps);
   text("#gridMax", cellTotal.max == null ? "—" : `${cellTotal.max} mV`);
@@ -1040,11 +1468,12 @@ function renderCells() {
   const dataIssue = $("#cellDataIssue");
   dataIssue.classList.toggle("hidden", missingCells === 0 && missingTemps === 0);
   dataIssue.textContent = `缺失 ${missingCells} 串 / ${missingTemps} 路`;
-  const thresholds = state.snapshot.config.thresholds || {};
-  text("#displayOv", thresholds.ov_mv == null ? "—" : `${thresholds.ov_mv} mV`);
-  text("#displayUv", thresholds.uv_mv == null ? "—" : `${thresholds.uv_mv} mV`);
-  text("#displayOt", thresholds.ot_c == null ? "—" : `${thresholds.ot_c} °C`);
-  text("#displayUt", thresholds.ut_c == null ? "—" : `${thresholds.ut_c} °C`);
+  const config = state.snapshot.config || {};
+  const thresholds = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S) ? (config.thresholds || {}) : {};
+  text("#displayOv", thresholds.ov_mv == null ? "等待数据" : `${thresholds.ov_mv} mV`);
+  text("#displayUv", thresholds.uv_mv == null ? "等待数据" : `${thresholds.uv_mv} mV`);
+  text("#displayOt", thresholds.ot_c == null ? "等待数据" : `${thresholds.ot_c} °C`);
+  text("#displayUt", thresholds.ut_c == null ? "等待数据" : `${thresholds.ut_c} °C`);
   const onlyAbnormal = $("#onlyAbnormal").checked;
   const renderItem = (item, voltage, localNo) => {
     const status = cellStatus(item, voltage, thresholds);
@@ -1123,7 +1552,25 @@ function confirmCommand(name, values, title, message, destructive = false) {
 }
 
 async function sendPendingCommand() {
-  if (!state.pendingCommand || !state.api) return;
+  if (!state.api) return;
+  if (state.pendingIvtAction) {
+    const pending = state.pendingIvtAction;
+    $("#doConfirm").disabled = true;
+    const result = pending.kind === "configure"
+      ? await state.api.configure_ivt_bms_canb(pending.options)
+      : await state.api.switch_ivt_bitrate(pending.options);
+    if (result.ok) {
+      $("#confirmDialog").close();
+      state.pendingIvtAction = null;
+      toast(result.message || "IVT 操作完成");
+      await poll();
+    } else {
+      toast(result.error || "IVT 操作失败", true);
+      $("#doConfirm").disabled = false;
+    }
+    return;
+  }
+  if (!state.pendingCommand) return;
   $("#doConfirm").disabled = true;
   const command = state.pendingCommand.name;
   const result = await state.api.send_command(command, state.pendingCommand.values, true);

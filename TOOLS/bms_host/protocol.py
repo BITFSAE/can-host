@@ -22,8 +22,10 @@ SLAVE_COUNT = 6
 
 CAN1_CELL_VOLT_BASE = 0x180050F3
 CAN1_CELL_TEMP_BASE = 0x184050F3
+CAN1_COMMAND_REQ_EXT_ID = 0x18A050F5
 
 CAN1_IDS = {
+    0x18A050F5: "工具命令请求（统一）",
     0x186050F4: "电池总状态",
     0x186150F4: "单体电压极值",
     0x186250F4: "温度与风扇",
@@ -43,26 +45,25 @@ CAN1_IDS = {
     0x187750F4: "告警阈值",
     0x187850F4: "告警等级明细",
     0x187F50F4: "告警开关",
-    0x18A250F4: "电流方向应答",
     0x18A450F4: "RTC 校时应答",
     0x18A650F4: "工具命令统一应答",
     0x18A750F4: "工具命令数据",
 }
 
-CAN1_TOOL_IDS = {0x188050F5, 0x188150F5, 0x188250F5, 0x188350F5,
-                 0x18A150F5, 0x18A350F5, 0x18A550F5}
-TOOL_PROTOCOL_VERSION = 3
+CAN1_TOOL_IDS = {0x18A050F5}
+TOOL_PROTOCOL_VERSION = 4
 
 CANB_IDS = {
-    0x401: "放电功率 / Chroma 电压",
-    0x402: "放电故障 / Chroma 电流",
+    0x401: "Chroma 电压测量",
+    0x402: "Chroma 电流测量",
     0x404: "Chroma 保护状态",
     0x405: "Chroma 输出状态",
     0x490: "Chroma 命令",
     0x491: "Chroma 应答",
     0x4A0: "SOP 限值",
-    0x4A1: "统一故障状态",
-    0x4A2: "告警等级明细",
+    0x4B0: "BMS 包状态",
+    0x4B1: "BMS 统一故障状态",
+    0x4B2: "BMS 告警等级明细",
     0x4A3: "SOP 状态",
     0x4A4: "ECU SOP 确认",
     0x512: "IVT 电流",
@@ -130,6 +131,7 @@ COMMAND_CODES = {
     "alarm_switches": 0x03,
     "fault_reset": 0x04,
     "current_direction": 0x05,
+    "rtc": 0x06,
     "log_info": 0x81,
     "log_read": 0x82,
     "log_clear": 0x83,
@@ -207,6 +209,8 @@ class BmsProtocol:
         self.temp_frame_seen: list[float | None] = [None] * 6
         self.overview: dict[str, Any] = {
             "voltage_v": None, "current_a": None, "soc_pct": None,
+            "voltage_valid": False, "current_valid": False, "soc_valid": False,
+            "cell_voltage_complete": False, "temperature_complete": False,
             "state": None, "state_name": "等待数据", "alarm_level": None,
             "alarm_level_name": "等待数据", "cell_sum_v": None,
             "max_cell_mv": None, "min_cell_mv": None, "max_cell_no": None,
@@ -225,6 +229,7 @@ class BmsProtocol:
         self.alarm_levels_received = False
         self.balance: list[int] = [0] * 18
         self.rtc_reply: dict[str, Any] = {}
+        self.rtc_replies: dict[int, dict[str, Any]] = {}
         self.runtime_diag: dict[str, Any] = {}
         self.sensor_diag: dict[str, Any] = {}
         self.firmware: dict[str, Any] = {}
@@ -239,13 +244,21 @@ class BmsProtocol:
         self.tx_count = 0
         self.last_rx_monotonic: float | None = None
         self.last_summary_monotonic: float | None = None
+        self.last_cell_sum_monotonic: float | None = None
+        self.last_cell_extremes_monotonic: float | None = None
         self.last_fault_monotonic: float | None = None
         self.last_alarm_levels_monotonic: float | None = None
+        self.last_rtc_reply_monotonic: float | None = None
         self.last_relay_command_monotonic: float | None = None
         self.last_thermal_monotonic: float | None = None
         self.last_hv_monotonic: float | None = None
         self.last_imd_monotonic: float | None = None
         self.last_runtime_diag_monotonic: float | None = None
+        self.last_thresholds_monotonic: float | None = None
+        self.last_switches_monotonic: float | None = None
+        # Production Debug/Release firmware uses 350 ms. The identity frame
+        # switches this to the 750 ms Debug-Bringup window when received.
+        self.slave_sample_timeout_s = 0.35
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
 
@@ -273,28 +286,55 @@ class BmsProtocol:
         can_id = frame.arbitration_id
         if frame.is_extended_id and self._decode_cells(can_id, data, now_mono):
             return
-        if can_id == 0x186050F4 and len(data) >= 7:
-            current_raw = _u16be(data, 2)
-            # The firmware sends offset-format BatCurrent outside charge mode,
-            # but sends direct 0.1 A ChrBatCurrent while charging.
-            charge_current = bool(self.fault.get("flags", {}).get("charge_mode")) or current_raw <= 45
+        if (can_id == 0x186050F4 or (can_id == 0x4B0 and not frame.is_extended_id)) and len(data) >= 7:
+            current_raw = int.from_bytes(data[2:4], "big", signed=True)
+            valid = data[5]
+            cell_voltage_complete = bool(valid & 0x08)
+            temperature_complete = bool(valid & 0x10)
             self.overview.update({
-                "voltage_v": _u16be(data) / 10.0,
-                "current_a": current_raw / 10.0 if charge_current else (current_raw - 10000) / 10.0,
-                "soc_pct": data[4],
+                "voltage_v": _u16be(data) / 10.0 if valid & 0x01 else None,
+                "current_a": current_raw / 10.0 if valid & 0x02 else None,
+                "soc_pct": data[4] if valid & 0x04 else None,
+                "voltage_valid": bool(valid & 0x01),
+                "current_valid": bool(valid & 0x02),
+                "soc_valid": bool(valid & 0x04),
+                "cell_voltage_complete": cell_voltage_complete,
+                "temperature_complete": temperature_complete,
                 "state": (data[6] >> 4) & 0x0F,
                 "alarm_level": data[6] & 0x0F,
             })
+            if not cell_voltage_complete:
+                self.overview.update({"cell_sum_v": None, "max_cell_mv": None,
+                                      "min_cell_mv": None, "max_cell_no": None,
+                                      "min_cell_no": None})
+            if not temperature_complete:
+                self.overview.update({"max_temp_c": None, "min_temp_c": None,
+                                      "max_temp_no": None, "min_temp_no": None})
             self._name_overview_state()
             self.last_summary_monotonic = now_mono
         elif can_id == 0x186750F4 and len(data) >= 2:
-            self.overview["cell_sum_v"] = _u16be(data) / 10.0
+            self.last_cell_sum_monotonic = now_mono
+            self.overview["cell_sum_v"] = (_u16be(data) / 10.0
+                                            if self.overview["cell_voltage_complete"] else None)
         elif can_id == 0x186150F4 and len(data) >= 6:
-            self.overview.update({"max_cell_mv": _u16be(data), "min_cell_mv": _u16be(data, 2),
-                                  "max_cell_no": data[4] + 1, "min_cell_no": data[5] + 1})
+            self.last_cell_extremes_monotonic = now_mono
+            max_cell_mv, min_cell_mv = _u16be(data), _u16be(data, 2)
+            valid = (self.overview["cell_voltage_complete"]
+                     and 500 <= min_cell_mv <= max_cell_mv <= 5000
+                     and data[4] < CELL_COUNT and data[5] < CELL_COUNT)
+            self.overview.update({"max_cell_mv": max_cell_mv if valid else None,
+                                  "min_cell_mv": min_cell_mv if valid else None,
+                                  "max_cell_no": data[4] + 1 if valid else None,
+                                  "min_cell_no": data[5] + 1 if valid else None})
         elif can_id == 0x186250F4 and len(data) >= 5:
-            self.overview.update({"max_temp_c": data[0] - 30, "min_temp_c": data[1] - 30,
-                                  "max_temp_no": data[2] + 1, "min_temp_no": data[3] + 1})
+            max_temp, min_temp = data[0], data[1]
+            valid = (self.overview["temperature_complete"]
+                     and 0 <= min_temp <= max_temp <= 129
+                     and data[2] < TEMP_COUNT and data[3] < TEMP_COUNT)
+            self.overview.update({"max_temp_c": max_temp - 30 if valid else None,
+                                  "min_temp_c": min_temp - 30 if valid else None,
+                                  "max_temp_no": data[2] + 1 if valid else None,
+                                  "min_temp_no": data[3] + 1 if valid else None})
             self.relay.update({"cooling": bool(data[4]), "fan_duty_pct": data[5] if len(data) > 5 else None,
                                "fan_rpm": data[6] * 100 if len(data) > 6 else None,
                                "fan_flags": data[7] if len(data) > 7 else None})
@@ -305,18 +345,19 @@ class BmsProtocol:
                                "charger_communication": bool(data[1] & 0x08), "request_voltage_v": _u16be(data, 2) / 10.0,
                                "request_current_a": _u16be(data, 4) / 10.0, "precharge_voltage_v": _u16be(data, 6) / 10.0})
             self.last_relay_command_monotonic = now_mono
-        elif can_id in (0x187650F4, 0x4A1) and len(data) >= 8:
+        elif (can_id == 0x187650F4 or (can_id == 0x4B1 and not frame.is_extended_id)) and len(data) >= 8:
             self._decode_fault(data, frame.timestamp)
             self.last_fault_monotonic = now_mono
-            self.last_summary_monotonic = now_mono
-        elif can_id in (0x187850F4, 0x4A2) and len(data) >= 8:
+        elif (can_id == 0x187850F4 or (can_id == 0x4B2 and not frame.is_extended_id)) and len(data) >= 8:
             self.alarm_levels = [(data[index // 4] >> ((index % 4) * 2)) & 0x03 for index in range(32)]
             self.alarm_levels_received = True
             self.last_alarm_levels_monotonic = now_mono
         elif can_id == 0x187750F4 and len(data) >= 6:
+            self.last_thresholds_monotonic = now_mono
             self.config["thresholds"] = {"ov_mv": _u16be(data), "uv_mv": _u16be(data, 2),
                                            "ot_c": data[4] - 30, "ut_c": data[5] - 30}
         elif can_id == 0x187F50F4 and len(data) >= 4:
+            self.last_switches_monotonic = now_mono
             self.config["switches"] = {key: bool(data[byte] & (1 << bit)) for key, _, _, _, byte, bit in SWITCH_DEFS}
             self.config["switch_version"] = data[3]
         elif can_id == 0x186B50F4 and len(data) >= 8:
@@ -344,10 +385,16 @@ class BmsProtocol:
                                if key.startswith("charger_") or key == "chroma_output_state"})
         elif can_id == 0x186C50F4 and len(data) >= 8:
             variants = {0: "Debug", 1: "Release", 2: "Debug-Bringup"}
+            charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
+            charger_variant_code = (data[1] >> 2) & 0x03
+            self.slave_sample_timeout_s = 0.75 if variant == 2 else 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),
+                             "charger_variant_code": charger_variant_code,
+                             "charger_variant": charger_variants.get(charger_variant_code,
+                                                                       f"未知 {charger_variant_code}"),
                              "dirty": bool(data[1] & 0x80), "git": data[2:8].hex(),
                              "build_date": build_date}
         elif can_id == 0x186C51F4 and len(data) >= 4:
@@ -402,8 +449,7 @@ class BmsProtocol:
             self.hv = {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
                        "precharge_result": (data[0] >> 2) & 0x03,
                        "precharge_result_name": results.get((data[0] >> 2) & 0x03, "保留值"),
-                       "positive": bool(data[0] & 0x10), "negative": bool(data[0] & 0x20),
-                       "precharge": bool(data[0] & 0x40), "success_ms": _u16be(data, 1), "failure_ms": _u16be(data, 3)}
+                       "success_ms": _u16be(data, 1), "failure_ms": _u16be(data, 3)}
             self.last_hv_monotonic = now_mono
         elif can_id == 0x186A50F4 and len(data) >= 8:
             self.sop = {"discharge_current_a": _u16be(data) / 10.0, "charge_current_a": _u16be(data, 2) / 10.0,
@@ -441,11 +487,15 @@ class BmsProtocol:
         elif can_id in (0x186450F4, 0x186550F4, 0x186650F4) and len(data) >= 6:
             offset = ((can_id - 0x186450F4) >> 16) * 6
             self.balance[offset:offset + 6] = list(data[:6])
-        elif can_id == 0x18A250F4 and data:
-            self.config["current_direction_inverted"] = bool(data[0])
         elif can_id == 0x18A450F4 and len(data) >= 8:
-            self.rtc_reply = {"status": data[0], "year": _u16be(data, 1), "month": data[3], "day": data[4],
-                              "hour": data[5], "minute": data[6], "second": data[7]}
+            reply = {"status": data[0], "sequence": data[1],
+                     "year": 2000 + data[2], "month": data[3], "day": data[4],
+                     "hour": data[5], "minute": data[6], "second": data[7]}
+            self.rtc_reply = reply
+            self.rtc_replies[data[1]] = dict(reply)
+            self.last_rtc_reply_monotonic = now_mono
+            if len(self.rtc_replies) > 64:
+                self.rtc_replies.pop(next(iter(self.rtc_replies)))
         elif can_id == 0x18A650F4 and len(data) >= 8 and data[0] == TOOL_PROTOCOL_VERSION:
             flags = data[5]
             ack = {"protocol_version": data[0], "sequence": data[1], "command": data[2],
@@ -494,10 +544,6 @@ class BmsProtocol:
                 if value >= 0.0 and value < 10000.0:
                     key = "charger_feedback_voltage_v" if can_id == 0x401 else "charger_feedback_current_a"
                     self.relay[key] = round(value, 3)
-            elif can_id == 0x401 and len(data) >= 8:
-                current_raw = _u16le(data, 4)
-                self.overview.update({"voltage_v": _u16le(data) / 10.0, "current_a": (current_raw - 10000) / 10.0,
-                                      "soc_pct": data[6], "max_temp_c": data[7] - 30})
         elif can_id == 0x404 and not frame.is_extended_id and len(data) >= 7:
             protect = int.from_bytes(data[3:7], "little")
             self.relay.update({"chroma_protect_bits": protect, "charger_feedback_state": 1 if protect else 0})
@@ -505,11 +551,19 @@ class BmsProtocol:
             self.relay["chroma_output_state"] = data[3]
 
         if now_mono - self._last_trend >= 0.45:
-            self._last_trend = now_mono
             relay_age = _age(now_mono, self.last_relay_command_monotonic)
-            self.trends.append({"t": round(now_mono - self.started_monotonic, 1), "voltage": self.overview.get("voltage_v"),
-                                "current": self.overview.get("current_a"), "soc": self.overview.get("soc_pct"),
-                                "precharge": self.relay.get("precharge_voltage_v") if relay_age is not None and relay_age <= 1.5 else None})
+            summary_age = _age(now_mono, self.last_summary_monotonic)
+            summary_fresh = summary_age is not None and summary_age <= 1.5
+            relay_fresh = relay_age is not None and relay_age <= 1.5
+            if summary_fresh or relay_fresh:
+                self._last_trend = now_mono
+                self.trends.append({
+                    "t": round(now_mono - self.started_monotonic, 1),
+                    "voltage": self.overview.get("voltage_v") if summary_fresh and self.overview.get("voltage_valid") else None,
+                    "current": self.overview.get("current_a") if summary_fresh and self.overview.get("current_valid") else None,
+                    "soc": self.overview.get("soc_pct") if summary_fresh and self.overview.get("soc_valid") else None,
+                    "precharge": self.relay.get("precharge_voltage_v") if relay_fresh else None,
+                })
 
     def _decode_cells(self, can_id: int, data: bytes, now: float) -> bool:
         delta = can_id - CAN1_CELL_VOLT_BASE
@@ -575,6 +629,9 @@ class BmsProtocol:
         self._name_overview_state()
         self.fault = {
             "code": code, "code_hex": f"0x{code:08X}", "version": data[7],
+            "state": state, "state_name": STATE_NAMES.get(state, f"未知 {state}"),
+            "alarm_level": alarm_level,
+            "alarm_level_name": ALARM_LEVEL_NAMES.get(alarm_level, "未知"),
             "flags": {"latched": bool(flags & 0x80), "bms_output_latched": bool(flags & 0x40),
                       "reset_pending": bool(flags & 0x20), "log_write_pending": bool(flags & 0x10),
                       "log_clear_pending": bool(flags & 0x08), "charge_mode": bool(flags & 0x04),
@@ -599,27 +656,34 @@ class BmsProtocol:
 
     def snapshot(self, connection: dict[str, Any]) -> dict[str, Any]:
         now = self.clock()
+        raw_cell_data_available = connection.get("bus_profile", "can1") == "can1"
         cell_values = []
-        for index, value in enumerate(self.cells):
-            age = _age(now, self.cell_seen[index])
-            valid = value is not None and value != 0xFFFF and age is not None and age <= 0.75
-            cell_values.append({"no": index + 1, "module": index // 23 + 1, "local": index % 23 + 1,
-                                "value": value if valid else None, "raw": value, "age": age,
-                                "status": self.cell_reason[index] or ("断线" if value == 0xFFFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
         temp_values = []
-        for index, value in enumerate(self.temps):
-            age = _age(now, self.temp_seen[index])
-            valid = value is not None and value != 0xFF and age is not None and age <= 0.75
-            temp_values.append({"no": index + 1, "module": index // 8 + 1, "local": index % 8 + 1,
-                                "value": value - 30 if valid else None, "raw": value, "age": age,
-                                "status": self.temp_reason[index] or ("断线" if value == 0xFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
         modules = []
-        for slave in range(6):
-            ages = [_age(now, seen) for seen in self.volt_frame_seen[slave]]
-            temp_age = _age(now, self.temp_frame_seen[slave])
-            online = all(age is not None and age <= 0.35 for age in ages) and temp_age is not None and temp_age <= 0.35
-            modules.append({"no": slave + 1, "online": online, "voltage_frames": sum(age is not None and age <= 0.35 for age in ages),
-                            "temperature_frame": temp_age is not None and temp_age <= 0.35, "age": max([age for age in ages if age is not None] + ([temp_age] if temp_age is not None else [0]))})
+        if raw_cell_data_available:
+            for index, value in enumerate(self.cells):
+                age = _age(now, self.cell_seen[index])
+                valid = (value is not None and value != 0xFFFF and age is not None
+                         and age <= self.slave_sample_timeout_s)
+                cell_values.append({"no": index + 1, "module": index // 23 + 1, "local": index % 23 + 1,
+                                    "value": value if valid else None, "raw": value, "age": age,
+                                    "status": self.cell_reason[index] or ("断线" if value == 0xFFFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
+            for index, value in enumerate(self.temps):
+                age = _age(now, self.temp_seen[index])
+                valid = (value is not None and value != 0xFF and age is not None
+                         and age <= self.slave_sample_timeout_s)
+                temp_values.append({"no": index + 1, "module": index // 8 + 1, "local": index % 8 + 1,
+                                    "value": value - 30 if valid else None, "raw": value, "age": age,
+                                    "status": self.temp_reason[index] or ("断线" if value == 0xFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
+            for slave in range(6):
+                ages = [_age(now, seen) for seen in self.volt_frame_seen[slave]]
+                temp_age = _age(now, self.temp_frame_seen[slave])
+                online = (all(age is not None and age <= self.slave_sample_timeout_s for age in ages)
+                          and temp_age is not None and temp_age <= self.slave_sample_timeout_s)
+                modules.append({"no": slave + 1, "online": online,
+                                "voltage_frames": sum(age is not None and age <= self.slave_sample_timeout_s for age in ages),
+                                "temperature_frame": temp_age is not None and temp_age <= self.slave_sample_timeout_s,
+                                "age": max([age for age in ages if age is not None] + ([temp_age] if temp_age is not None else [0]))})
         alarms = [{"index": i, "name": ALARM_NAMES[i], "level": self.alarm_levels[i],
                    "level_name": ALARM_LEVEL_NAMES[self.alarm_levels[i]], "in_fault_code": bool(self.fault.get("code", 0) & (1 << i))}
                   for i in range(32)]
@@ -638,14 +702,29 @@ class BmsProtocol:
         fault = dict(self.fault)
         fault["received"] = self.last_fault_monotonic is not None
         fault["age"] = _age(now, self.last_fault_monotonic)
+        rtc_reply = dict(self.rtc_reply)
+        rtc_reply["age"] = _age(now, self.last_rtc_reply_monotonic)
+        overview = dict(self.overview)
+        overview["cell_sum_age"] = _age(now, self.last_cell_sum_monotonic)
+        overview["cell_extremes_age"] = _age(now, self.last_cell_extremes_monotonic)
+        config = {
+            **self.config,
+            "thresholds": dict(self.config.get("thresholds", {})),
+            "switches": dict(self.config.get("switches", {})),
+            "thresholds_age": _age(now, self.last_thresholds_monotonic),
+            "switches_age": _age(now, self.last_switches_monotonic),
+            "runtime_age": _age(now, self.last_runtime_diag_monotonic),
+        }
         return {
             "connection": {**connection, "rx_count": self.rx_count, "tx_count": self.tx_count,
                            "last_rx_age": _age(now, self.last_rx_monotonic),
                            "summary_age": _age(now, self.last_summary_monotonic)},
-            "overview": dict(self.overview), "relay": relay, "hv": hv, "imd": imd,
-            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": self.config, "fault": fault,
+            "overview": overview, "relay": relay, "hv": hv, "imd": imd,
+            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": config, "fault": fault,
             "alarms": alarms, "cells": cell_values, "temps": temp_values, "modules": modules,
-            "balance": list(self.balance), "rtc_reply": dict(self.rtc_reply),
+            "raw_cell_data_available": raw_cell_data_available,
+            "slave_sample_timeout_s": self.slave_sample_timeout_s,
+            "balance": list(self.balance), "rtc_reply": rtc_reply,
             "runtime_diag": runtime_diag, "sensor_diag": dict(self.sensor_diag),
             "firmware": dict(self.firmware), "flash_log_info": dict(self.flash_log_info),
             "flash_log_records": [self.flash_log_records[key] for key in sorted(self.flash_log_records)],
@@ -661,14 +740,28 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     values = values or {}
     now = time.time()
     sequence = int(values.get("_sequence", 0)) & 0xFF
-    envelope = bytes([TOOL_PROTOCOL_VERSION, sequence])
+    operation = {
+        "charge_config": 0x01,
+        "alarm_thresholds": 0x02,
+        "alarm_switches": 0x03,
+        "fault_reset": 0x04,
+        "current_direction": 0x05,
+        "rtc": 0x06,
+        "maintenance": 0x0F,
+    }
+
+    def request_header(code: int) -> bytearray:
+        return bytearray([(TOOL_PROTOCOL_VERSION << 4) | (code & 0x0F), sequence])
+
     if name == "charge_config":
         voltage = round(float(values["voltage_v"]) * 10)
         current = round(float(values["current_a"]) * 10)
         if not 4154 <= voltage <= 5782 or not 0 <= current <= 45:
             raise ValueError("充电请求范围为 415.4..578.2 V、0..4.5 A")
-        data = envelope + voltage.to_bytes(2, "big") + current.to_bytes(2, "big")
-        return CanFrame(0x188050F5, data, True, now, "tx")
+        data = request_header(operation["charge_config"])
+        data.extend(voltage.to_bytes(2, "big") + current.to_bytes(2, "big"))
+        data.extend(b"\x00\x00")
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(data), True, now, "tx")
     if name == "alarm_thresholds":
         ov, uv = int(values["ov_mv"]), int(values["uv_mv"])
         ot, ut = int(values["ot_c"]) + 30, int(values["ut_c"]) + 30
@@ -676,42 +769,57 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
             raise ValueError("电压阈值超出范围，或过压阈值未高于欠压阈值")
         if not (36 <= ot <= 95 and 5 <= ut <= 79 and ot > ut):
             raise ValueError("温度阈值超出范围，或过温阈值未高于低温阈值")
-        return CanFrame(0x188150F5, envelope + ov.to_bytes(2, "big") + uv.to_bytes(2, "big")
-                        + bytes([ot, ut]), True, now, "tx")
+        data = request_header(operation["alarm_thresholds"])
+        data.extend(ov.to_bytes(2, "big") + uv.to_bytes(2, "big") + bytes([ot, ut]))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(data), True, now, "tx")
     if name == "alarm_switches":
         switches = values.get("switches", values)
         data = bytearray(3)
         for key, _, _, _, byte, bit in SWITCH_DEFS:
             if bool(switches.get(key)):
                 data[byte] |= 1 << bit
-        return CanFrame(0x188250F5, envelope + bytes(data), True, now, "tx")
+        request = request_header(operation["alarm_switches"])
+        request.extend(data)
+        request.extend(b"\x00\x00\x00")
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "fault_reset":
-        return CanFrame(0x188350F5, envelope + bytes.fromhex("A5 5A 3C C3"), True, now, "tx")
+        request = request_header(operation["fault_reset"])
+        request.extend(bytes.fromhex("A5 5A 3C 00 00 00"))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "current_direction":
-        return CanFrame(0x18A150F5, envelope + bytes([1 if values.get("inverted") else 0]), True, now, "tx")
+        request = request_header(operation["current_direction"])
+        request.extend(bytes([1 if values.get("inverted") else 0, 0, 0, 0, 0, 0]))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "log_info":
-        return CanFrame(0x18A550F5, envelope + bytes([1]), True, now, "tx")
+        request = request_header(operation["maintenance"])
+        request.extend(bytes([1, 0, 0, 0, 0, 0]))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "log_read":
         index = int(values.get("index", -1))
         if not 0 <= index <= 0xFFFF:
             raise ValueError("故障日志序号必须在 0..65535")
-        return CanFrame(0x18A550F5, envelope + bytes([2]) + index.to_bytes(2, "big"), True, now, "tx")
+        request = request_header(operation["maintenance"])
+        request.extend(bytes([2]) + index.to_bytes(2, "big") + b"\x00\x00\x00")
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "log_clear":
-        return CanFrame(0x18A550F5, envelope + bytes.fromhex("03 C3 3C A5"), True, now, "tx")
+        request = request_header(operation["maintenance"])
+        request.extend(bytes.fromhex("03 C3 3C A5 00 00"))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "charger_type":
         charger_type = int(values.get("charger_type", -1))
         if charger_type not in (0, 1):
             raise ValueError("充电机类型必须是 0=Legacy 或 1=Chroma")
-        return CanFrame(0x18A550F5, envelope + bytes([4, charger_type]), True, now, "tx")
+        request = request_header(operation["maintenance"])
+        request.extend(bytes([4, charger_type, 0, 0, 0, 0]))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "rtc":
         value = values.get("datetime")
         dt = datetime.fromisoformat(value) if value else datetime.now()
         if not 2000 <= dt.year <= 2099:
             raise ValueError("RTC 年份必须在 2000..2099")
-        data = bytearray(dt.year.to_bytes(2, "big") + bytes([dt.month, dt.day, dt.hour, dt.minute, dt.second]))
-        checksum = data[0] ^ data[1] ^ data[2] ^ data[3] ^ data[4] ^ data[5] ^ data[6]
-        data.append(checksum)
-        return CanFrame(0x18A350F5, bytes(data), True, now, "tx")
+        request = request_header(operation["rtc"])
+        request.extend(bytes([dt.year - 2000, dt.month, dt.day, dt.hour, dt.minute, dt.second]))
+        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     raise ValueError(f"未知命令：{name}")
 
 

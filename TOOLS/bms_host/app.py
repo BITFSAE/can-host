@@ -23,18 +23,34 @@ class Api:
         # The source build keeps the simulator for UI/protocol development.
         # A frozen Windows release is a field tool and only exposes real PCAN.
         self._service = CanService(allow_simulation=not getattr(sys, "frozen", False))
+        # The two engineering tools have their own transport lifetime.  This
+        # lets the operator keep the BMS monitor on CAN1 while the bench
+        # sender or the IVT configurator uses its own PCAN handle.
+        self._bench_service = CanService(allow_simulation=False)
+        self._ivt_service = CanService(allow_simulation=False)
         self._window: Any = None
 
     def bootstrap(self) -> dict[str, Any]:
+        profiles = [
+            {"key": "can1", "name": "CAN1 · F405 主控 / 从控 / 工具", "bitrate": 500000, "writable": True},
+            {"key": "canb", "name": "CANB · IVT / ECU / Chroma · 500 kbit/s", "bitrate": 500000,
+             "writable": False, "ivt_writable": True},
+            {"key": "canb_legacy", "name": "CANB · Legacy / IVT · 250 kbit/s", "bitrate": 250000,
+             "writable": False, "ivt_writable": True},
+        ]
+        if self._service.allow_simulation:
+            profiles.insert(0, {
+                "key": "simulation", "mode": "simulation",
+                "name": "内置模拟数据 · CAN1 / 开发测试", "bitrate": 500000,
+                "writable": True,
+            })
         return {
             "version": __version__, "version_date": __version_date__, "switch_catalog": switch_catalog(),
             "simulation_enabled": self._service.allow_simulation,
+            "bench_enabled": True,
+            "ivt_enabled": True,
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
-            "profiles": [
-                {"key": "can1", "name": "CAN1 · 主控 / 从控 / 工具", "bitrate": 500000, "writable": True},
-                {"key": "canb", "name": "CANB · IVT / ECU / Chroma", "bitrate": 500000, "writable": False},
-                {"key": "canb_legacy", "name": "CANB · Legacy 充电", "bitrate": 250000, "writable": False},
-            ],
+            "profiles": profiles,
         }
 
     def connect_can(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +58,32 @@ class Api:
 
     def disconnect_can(self) -> dict[str, Any]:
         return self._service.disconnect()
+
+    def connect_bench(self, config: dict[str, Any]) -> dict[str, Any]:
+        return self._bench_service.connect({
+            "mode": "bench", "bus_profile": "can1",
+            "channel": config.get("channel"), "bitrate": 500000,
+        })
+
+    def disconnect_bench(self) -> dict[str, Any]:
+        return self._bench_service.disconnect()
+
+    def get_bench_snapshot(self) -> dict[str, Any]:
+        return self._bench_service.bench_snapshot()
+
+    def connect_ivt(self, config: dict[str, Any]) -> dict[str, Any]:
+        profile = str(config.get("bus_profile") or "canb")
+        bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
+        return self._ivt_service.connect({
+            "mode": "pcan", "bus_profile": profile,
+            "channel": config.get("channel"), "bitrate": bitrate,
+        })
+
+    def disconnect_ivt(self) -> dict[str, Any]:
+        return self._ivt_service.disconnect()
+
+    def get_ivt_snapshot(self) -> dict[str, Any]:
+        return self._ivt_service.ivt_snapshot()
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()
@@ -51,6 +93,18 @@ class Api:
 
     def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
         return self._service.read_flash_fault_logs(limit)
+
+    def read_ivt_config(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._ivt_service.read_ivt_config(options)
+
+    def configure_ivt_bms_canb(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._ivt_service.configure_ivt_bms_canb(options)
+
+    def switch_ivt_bitrate(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._ivt_service.switch_ivt_bitrate(options)
+
+    def bench_command(self, command: str) -> dict[str, Any]:
+        return self._bench_service.bench_command(command)
 
     def choose_record_file(self) -> dict[str, Any]:
         if not self._window:
@@ -93,6 +147,8 @@ class Api:
 
     def close(self) -> None:
         self._service.disconnect()
+        self._bench_service.disconnect()
+        self._ivt_service.disconnect()
 
 
 def main() -> None:
@@ -103,7 +159,7 @@ def main() -> None:
     api = Api()
     window = webview.create_window(
         "BITFSAE · BMS Control Desk", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
-        width=1460, height=920, min_size=(1120, 720), background_color="#0B0F12",
+        width=1460, height=920, min_size=(1120, 720), background_color="#0D0E0F",
         zoomable=True,
     )
     api._window = window

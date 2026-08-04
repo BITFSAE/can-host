@@ -12,7 +12,7 @@ if (-not (Test-Path $Python)) {
 & $Python -m pip install -r (Join-Path $PSScriptRoot "requirements-build.txt")
 Push-Location $ProjectRoot
 try {
-    & $Python -m unittest Tests.test_bms_host_protocol -v
+    & $Python -m unittest discover -s Tests -p "test_bms_host*.py" -v
     & $Python -m PyInstaller --noconfirm --clean (Join-Path $PSScriptRoot "bms_control_desk.spec")
 }
 finally {

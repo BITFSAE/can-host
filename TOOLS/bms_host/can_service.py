@@ -12,6 +12,9 @@ import time
 from collections import deque
 from typing import Any
 
+from .ivt import (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
+                  DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
+                  compare_readback, expected_bms_canb_config)
 from .protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                        BmsProtocol, CanFrame, build_command, command_ack_matches)
 
@@ -49,6 +52,18 @@ class CanService:
         self.replay_next_seq = 1
         self.replay_db_buffer: deque[tuple[Any, ...]] = deque()
         self.command_sequence = 0
+        self.ivt_operation_lock = threading.Lock()
+        self.ivt_rx_condition = threading.Condition(self.lock)
+        self.ivt_rx_frames: deque[IvtFrame] = deque(maxlen=512)
+        self.ivt_config: dict[str, Any] | None = None
+        self.bench_module: Any = None
+        self.bench_model: Any = None
+        self.bench_command_processor: Any = None
+        self.bench_thread: threading.Thread | None = None
+        self.bench_stop_event = threading.Event()
+        self.bench_lock = threading.RLock()
+        self.bench_last_tx_error = ""
+        self.bench_last_tx_error_time = 0.0
 
     def connect(self, config: dict[str, Any]) -> dict[str, Any]:
         self.disconnect()
@@ -56,8 +71,12 @@ class CanService:
         profile = config.get("bus_profile", "can1")
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
         channel = str(config.get("channel") or "PCAN_USBBUS1")
+        if mode == "bench" and profile != "can1":
+            return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；CANB 请使用真实 PCAN 和真实 IVT"}
         with self.lock:
             self.protocol = BmsProtocol()
+            self.ivt_rx_frames.clear()
+            self.ivt_config = None
             self.connection.update({"connected": False, "mode": mode, "channel": channel,
                                     "bitrate": bitrate, "bus_profile": profile, "status": "正在连接", "error": None})
         try:
@@ -65,7 +84,7 @@ class CanService:
                 if not self.allow_simulation:
                     raise RuntimeError("当前发布版仅支持真实 PCAN 设备")
                 from .simulator import BmsSimulator
-                self.simulator = BmsSimulator(self._ingest)
+                self.simulator = BmsSimulator(self._ingest, bus_profile=profile)
                 self.simulator.start()
             else:
                 try:
@@ -76,8 +95,11 @@ class CanService:
                 self.stop_event.clear()
                 self.worker = threading.Thread(target=self._receive_loop, name="pcan-receiver", daemon=True)
                 self.worker.start()
+                if mode == "bench":
+                    self._start_bench(profile)
             with self.lock:
-                self.connection.update({"connected": True, "status": "已连接" if mode != "simulation" else "模拟数据", "error": None})
+                status = "模拟数据" if mode == "simulation" else "台架发送" if mode == "bench" else "已连接"
+                self.connection.update({"connected": True, "status": status, "error": None})
             return {"ok": True, "connection": dict(self.connection)}
         except Exception as exc:
             self.disconnect()
@@ -88,6 +110,13 @@ class CanService:
 
     def disconnect(self) -> dict[str, Any]:
         self.stop_event.set()
+        self.bench_stop_event.set()
+        if self.bench_thread and self.bench_thread.is_alive():
+            self.bench_thread.join(timeout=1.2)
+        self.bench_thread = None
+        self.bench_module = None
+        self.bench_model = None
+        self.bench_command_processor = None
         if self.simulator:
             self.simulator.stop()
             self.simulator = None
@@ -117,6 +146,14 @@ class CanService:
         self.replay_next_seq = 1
         self.replay_db_buffer.clear()
         with self.lock:
+            # A disconnect ends the identity of the attached BMS. Do not let
+            # RTC replies, fault history, or measurements from the previous
+            # device survive into the next connection.
+            self.protocol = BmsProtocol()
+            self.ivt_rx_frames.clear()
+            self.ivt_config = None
+            self.ivt_rx_condition.notify_all()
+            self.connection.pop("bench_target", None)
             self.connection.update({"connected": False, "status": "未连接"})
         return {"ok": True}
 
@@ -131,8 +168,12 @@ class CanService:
             profile = self.connection.get("bus_profile")
             state = self.protocol.overview.get("state")
             charge_mode = bool(self.protocol.fault.get("flags", {}).get("charge_mode"))
+            summary_seen = self.protocol.last_summary_monotonic
+            summary_age = None if summary_seen is None else max(0.0, self.protocol.clock() - summary_seen)
         if profile != "can1":
             return {"ok": False, "error": "F405 工具命令只在 CAN1 接收；当前连接不是 CAN1"}
+        if summary_age is None or summary_age > 1.5:
+            return {"ok": False, "error": "主控总状态帧未收到或已经超时，暂不发送命令"}
         if name in {"charge_config", "alarm_thresholds", "alarm_switches", "current_direction",
                     "charger_type", "log_info", "log_read", "log_clear"} and state not in {2, 3, 7}:
             return {"ok": False, "error": "主控仅在自检、待机或故障保持状态接受此命令"}
@@ -143,14 +184,16 @@ class CanService:
         try:
             command_values = dict(values)
             expects_unified_ack = name != "rtc"
-            if expects_unified_ack:
-                with self.lock:
-                    self.command_sequence = (self.command_sequence + 1) & 0xFF
-                    sequence = self.command_sequence
+            with self.lock:
+                self.command_sequence = (self.command_sequence + 1) & 0xFF
+                sequence = self.command_sequence
+                if expects_unified_ack:
                     self.protocol.command_acks.pop(sequence, None)
                     if name == "log_read":
                         self.protocol._flash_record_parts.pop(sequence, None)
-                command_values["_sequence"] = sequence
+                else:
+                    self.protocol.rtc_replies.pop(sequence, None)
+            command_values["_sequence"] = sequence
             frame = build_command(name, command_values)
             if self.simulator:
                 self.simulator.on_command(frame)
@@ -163,7 +206,25 @@ class CanService:
                 self.protocol.ingest(frame)
                 self._record(frame)
             if not expects_unified_ack:
-                return {"ok": True, "message": f"已发送 {frame.arbitration_id:#010x}，等待专用应答"}
+                # RTC replies echo the request sequence. Wait for this exact
+                # sequence instead of treating whichever old reply is visible
+                # as the result of the current button press.
+                deadline = time.monotonic() + 1.0
+                reply = None
+                while time.monotonic() < deadline:
+                    with self.lock:
+                        reply = self.protocol.rtc_replies.get(sequence)
+                    if reply is not None:
+                        break
+                    time.sleep(0.01)
+                if reply is None:
+                    return {"ok": False, "sequence": sequence,
+                            "error": f"RTC 请求在 1.0s 内没有收到序列 {sequence} 的专用应答"}
+                if int(reply.get("status", -1)) != 0:
+                    return {"ok": False, "sequence": sequence, "rtc_reply": reply,
+                            "error": f"主控拒绝 RTC 校时：状态 {reply.get('status')}"}
+                return {"ok": True, "sequence": sequence, "rtc_reply": reply,
+                        "message": "RTC 校时成功"}
 
             deadline = time.monotonic() + 1.0
             ack = None
@@ -232,7 +293,334 @@ class CanService:
                 }
             if self.record_kind:
                 connection["recording"] = {"format": self.record_kind, "path": self.record_path}
-            return self.protocol.snapshot(connection)
+            snapshot = self.protocol.snapshot(connection)
+            snapshot["ivt_config"] = dict(self.ivt_config) if self.ivt_config else None
+            snapshot["bench"] = self._bench_snapshot_locked()
+            return snapshot
+
+    def bench_snapshot(self) -> dict[str, Any]:
+        """Return only the state needed by the independent bench page."""
+        with self.lock:
+            return {"connection": dict(self.connection), "bench": self._bench_snapshot_locked()}
+
+    def ivt_snapshot(self) -> dict[str, Any]:
+        """Return only the state needed by the independent IVT page."""
+        with self.lock:
+            return {"connection": dict(self.connection),
+                    "ivt_config": dict(self.ivt_config) if self.ivt_config else None}
+
+    def _start_bench(self, profile: str) -> None:
+        if profile != "can1":
+            raise RuntimeError("主上位机台架只支持 CAN1 从控帧")
+        try:
+            from .. import pcan_bms_bench as bench_module
+        except ImportError as exc:
+            raise RuntimeError("台架模式需要 python-can") from exc
+        if bench_module.can is None:
+            raise RuntimeError("台架模式需要 python-can")
+        with self.lock:
+            self.connection["bench_target"] = "CAN1 从控帧"
+        self.bench_module = bench_module
+        with self.bench_lock:
+            self.bench_model = bench_module.BenchModel()
+            self.bench_command_processor = bench_module.CommandProcessor(
+                self.bench_model, bench_module.BmsMonitorState())
+        self.bench_stop_event.clear()
+        self.bench_thread = threading.Thread(target=self._bench_loop, name="pcan-bench-sender", daemon=True)
+        self.bench_thread.start()
+
+    def _bench_snapshot_locked(self) -> dict[str, Any] | None:
+        if self.connection.get("mode") != "bench" or self.bench_model is None:
+            return None
+        with self.bench_lock:
+            model = self.bench_model
+            return {
+                "active": True,
+                "target": self.connection.get("bench_target") or "CAN1 从控帧",
+                "ivt_source": "CANB 真实 IVT-S",
+                "slaves": [{"id": slave.slave_id, "online": bool(slave.online),
+                            "base_cell_mv": slave.base_cell_mv, "base_temp_c": slave.base_temp_c}
+                           for slave in model.slaves],
+                "open_wire_cells": len(model.open_wire_cells),
+                "open_wire_temps": len(model.open_wire_temps),
+            }
+
+    def bench_command(self, command: str) -> dict[str, Any]:
+        with self.bench_lock:
+            if self.connection.get("mode") != "bench" or self.bench_command_processor is None:
+                return {"ok": False, "error": "当前没有运行 CAN1 从控台架"}
+            try:
+                result = self.bench_command_processor.handle(str(command))
+                return {"ok": True, "message": result}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+    def _bench_send(self, message: Any, bus: Any, label: str = "台架 TX") -> None:
+        if bus is None:
+            return
+        try:
+            bus.send(message, timeout=0.2)
+            frame = CanFrame(int(message.arbitration_id), bytes(message.data), bool(message.is_extended_id),
+                             time.time(), "tx")
+            with self.lock:
+                self.protocol.ingest(frame)
+                self._record(frame)
+        except Exception as exc:
+            now = time.monotonic()
+            if str(exc) != self.bench_last_tx_error or now - self.bench_last_tx_error_time >= 1.0:
+                with self.lock:
+                    self.connection.update({"error": f"{label}失败：{exc}"})
+                self.bench_last_tx_error = str(exc)
+                self.bench_last_tx_error_time = now
+
+    def _bench_loop(self) -> None:
+        next_voltage = time.monotonic()
+        next_temperature = next_voltage
+        while not self.bench_stop_event.wait(0.01):
+            with self.bench_lock:
+                model = self.bench_model
+                module = self.bench_module
+            if model is None or module is None:
+                return
+            now = time.monotonic()
+            if now >= next_voltage:
+                with self.bench_lock:
+                    frames = [frame for slave in model.slaves
+                              for frame in module.build_slave_voltage_frames(model, slave)]
+                for frame in frames:
+                    self._bench_send(frame, self.bus)
+                next_voltage += module.TX_VOLT_PERIOD_S
+            if now >= next_temperature:
+                with self.bench_lock:
+                    frames = [frame for slave in model.slaves
+                              for frame in [module.build_slave_temp_frame(model, slave)] if frame is not None]
+                for frame in frames:
+                    self._bench_send(frame, self.bus)
+                next_temperature += module.TX_TEMP_PERIOD_S
+
+    @staticmethod
+    def _parse_can_id(value: Any, default: int) -> int:
+        if value is None or value == "":
+            value = default
+        parsed = int(value, 0) if isinstance(value, str) else int(value)
+        if not 0 <= parsed <= 0x7FF:
+            raise ValueError("IVT CAN ID 必须在 0x000..0x7FF 范围内")
+        return parsed
+
+    @staticmethod
+    def _parse_u32(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        parsed = int(value, 0) if isinstance(value, str) else int(value)
+        if not 0 <= parsed <= 0xFFFFFFFF:
+            raise ValueError("IVT 序列号必须在 0..0xFFFFFFFF 范围内")
+        return parsed
+
+    @staticmethod
+    def _parse_threshold(value: Any, default: int = 0) -> int:
+        if value is None or value == "":
+            return default
+        parsed = int(value, 0) if isinstance(value, str) else int(value)
+        if not 0 <= parsed <= 0xFFFF:
+            raise ValueError("IVT 过流阈值必须在 0..65535 A 范围内")
+        return parsed
+
+    def _check_ivt_access(self) -> dict[str, Any]:
+        with self.lock:
+            connection = dict(self.connection)
+        if not connection.get("connected"):
+            raise RuntimeError("CAN 尚未连接")
+        if connection.get("mode") != "pcan":
+            raise RuntimeError("IVT 配置只允许使用真实 PCAN，模拟数据和历史回放为只读")
+        if connection.get("bus_profile") not in {"canb", "canb_legacy"}:
+            raise RuntimeError("IVT 命令只允许从 CANB 发送；CAN1 只发送 F405 工具命令")
+        if connection.get("bitrate") not in BITRATE_PRESETS:
+            raise RuntimeError("IVT 操作只支持 CANB 250 或 500 kbit/s 预设")
+        return connection
+
+    def _clear_ivt_rx(self) -> None:
+        with self.lock:
+            self.ivt_rx_frames.clear()
+
+    def _ivt_receive(self, timeout: float) -> IvtFrame:
+        deadline = time.monotonic() + timeout
+        with self.ivt_rx_condition:
+            while not self.ivt_rx_frames:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("等待 IVT 应答超时")
+                self.ivt_rx_condition.wait(timeout=remaining)
+            return self.ivt_rx_frames.popleft()
+
+    def _ivt_send(self, arbitration_id: int, data: Any) -> None:
+        with self.lock:
+            if self.bus is None or not self.connection.get("connected"):
+                raise RuntimeError("CAN 已断开，无法发送 IVT 命令")
+            import can
+            payload = bytes(data)
+            message = can.Message(arbitration_id=arbitration_id, data=payload,
+                                  is_extended_id=False, is_fd=False)
+            self.bus.send(message, timeout=0.2)
+            frame = CanFrame(arbitration_id, payload, False, time.time(), "tx")
+            self.protocol.ingest(frame)
+            self._record(frame)
+
+    def _reopen_pcan(self, bitrate: int) -> None:
+        """Reopen CANB at a preset after IVT has restarted itself."""
+        if bitrate not in BITRATE_PRESETS:
+            raise ValueError("CANB 位率预设只支持 250 或 500 kbit/s")
+        with self.lock:
+            if self.bus is None or self.connection.get("mode") != "pcan":
+                raise RuntimeError("PCAN 已断开，无法重新打开 CANB")
+            old_bus = self.bus
+            worker = self.worker
+            channel = str(self.connection.get("channel") or "PCAN_USBBUS1")
+            self.stop_event.set()
+        if worker and worker.is_alive():
+            worker.join(timeout=1.2)
+        try:
+            old_bus.shutdown()
+        except Exception:
+            pass
+        with self.lock:
+            self.worker = None
+            self.bus = None
+        try:
+            import can
+            new_bus = can.Bus(interface="pcan", channel=channel, bitrate=bitrate, receive_own_messages=False)
+        except Exception as exc:
+            with self.lock:
+                self.connection.update({"status": "位率切换后无法重连", "error": str(exc), "bitrate": bitrate})
+            raise RuntimeError(f"CANB 已切换到 {bitrate // 1000} kbit/s，但 PCAN 重开失败：{exc}") from exc
+        with self.lock:
+            self.bus = new_bus
+            self.connection.update({"bitrate": bitrate, "status": "已连接", "error": None})
+            self.stop_event.clear()
+            self.worker = threading.Thread(target=self._receive_loop, name="pcan-receiver", daemon=True)
+            self.worker.start()
+
+    def _ivt_expected(self, options: dict[str, Any], bitrate: int) -> dict[str, Any]:
+        return expected_bms_canb_config(
+            startup=str(options.get("startup") or "run"), bitrate=bitrate,
+            positive_threshold_a=self._parse_threshold(options.get("positive_threshold_a")),
+            positive_reset_threshold_a=self._parse_threshold(options.get("positive_reset_threshold_a")),
+            negative_threshold_a=self._parse_threshold(options.get("negative_threshold_a")),
+            negative_reset_threshold_a=self._parse_threshold(options.get("negative_reset_threshold_a")),
+        )
+
+    def _ivt_id_candidates(self, options: dict[str, Any]) -> list[tuple[int, int]]:
+        """Return likely request/response IDs, with factory probing by default."""
+        has_cmd = options.get("cmd_id") not in (None, "")
+        has_rsp = options.get("rsp_id") not in (None, "")
+        if has_cmd or has_rsp:
+            return [(
+                self._parse_can_id(options.get("cmd_id"), DEFAULT_CMD_ID),
+                self._parse_can_id(options.get("rsp_id"), DEFAULT_RSP_ID),
+            )]
+        # A first-time device answers on the factory pair.  A device already
+        # prepared for F405 answers on the BMS pair.  The mixed pairs also
+        # cover an interrupted ID update without making the user guess first.
+        return [
+            (DEFAULT_CMD_ID, DEFAULT_RSP_ID),
+            (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID),
+            (DEFAULT_CMD_ID, BMS_CANB_RSP_ID),
+            (BMS_CANB_CMD_ID, DEFAULT_RSP_ID),
+        ]
+
+    def _probe_ivt_client(self, options: dict[str, Any]) -> IvtClient:
+        last_error: Exception | None = None
+        for cmd_id, rsp_id in self._ivt_id_candidates(options):
+            self._clear_ivt_rx()
+            client = IvtClient(self._ivt_send, self._ivt_receive, cmd_id=cmd_id, rsp_id=rsp_id)
+            try:
+                # Serial number is the shortest request that proves both IDs
+                # and leaves the full readback to the selected client.
+                client.read_serial_number()
+                return client
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"未找到 IVT 应答，请检查位率和当前 Command/Response ID：{last_error}")
+
+    def read_ivt_config(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        options = dict(options or {})
+        try:
+            connection = self._check_ivt_access()
+            with self.ivt_operation_lock:
+                with self.lock:
+                    self.ivt_config = None
+                client = self._probe_ivt_client(options)
+                readback = client.readback(bitrate=int(connection["bitrate"]))
+                expected = self._ivt_expected(options, int(connection["bitrate"]))
+                readback["comparison"] = compare_readback(readback, expected)
+                readback["expected"] = expected
+                with self.lock:
+                    self.ivt_config = readback
+                return {"ok": True, "readback": readback}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def configure_ivt_bms_canb(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        options = dict(options or {})
+        try:
+            connection = self._check_ivt_access()
+            startup = str(options.get("startup") or "run")
+            if startup not in {"stop", "run"}:
+                raise ValueError("IVT 上电模式必须是 stop 或 run")
+            with self.ivt_operation_lock:
+                with self.lock:
+                    self.ivt_config = None
+                client = self._probe_ivt_client(options)
+                serial = self._parse_u32(options.get("serial_number"))
+                thresholds = {
+                    "positive": {
+                        "threshold_a": self._parse_threshold(options.get("positive_threshold_a")),
+                        "reset_threshold_a": self._parse_threshold(options.get("positive_reset_threshold_a")),
+                    },
+                    "negative": {
+                        "threshold_a": self._parse_threshold(options.get("negative_threshold_a")),
+                        "reset_threshold_a": self._parse_threshold(options.get("negative_reset_threshold_a")),
+                    },
+                }
+                readback = client.setup_bms_canb(startup=startup, serial_number=serial,
+                                                  reopen=self._reopen_pcan, bitrate=int(connection["bitrate"]),
+                                                  thresholds=thresholds)
+                expected = self._ivt_expected(options, int(connection["bitrate"]))
+                readback["comparison"] = compare_readback(readback, expected)
+                readback["expected"] = expected
+                with self.lock:
+                    self.ivt_config = readback
+                return {"ok": True, "readback": readback, "message": "IVT 已按 BMS CANB 配置并完成重启读回核对"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def switch_ivt_bitrate(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        options = dict(options or {})
+        try:
+            connection = self._check_ivt_access()
+            target_bitrate = int(options.get("target_bitrate"))
+            if target_bitrate not in BITRATE_PRESETS:
+                raise ValueError("IVT 位率预设只支持 250 或 500 kbit/s")
+            if target_bitrate == int(connection["bitrate"]):
+                raise ValueError("目标位率与当前 PCAN 位率相同")
+            with self.ivt_operation_lock:
+                with self.lock:
+                    self.ivt_config = None
+                client = self._probe_ivt_client(options)
+                client.set_mode("stop", str(options.get("startup") or "run"))
+                response, alive = client.restart_to_bitrate(target_bitrate, self._reopen_pcan)
+                self._clear_ivt_rx()
+                readback = client.readback(bitrate=target_bitrate)
+                expected = self._ivt_expected({**options, "bitrate": target_bitrate}, target_bitrate)
+                readback["comparison"] = compare_readback(readback, expected)
+                readback["expected"] = expected
+                readback["bitrate_switch"] = {"target_bitrate": target_bitrate,
+                                                "response": list(response.data), "alive": list(alive.data)}
+                with self.lock:
+                    self.ivt_config = readback
+                return {"ok": True, "readback": readback,
+                        "message": f"IVT 已重启到 {target_bitrate // 1000} kbit/s，并完成读回核对"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def load_replay(self, path: str) -> dict[str, Any]:
         """Load a native BMS log or CSV and start read-only replay."""
@@ -259,18 +647,7 @@ class CanService:
                 metadata = dict(database.execute("SELECT key, value FROM meta"))
                 if metadata.get("format") != "BITFSAE_BMS_LOG" or metadata.get("schema_version") != "1":
                     raise ValueError("不是受支持的 BMS 数据记录文件")
-                total, first, last = database.execute(
-                    "SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM frames"
-                ).fetchone()
-                total = int(total)
-                if total == 0 or first is None or last is None:
-                    raise ValueError("文件中没有可回放的 CAN 帧")
-                first, last = float(first), float(last)
-                if not math.isfinite(first) or not math.isfinite(last) or last < first:
-                    raise ValueError("数据记录时间字段无效")
-                sample = [CanFrame(int(can_id), b"", bool(extended)) for can_id, extended in database.execute(
-                    "SELECT arbitration_id, extended FROM frames GROUP BY arbitration_id, extended LIMIT 512"
-                )]
+                total, first, last, sample = self._validate_bmslog_database(database)
                 inferred_profile = "can1" if any(is_can1(frame) for frame in sample) else "canb"
                 duration = last - first
             else:
@@ -445,8 +822,14 @@ class CanService:
                 message = self.bus.recv(timeout=0.1)
                 if message is None:
                     continue
-                self._ingest(CanFrame(message.arbitration_id, bytes(message.data), message.is_extended_id,
-                                      float(message.timestamp or time.time()), "rx"))
+                frame = CanFrame(message.arbitration_id, bytes(message.data), message.is_extended_id,
+                                 float(message.timestamp or time.time()), "rx")
+                self._ingest(frame)
+                if (not frame.is_extended_id and frame.data
+                        and frame.data[0] in IVT_RESPONSE_MUXES):
+                    with self.ivt_rx_condition:
+                        self.ivt_rx_frames.append(IvtFrame(frame.arbitration_id, frame.data, frame.is_extended_id))
+                        self.ivt_rx_condition.notify_all()
             except Exception as exc:
                 with self.lock:
                     self.connection.update({"status": "接收异常", "error": str(exc)})
@@ -506,6 +889,53 @@ class CanService:
         if not math.isfinite(frame.timestamp):
             raise ValueError("记录中存在无效时间")
 
+    @classmethod
+    def _validate_bmslog_database(cls, database: sqlite3.Connection) -> tuple[int, float, float, list[CanFrame]]:
+        """Validate every native-log row before declaring the file loadable."""
+        total = 0
+        first: float | None = None
+        last: float | None = None
+        previous_seq = 0
+        previous_timestamp: float | None = None
+        sample: list[CanFrame] = []
+        sample_keys: set[tuple[int, bool]] = set()
+        try:
+            rows = database.execute(
+                "SELECT seq, timestamp, direction, arbitration_id, extended, data "
+                "FROM frames ORDER BY seq"
+            )
+            for row in rows:
+                seq, timestamp, direction, arbitration_id, extended, data = row
+                if not isinstance(seq, int) or seq != previous_seq + 1:
+                    raise ValueError("BMSLOG 帧序号不连续或无效")
+                if extended not in (0, 1):
+                    raise ValueError("BMSLOG 帧类型字段无效")
+                try:
+                    frame = CanFrame(int(arbitration_id), bytes(data), bool(extended),
+                                     float(timestamp), str(direction))
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("BMSLOG 帧记录字段损坏") from exc
+                cls._validate_replay_frame(frame)
+                if previous_timestamp is not None and frame.timestamp < previous_timestamp:
+                    raise ValueError("BMSLOG 时间戳未按记录顺序递增")
+                previous_seq = seq
+                previous_timestamp = frame.timestamp
+                if first is None:
+                    first = frame.timestamp
+                last = frame.timestamp
+                total += 1
+                key = (frame.arbitration_id, frame.is_extended_id)
+                if key not in sample_keys and len(sample) < 512:
+                    sample_keys.add(key)
+                    sample.append(CanFrame(frame.arbitration_id, b"", frame.is_extended_id))
+        except sqlite3.Error as exc:
+            raise ValueError("BMSLOG 帧表无法读取") from exc
+        if total == 0 or first is None or last is None:
+            raise ValueError("文件中没有可回放的 CAN 帧")
+        if not math.isfinite(first) or not math.isfinite(last) or last < first:
+            raise ValueError("数据记录时间字段无效")
+        return total, first, last, sample
+
     @staticmethod
     def _frame_from_db_row(row: tuple[Any, ...]) -> tuple[int, CanFrame]:
         seq, timestamp, direction, arbitration_id, extended, data = row
@@ -545,7 +975,7 @@ class CanService:
         fault_rows = self.replay_db.execute(
             "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
             "WHERE timestamp < ? AND direction = 'rx' AND arbitration_id IN (?, ?) ORDER BY seq",
-            (recent_start, 0x187650F4, 0x4A1),
+            (recent_start, 0x187650F4, 0x4B1),
         )
         for row in fault_rows:
             _, frame = self._frame_from_db_row(row)

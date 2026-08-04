@@ -24,6 +24,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("Missing dependency: pip install python-can") from exc
 
+try:
+    from bms_host.ivt import IvtClient, IvtFrame, compare_readback, expected_bms_canb_config
+except ModuleNotFoundError:  # import path used when loaded from the repository root
+    from TOOLS.bms_host.ivt import IvtClient, IvtFrame, compare_readback, expected_bms_canb_config
+
 if TYPE_CHECKING:
     ByteOrder = Literal["big", "little"]
 
@@ -391,6 +396,16 @@ class IvtPcanTool:
             raise IvtProtocolError("serial-number response is shorter than 5 bytes")
         return int.from_bytes(bytes(message.data[1:5]), byteorder="big", signed=False)
 
+    def _shared_receive(self, timeout: float) -> IvtFrame:
+        message = self.bus.recv(timeout=timeout)
+        if message is None:
+            raise TimeoutError("timeout waiting for CAN frame")
+        return IvtFrame(int(message.arbitration_id), bytes(message.data), bool(message.is_extended_id))
+
+    def readback_shared(self) -> Dict[str, object]:
+        client = IvtClient(self.send, self._shared_receive, cmd_id=self.cmd_id, rsp_id=self.rsp_id)
+        return client.readback(bitrate=self.bitrate)
+
     def get_article_number(self) -> can.Message:
         return self.request([0x7C, 0, 0, 0, 0, 0, 0, 0], ARTICLE_NUMBER_RSP_MUX)
 
@@ -741,6 +756,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("article-number", help="read article number")
     subparsers.add_parser("info", help="read device-id/mode/sw-version/serial/article in one shot")
 
+    readback = subparsers.add_parser(
+        "readback", help="read the complete BMS CANB target and classify the configuration"
+    )
+    readback.add_argument("--startup", choices=["stop", "run"], default="run")
+    readback.add_argument("--positive-threshold-a", type=int, default=0)
+    readback.add_argument("--positive-reset-threshold-a", type=int, default=0)
+    readback.add_argument("--negative-threshold-a", type=int, default=0)
+    readback.add_argument("--negative-reset-threshold-a", type=int, default=0)
+
     subparsers.add_parser("store", help="store config to non-volatile memory")
     subparsers.add_parser("restart", help="restart device and wait alive")
 
@@ -909,6 +933,30 @@ def main(argv: Sequence[str]) -> int:
             print_generic_info("sw-version", tool.get_sw_version())
             print_generic_info("serial-number", tool.get_serial_number())
             print_generic_info("article-number", tool.get_article_number())
+            return 0
+
+        if args.command == "readback":
+            readback_data = tool.readback_shared()
+            expected = expected_bms_canb_config(
+                startup=args.startup,
+                bitrate=args.bitrate,
+                positive_threshold_a=args.positive_threshold_a,
+                positive_reset_threshold_a=args.positive_reset_threshold_a,
+                negative_threshold_a=args.negative_threshold_a,
+                negative_reset_threshold_a=args.negative_reset_threshold_a,
+            )
+            comparison = compare_readback(readback_data, expected)
+            print(f"status={comparison['status_name']} serial=0x{readback_data['serial_number']:08X}")
+            print_mode(can.Message(arbitration_id=tool.rsp_id, is_extended_id=False,
+                                   data=readback_data['mode']['raw']))
+            for channel in readback_data['channels']:
+                print(f"{channel['name']:<2} mode={channel['mode_name']:<9} order={channel['byte_order']:<6} "
+                      f"period={channel['period_ms']:>4}ms id=0x{readback_data['can_ids'][channel['name']]:03X}")
+            for name, can_id in readback_data['can_ids'].items():
+                if name not in {channel.name for channel in CHANNELS}:
+                    print(f"{name:<8} can-id=0x{can_id:03X}")
+            for difference in comparison['differences']:
+                print(f"diff {difference['field']}: actual={difference['actual_text']} expected={difference['expected_text']}")
             return 0
 
         if args.command == "store":
