@@ -1,6 +1,6 @@
 # BITFSAE BMS Control Desk
 
-这是 F405 BMS 主控的 CAN 上位机，主要面向 Windows + PCAN-USB。使用者操作、三类界面分工、CAN1/CANB 接线、台架模拟从控和 IVT 配置流程统一见 [`DOC/CAN上位机与工具使用.md`](../../DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息。
+这是 F405 BMS 主控的 CAN 上位机，主要面向 Windows + PCAN-USB。使用者操作、三类界面分工、CAN1/CANB 接线、台架模拟从控和 IVT 配置流程统一见 [`DOC/CAN上位机与工具使用.md`](../../DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；本目录的进度、风险、验证和历史变更统一记录在 `todo.md`，不再单独维护 `CHANGELOG.md`。
 
 ## 运行依赖
 
