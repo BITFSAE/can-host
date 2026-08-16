@@ -2,17 +2,21 @@
 """BMS F405 主控台架联调脚本（PCAN 版）.
 
 用途：
-1. 在 CAN1 250kbps 总线上模拟 6 个从控电压/温度报文；
-2. 模拟 ISA IVT-S 电流传感器标准帧 0x521；
-3. 监听主控发出的状态帧，便于台架联调；
-4. 通过简单命令行交互注入离线、断线、过温、电流故障等；
-5. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
+1. 在 CAN1 500kbps 总线上模拟 6 个从控电压/温度报文；
+2. 监听主控发出的状态帧，便于台架联调；
+3. 通过简单命令行交互注入从控离线、断线和温度故障；
+4. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
+
+IVT-S 不由本脚本模拟。测试时把真实 IVT-S 接到 F405 的 CANB；本脚本不发送
+`0x512`。需要在 CANB 上模拟 ECU SOP 确认时，可使用 `--canb-sop-ack`，该模式
+仍然只发送 `0x4A4`，不伪造 IVT 结果帧。
 
 依赖：
     pip install python-can
 
 运行前需安装 PEAK 驱动与 PCANBasic。
-默认只覆盖 CAN1 台架测试，不涉及 CAN2 充电机/VCU 模拟。
+默认覆盖 CAN1 从控台架测试。加 `--canb-sop-ack` 后切换到 CANB，接收真实
+IVT 并校验 SOP、发送 ECU 确认。
 """
 
 from __future__ import annotations
@@ -28,12 +32,11 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 try:
     import can
-except ImportError as exc:
-    raise SystemExit("缺少 python-can，请先执行: pip install python-can") from exc
+except ImportError:
+    can = None
 
 
-CAN1_BITRATE = 250000
-ISA_CAN_ID = 0x521          # ISA IVT-S 电流传感器
+CAN1_BITRATE = 500000
 SLAVE_VOLT_BASE_ID = 0x180050F3
 SLAVE_TEMP_BASE_ID = 0x184050F3
 
@@ -45,6 +48,13 @@ BMS_RELAY_ID      = 0x186350F4   # 继电器/充电请求
 BMS_CELL_SUM_ID   = 0x186750F4   # 单体累加电压
 BMS_IMD_DIAG_ID   = 0x186850F4   # IMD 诊断
 BMS_FAULT_ID      = 0x187650F4   # 统一故障状态帧
+BMS_ALARM_LEVEL_ID = 0x187850F4  # 告警等级明细
+CAN2_PACK_STATUS_ID = 0x4B0   # CAN2/CANB BMS 包状态
+CAN2_FAULT_ID      = 0x4B1       # CAN2/CANB 统一故障状态镜像
+CAN2_ALARM_LEVEL_ID = 0x4B2      # CAN2/CANB 告警等级明细镜像
+CAN2_SOP_LIMITS_ID   = 0x4A0
+CAN2_SOP_STATUS_ID   = 0x4A3
+CAN2_SOP_ACK_ID      = 0x4A4
 BMS_THRESHOLD_ID  = 0x187750F4   # 告警阈值
 BMS_SWITCH_ID     = 0x187F50F4   # 告警开关
 
@@ -54,7 +64,6 @@ SLAVE_COUNT = 6
 
 TX_VOLT_PERIOD_S = 0.20
 TX_TEMP_PERIOD_S = 0.50
-TX_ISA_PERIOD_S  = 0.10
 
 
 @dataclasses.dataclass
@@ -72,35 +81,57 @@ class SlaveState:
 
 
 @dataclasses.dataclass
-class IsaState:
-    """ISA IVT-S 电流传感器模拟状态"""
-    online: bool = True
-    current_a: float = 0.0
-    is_error: bool = False
-    error_code: int = 0
-
-
-@dataclasses.dataclass
 class BmsMonitorState:
     total_data: Optional[List[int]] = None
     relay_data: Optional[List[int]] = None
     fault_data: Optional[List[int]] = None
+    alarm_level_data: Optional[List[int]] = None
     threshold_data: Optional[List[int]] = None
     switch_data: Optional[List[int]] = None
     cell_sum_data: Optional[List[int]] = None
     imd_diag_data: Optional[List[int]] = None
     cell_max_v_data: Optional[List[int]] = None
     cell_max_t_data: Optional[List[int]] = None
+    sop_limits_data: Optional[List[int]] = None
+    sop_status_data: Optional[List[int]] = None
+    sop_ack_count: int = 0
+
+
+def crc8_sae_j1850(data: Sequence[int]) -> int:
+    crc = 0xFF
+    for value in data:
+        crc ^= value
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1D) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc ^ 0xFF
+
+
+def build_sop_ack(limits: Sequence[int], status: Sequence[int]) -> can.Message:
+    seq_version = status[0]
+    limits_valid = bool(status[1] & 0x01)
+    p_dis = limits[4] | (limits[5] << 8)
+    p_chg = limits[6] | (limits[7] << 8)
+    data = [seq_version, 0x03,
+            p_dis & 0xFF, (p_dis >> 8) & 0xFF,
+            p_chg & 0xFF, (p_chg >> 8) & 0xFF,
+            0 if limits_valid else 7]
+    data.append(crc8_sae_j1850([0x04, 0xA4, *data]))
+    return can.Message(arbitration_id=CAN2_SOP_ACK_ID,
+                       is_extended_id=False, data=data)
 
 
 class BenchModel:
+    """F405 CAN1 从控台架模型；IVT 使用 CANB 上的真实设备。"""
+
     def __init__(self) -> None:
         self.slaves: List[SlaveState] = [
             SlaveState(slave_id=index + 1) for index in range(SLAVE_COUNT)
         ]
-        self.isa = IsaState()
         self.open_wire_cells: Set[int] = set()
         self.open_wire_temps: Set[int] = set()
+
+    def reset(self) -> None:
+        self.__init__()
 
     def _cell_position(self, global_cell_index: int) -> Tuple[SlaveState, int]:
         if global_cell_index < 1 or global_cell_index > SLAVE_COUNT * CELL_COUNT_PER_SLAVE:
@@ -210,39 +241,17 @@ def build_slave_temp_frame(model: BenchModel, slave: SlaveState) -> Optional[can
         is_extended_id=True, data=payload)
 
 
-def build_isa_frame(isa: IsaState) -> Optional[can.Message]:
-    """构建 ISA IVT-S 电流帧 0x521"""
-    if not isa.online:
-        return None
-    current_ma = int(round(isa.current_a * 1000.0))
-    # 本工程按 IVT-S 已配置 Little Endian 的 DBC 发送 DB2..DB5。
-    raw = current_ma & 0xFFFFFFFF
-    result_state = isa.error_code & 0x0F
-    if isa.is_error and ((result_state & 0x0E) == 0):
-        result_state |= 0x04
-    status = result_state << 4
-    payload = [
-        0x00,           # Byte0: MUX = 0
-        status,         # Byte1: status(7:4) | counter(3:0)
-        raw & 0xFF,
-        (raw >> 8) & 0xFF,
-        (raw >> 16) & 0xFF,
-        (raw >> 24) & 0xFF,
-    ]
-    return can.Message(arbitration_id=ISA_CAN_ID, is_extended_id=False, data=payload)
-
-
 # ── BMS 回帧解码（F405 格式）────────────────────────────────
 
 FAULT_BIT_NAMES = [
     (0,  "OV"), (1,  "UV"), (2,  "OT"), (3,  "UT"),
     (4,  "LBK"), (5,  "TBK"), (6,  "DV"), (7,  "DT"),
-    (8,  "BATTOV"), (9,  "BATTUV"), (10, "BATTOC"), (11, "SOCLO"),
+    (8,  "BATTOV"), (9,  "BATTUV"), (10, "AUX"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
-    (16, "BSUOFF"), (17, "PRECHG"), (18, "AUX"), (19, "HVREL"),
-    (20, "ISA"), (21, "IMD"), (22, "SAFETY"), (23, "CHR_TELEM"),
+    (16, "BSUOFF"), (17, "PRECHG"), (18, "CRITICAL_IO"), (19, "HVREL"),
+    (20, "ISA"), (21, "CAN_RUNTIME"), (22, "SAFETY"), (23, "CHR_TELEM"),
     (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
-    (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "RSV"),
+    (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "IVT_U1"),
 ]
 
 BAT_STATE_NAMES = {2: "自检", 3: "待机", 4: "预充", 5: "高压", 7: "故障"}
@@ -288,6 +297,25 @@ def decode_threshold_frame(data: Sequence[int]) -> Dict[str, int]:
     }
 
 
+def decode_alarm_level_frame(data: Sequence[int]) -> Dict[str, int]:
+    if len(data) < 8:
+        return {}
+    levels: Dict[str, int] = {}
+    for bit, name in FAULT_BIT_NAMES:
+        byte = bit // 4
+        shift = (bit % 4) * 2
+        level = (data[byte] >> shift) & 0x03
+        if level:
+            levels[name] = level
+    return levels
+
+
+def format_alarm_levels(levels: Dict[str, int]) -> str:
+    if not levels:
+        return "无"
+    return " ".join(f"{name}=L{level}" for name, level in levels.items())
+
+
 def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
     if len(data) < 2:
         return {}
@@ -296,10 +324,11 @@ def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
         "OT": (data[0] >> 5) & 1, "UT": (data[0] >> 4) & 1,
         "DV": (data[0] >> 3) & 1, "DT": (data[0] >> 2) & 1,
         "CHG_OCS": (data[0] >> 1) & 1, "DSCH_OCS": data[0] & 1,
-        "BSUOFF": (data[1] >> 7) & 1, "HVREL": (data[1] >> 5) & 1,
+        "AUX": (data[1] >> 7) & 1, "CAN_RUNTIME": (data[1] >> 6) & 1,
+        "HVREL": (data[1] >> 5) & 1,
         "ISA": (data[1] >> 4) & 1, "BATTOV": (data[1] >> 3) & 1,
         "BATTUV": (data[1] >> 2) & 1, "BEEP": (data[1] >> 1) & 1,
-        "IMD": data[1] & 1,
+        "SOCLO": data[1] & 1,
     }
 
 
@@ -311,13 +340,15 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
     data = list(msg.data)
     aid = msg.arbitration_id
 
-    if aid == BMS_TOTAL_ID and len(data) >= 7:
+    if aid in (BMS_TOTAL_ID, CAN2_PACK_STATUS_ID) and len(data) >= 7:
         tv = ((data[0] << 8) | data[1]) / 10.0
-        ca = (((data[2] << 8) | data[3]) - 10000) / 10.0
-        soc = data[4]
+        ca = int.from_bytes(bytes(data[2:4]), "big", signed=True) / 10.0
+        soc = data[4] if data[5] & 0x04 else None
         bs = (data[6] >> 4) & 0x0F
         al = data[6] & 0x0F
-        return f"总览: {tv:.1f}V {ca:+.1f}A SOC={soc}% 状态={BAT_STATE_NAMES.get(bs, str(bs))} 告警级别={al}"
+        voltage = f"{tv:.1f}V" if data[5] & 0x01 else "总压无效"
+        current = f"{ca:+.1f}A" if data[5] & 0x02 else "电流无效"
+        return f"总览: {voltage} {current} SOC={soc if soc is not None else '无效'}% 状态={BAT_STATE_NAMES.get(bs, str(bs))} 告警级别={al}"
 
     if aid == BMS_RELAY_ID and len(data) >= 8:
         pos = (data[0] >> 6) & 1
@@ -328,25 +359,50 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         pv = ((data[6] << 8) | data[7]) / 10.0
         return f"继电器: POS={pos} PRE={pre} NEG={neg} 充电请求={rv:.1f}V/{ri:.1f}A 预充电压={pv:.1f}V"
 
-    if aid == BMS_FAULT_ID and len(data) >= 8:
+    if aid in (BMS_FAULT_ID, CAN2_FAULT_ID) and len(data) >= 8:
         info = decode_fault_frame(data)
-        return (f"故障状态: state={info['state']} level={info['level']} "
+        prefix = "CANB故障状态" if aid == CAN2_FAULT_ID else "故障状态"
+        return (f"{prefix}: state={info['state']} level={info['level']} "
                 f"fault_code={info['fault_code']} latched={info['latched']} "
                 f"charge={info['charge_mode']} slave_off={info['slave_offline']} "
                 f"ver={info['version']}\n  活跃: {format_faults(info['faults'])}")
+
+    if aid in (BMS_ALARM_LEVEL_ID, CAN2_ALARM_LEVEL_ID) and len(data) >= 8:
+        levels = decode_alarm_level_frame(data)
+        prefix = "CANB告警等级" if aid == CAN2_ALARM_LEVEL_ID else "告警等级"
+        return f"{prefix}: {format_alarm_levels(levels)}"
+
+    if aid == CAN2_SOP_LIMITS_ID and len(data) >= 8:
+        return (f"SOP限值: 放电={(data[0]|data[1]<<8)/10.0:.1f}A/"
+                f"{(data[4]|data[5]<<8)/10.0:.1f}kW 回充="
+                f"{(data[2]|data[3]<<8)/10.0:.1f}A/"
+                f"{(data[6]|data[7]<<8)/10.0:.1f}kW")
+
+    if aid == CAN2_SOP_STATUS_ID and len(data) >= 8:
+        return (f"SOP状态: ver={data[0]>>4} seq={data[0]&0x0F} "
+                f"flags=0x{data[1]:02X} state={data[2]} "
+                f"reason=0x{(data[3]|data[4]<<8):04X} "
+                f"health=0x{data[5]:02X} intervention=0x{data[6]:02X} "
+                f"crc=0x{data[7]:02X}")
 
     if aid == BMS_CELL_MAX_V_ID and len(data) >= 6:
         return (f"单体极值: Max={((data[0]<<8)|data[1])}mV#{data[4]} "
                 f"Min={((data[2]<<8)|data[3])}mV#{data[5]}")
 
     if aid == BMS_CELL_MAX_T_ID and len(data) >= 5:
-        return f"温度极值: Max={data[0]-30}C#{data[2]} Min={data[1]-30}C#{data[3]} 风扇={data[4]}"
+        fan = ""
+        if len(data) >= 8:
+            fan = f" duty={data[5]}% rpm≈{data[6]*100} flags=0x{data[7]:02X}"
+        return (f"温度极值: Max={data[0]-30}C#{data[2]} "
+                f"Min={data[1]-30}C#{data[3]} CoolingCtl={data[4]}{fan}")
 
     if aid == BMS_CELL_SUM_ID and len(data) >= 2:
         return f"累加电压: {((data[0]<<8)|data[1])/10.0:.1f}V"
 
     if aid == BMS_IMD_DIAG_ID and len(data) >= 8:
-        return (f"IMD: class={data[0]} status=0x{data[1]:02X} "
+        status = (data[0] >> 4) & 0x0F
+        cls = data[0] & 0x0F
+        return (f"IMD: status={status} class={cls} flags=0x{data[1]:02X} "
                 f"duty={((data[2]<<8)|data[3])/10.0:.1f}% "
                 f"Rf={((data[4]<<8)|data[5])}kOhm freq={((data[6]<<8)|data[7])/100.0:.2f}Hz")
 
@@ -354,10 +410,10 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         tv = decode_threshold_frame(data)
         return f"告警阈值: OV={tv['OV_mV']}mV UV={tv['UV_mV']}mV OT={tv['OT_raw']-30}C UT={tv['UT_raw']-30}C"
 
-    if aid == BMS_SWITCH_ID and len(data) >= 2:
+    if aid == BMS_SWITCH_ID and len(data) >= 3:
         sw = decode_switch_frame(data)
         on_list = [k for k, v in sw.items() if v]
-        return f"告警开关: {' '.join(on_list) if on_list else '全关'}"
+        return f"告警开关: ver={data[2]} {' '.join(on_list) if on_list else '全关'}"
 
     return None
 
@@ -383,11 +439,6 @@ class CommandProcessor:
             return f"估算单体累加: {self.model.estimated_pack_voltage_v():.3f}V"
         if cmd == "bms" and (len(parts) == 1 or (len(parts) == 2 and parts[1] == "show")):
             return self._bms_show()
-        if cmd == "current" and len(parts) == 2:
-            self.model.isa.current_a = float(parts[1])
-            return f"ISA 电流已设为 {self.model.isa.current_a:.3f}A"
-        if cmd == "isa" and len(parts) >= 3:
-            return self._isa_cmd(parts)
         if cmd == "slave" and len(parts) >= 4:
             return self._slave_cmd(parts)
         if cmd == "cell" and len(parts) == 3:
@@ -409,20 +460,9 @@ class CommandProcessor:
         if cmd == "scenario":
             return self._scenario(parts)
         if cmd == "reset":
-            self.model.__init__()
+            self.model.reset()
             return "所有模拟量已恢复默认"
         raise ValueError("未知命令，输入 help 查看支持项")
-
-    def _isa_cmd(self, parts: List[str]) -> str:
-        sub = parts[1].lower()
-        state = self._on_off(parts[2])
-        if sub == "online":
-            self.model.isa.online = state
-            return f"ISA {'在线' if state else '离线'}"
-        if sub == "error":
-            self.model.isa.is_error = state
-            return f"ISA 错误位: {'置位' if state else '清除'}"
-        raise ValueError("isa 子命令仅支持 online/error")
 
     def _slave_cmd(self, parts: List[str]) -> str:
         si = int(parts[1])
@@ -455,8 +495,7 @@ class CommandProcessor:
     def _status(self) -> str:
         lines = [
             f"估算累加: {self.model.estimated_pack_voltage_v():.3f}V",
-            f"ISA: 在线={self.model.isa.online} 电流={self.model.isa.current_a:.3f}A "
-            f"错误={self.model.isa.is_error}",
+            "IVT-S: 使用 CANB 上的真实设备；脚本不发送 0x512",
             f"单体断线: {len(self.model.open_wire_cells)} 温度断线: {len(self.model.open_wire_temps)}",
         ]
         for s in self.model.slaves:
@@ -470,9 +509,12 @@ class CommandProcessor:
         if m.total_data and len(m.total_data) >= 7:
             d = m.total_data
             tv = ((d[0] << 8) | d[1]) / 10.0
-            ca = (((d[2] << 8) | d[3]) - 10000) / 10.0
+            ca = int.from_bytes(bytes(d[2:4]), "big", signed=True) / 10.0
+            voltage = f"{tv:.1f}V" if d[5] & 0x01 else "总压无效"
+            current = f"{ca:+.1f}A" if d[5] & 0x02 else "电流无效"
+            soc = f"{d[4]}%" if d[5] & 0x04 else "无效"
             bs = (d[6] >> 4) & 0x0F
-            lines.append(f"总览: {tv:.1f}V {ca:+.1f}A SOC={d[4]}% 状态={BAT_STATE_NAMES.get(bs, str(bs))}")
+            lines.append(f"总览: {voltage} {current} SOC={soc} 状态={BAT_STATE_NAMES.get(bs, str(bs))}")
         else:
             lines.append("总览: 尚未收到")
 
@@ -496,6 +538,10 @@ class CommandProcessor:
         else:
             lines.append("故障: 尚未收到")
 
+        if m.alarm_level_data and len(m.alarm_level_data) >= 8:
+            levels = decode_alarm_level_frame(m.alarm_level_data)
+            lines.append(f"告警等级: {format_alarm_levels(levels)}")
+
         if m.threshold_data and len(m.threshold_data) >= 6:
             tv = decode_threshold_frame(m.threshold_data)
             lines.append(f"阈值: OV={tv['OV_mV']}mV UV={tv['UV_mV']}mV "
@@ -505,6 +551,17 @@ class CommandProcessor:
             sw = decode_switch_frame(m.switch_data)
             on_list = [k for k, v in sw.items() if v]
             lines.append(f"开关: {' '.join(on_list) if on_list else '全关'}")
+
+        if m.sop_limits_data and m.sop_status_data:
+            lines.append(decode_bms_message(can.Message(
+                arbitration_id=CAN2_SOP_LIMITS_ID,
+                is_extended_id=False,
+                data=m.sop_limits_data)) or "")
+            lines.append(decode_bms_message(can.Message(
+                arbitration_id=CAN2_SOP_STATUS_ID,
+                is_extended_id=False,
+                data=m.sop_status_data)) or "")
+            lines.append(f"SOP确认已发送: {m.sop_ack_count}")
 
         return "\n".join(lines)
 
@@ -563,29 +620,8 @@ class CommandProcessor:
             self.model.slaves[si - 1].online = not enabled
             return f"slaveoff: slave{si}={'off' if enabled else 'on'}"
 
-        if name == "isaoff":
-            self.model.isa.online = not enabled
-            return f"isaoff={'on' if enabled else 'off'}"
-
-        if name == "isaerr":
-            code = int(parts[3], 0) if len(parts) >= 4 else 0x04
-            self.model.isa.is_error = enabled
-            if enabled:
-                self.model.isa.error_code = code
-            return f"isaerr: {'on code=0x'+format(code,'02X') if enabled else 'off'}"
-
-        if name == "chgoc":
-            ca = float(parts[3]) if len(parts) >= 4 else 35.0
-            self.model.isa.current_a = ca if enabled else 0.0
-            return f"chgoc: current={self.model.isa.current_a:.1f}A"
-
-        if name == "disoc":
-            ca = float(parts[3]) if len(parts) >= 4 else -200.0
-            self.model.isa.current_a = ca if enabled else 0.0
-            return f"disoc: current={self.model.isa.current_a:.1f}A"
-
         if name == "clear":
-            self.model.__init__()
+            self.model.reset()
             return "所有场景已清除"
 
         raise ValueError(f"未知 scenario: {name}")
@@ -596,9 +632,6 @@ class CommandProcessor:
   status                      查看当前模拟状态
   pack                        计算单体累加电压
   bms show                    查看主控最近一次回帧摘要
-  current <A>                 设置 ISA 电流，正值=充电，负值=放电
-  isa online on|off           设置 ISA 在线/离线
-  isa error on|off            设置 ISA 错误位
   slave <1..6> online on|off  设置从控在线/离线
   slave <1..6> basev <mV>     设置从控基准单体电压
   slave <1..6> baset <C>      设置从控基准温度
@@ -607,8 +640,7 @@ class CommandProcessor:
   openwire <1..138> on|off    对某串注入 0xFFFF 断线码
   opentemp <1..48> on|off     对某路注入 0xFF 断线码
   scenario <name> on|off [v]  快速注入场景: cellov/celluv/cellot/cellut/
-                              openwire/opentemp/slaveoff/isaoff/isaerr/
-                              chgoc/disoc/clear
+                              openwire/opentemp/slaveoff/clear
   reset                       恢复默认值
   help                        查看帮助
   quit / exit                 退出"""
@@ -624,21 +656,37 @@ class PcanBenchApp:
         self.cmd = CommandProcessor(self.model, self.monitor)
         self.cmd_queue: "queue.Queue[str]" = queue.Queue()
         self.stop_event = threading.Event()
-        self.bus = can.Bus(interface="pcan", channel=args.channel, bitrate=args.bitrate)
+        self.bus = None
+        try:
+            self.bus = can.Bus(interface="pcan", channel=args.channel, bitrate=args.bitrate)
+        except Exception:
+            if self.bus is not None:
+                self.bus.shutdown()
+                self.bus = None
+            raise
         self._tx_ids = self._build_tx_ids()
         self._last_tx_err = ""
         self._last_tx_err_ts = 0.0
 
     def _build_tx_ids(self) -> Set[Tuple[bool, int]]:
-        ids: Set[Tuple[bool, int]] = {(False, ISA_CAN_ID)}
-        for si in range(SLAVE_COUNT):
-            ids.add((True, SLAVE_TEMP_BASE_ID + (si << 16)))
-            for fi in range(6):
-                ids.add((True, SLAVE_VOLT_BASE_ID + ((si * 6 + fi) << 16)))
+        ids: Set[Tuple[bool, int]] = set()
+        if self.args.sop_ack:
+            ids.add((False, CAN2_SOP_ACK_ID))
+        else:
+            for si in range(SLAVE_COUNT):
+                ids.add((True, SLAVE_TEMP_BASE_ID + (si << 16)))
+                for fi in range(6):
+                    ids.add((True, SLAVE_VOLT_BASE_ID + ((si * 6 + fi) << 16)))
         return ids
 
     def run(self) -> None:
         print(f"PCAN: {self.args.channel} @ {self.args.bitrate}bps")
+        if self.args.sop_ack:
+            print("总线用途: CANB · 真实 IVT / ECU SOP 确认")
+        else:
+            print("总线用途: CAN1 · 六个从控台架")
+        print("IVT-S: 接入 F405 CANB 的真实设备；本脚本不发送 0x512")
+        print("ECU SOP确认: " + ("开启" if self.args.sop_ack else "关闭"))
         quiet = not self.args.live_rx
         print("脚本已启动。" + (" 安静模式，输入命令查看结果。" if quiet else " 实时打印主控回帧。"))
         print("输入 help 查看命令列表。\n")
@@ -669,17 +717,22 @@ class PcanBenchApp:
             print("\n收到 Ctrl+C, 退出...")
         finally:
             self.stop_event.set()
-            self.bus.shutdown()
+            if self.bus is not None:
+                self.bus.shutdown()
+                self.bus = None
             print("已退出。")
 
-    def _send(self, frame: can.Message) -> None:
+    def _send(self, frame: can.Message, bus: object | None = None, label: str = "TX") -> None:
+        target = bus or self.bus
+        if target is None:
+            return
         try:
-            self.bus.send(frame)
+            target.send(frame)
         except can.CanError as exc:
             now = time.monotonic()
             msg = str(exc)
             if msg != self._last_tx_err or now - self._last_tx_err_ts >= 1.0:
-                print(f"TX 错误: {msg}")
+                print(f"{label} 错误: {msg}")
                 self._last_tx_err = msg
                 self._last_tx_err_ts = now
             time.sleep(0.05)
@@ -687,25 +740,19 @@ class PcanBenchApp:
     def _sender(self) -> None:
         nv = time.monotonic()
         nt = time.monotonic()
-        ni = time.monotonic()
         while not self.stop_event.is_set():
             now = time.monotonic()
-            if now >= nv:
+            if (not self.args.sop_ack) and now >= nv:
                 for s in self.model.slaves:
                     for f in build_slave_voltage_frames(self.model, s):
                         self._send(f)
                 nv += TX_VOLT_PERIOD_S
-            if now >= nt:
+            if (not self.args.sop_ack) and now >= nt:
                 for s in self.model.slaves:
                     f = build_slave_temp_frame(self.model, s)
                     if f:
                         self._send(f)
                 nt += TX_TEMP_PERIOD_S
-            if now >= ni:
-                f = build_isa_frame(self.model.isa)
-                if f:
-                    self._send(f)
-                ni += TX_ISA_PERIOD_S
             time.sleep(0.01)
 
     def _receiver(self) -> None:
@@ -729,12 +776,14 @@ class PcanBenchApp:
     def _update_monitor(self, msg: can.Message) -> None:
         data = list(msg.data)
         aid = msg.arbitration_id
-        if aid == BMS_TOTAL_ID:
+        if aid in (BMS_TOTAL_ID, CAN2_PACK_STATUS_ID):
             self.monitor.total_data = data
         elif aid == BMS_RELAY_ID:
             self.monitor.relay_data = data
-        elif aid == BMS_FAULT_ID:
+        elif aid in (BMS_FAULT_ID, CAN2_FAULT_ID):
             self.monitor.fault_data = data
+        elif aid in (BMS_ALARM_LEVEL_ID, CAN2_ALARM_LEVEL_ID):
+            self.monitor.alarm_level_data = data
         elif aid == BMS_THRESHOLD_ID:
             self.monitor.threshold_data = data
         elif aid == BMS_SWITCH_ID:
@@ -747,6 +796,24 @@ class PcanBenchApp:
             self.monitor.cell_max_v_data = data
         elif aid == BMS_CELL_MAX_T_ID:
             self.monitor.cell_max_t_data = data
+        elif aid == CAN2_SOP_LIMITS_ID and len(data) == 8:
+            self.monitor.sop_limits_data = data
+        elif aid == CAN2_SOP_STATUS_ID and len(data) == 8:
+            self.monitor.sop_status_data = data
+            self._send_sop_ack_if_valid()
+
+    def _send_sop_ack_if_valid(self) -> None:
+        if not self.args.sop_ack:
+            return
+        limits = self.monitor.sop_limits_data
+        status = self.monitor.sop_status_data
+        if limits is None or status is None:
+            return
+        crc_data = [0x04, 0xA0, *limits, 0x04, 0xA3, *status[:7]]
+        if (status[0] >> 4) != 1 or crc8_sae_j1850(crc_data) != status[7]:
+            return
+        self._send(build_sop_ack(limits, status))
+        self.monitor.sop_ack_count += 1
 
     def _stdin(self) -> None:
         while not self.stop_event.is_set():
@@ -759,16 +826,21 @@ class PcanBenchApp:
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="BMS F405 台架联调脚本 (PCAN)")
+    p = argparse.ArgumentParser(description="BMS F405 从控台架联调脚本 (PCAN)")
     p.add_argument("--channel", default="PCAN_USBBUS1", help="PCAN 通道名")
     p.add_argument("--bitrate", type=int, default=CAN1_BITRATE, help="CAN 波特率")
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
+    p.add_argument("--canb-sop-ack", "--sop-ack", dest="sop_ack", action="store_true",
+                   help="CANB ECU确认模式：接收真实 IVT，校验 0x4A0/0x4A3 并发送 0x4A4")
     return p.parse_args(argv)
 
 
 def main(argv: Sequence[str]) -> int:
-    app = PcanBenchApp(parse_args(argv))
+    args = parse_args(argv)
+    if can is None:
+        raise SystemExit("缺少 python-can，请先执行: pip install python-can")
+    app = PcanBenchApp(args)
     app.run()
     return 0
 
