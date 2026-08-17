@@ -524,7 +524,7 @@ class BmsProtocolTest(unittest.TestCase):
             service.disconnect()
 
     def test_overview_markup_matches_information_hierarchy(self) -> None:
-        html = (Path(__file__).parents[1] / "TOOLS" / "bms_host" / "web" / "index.html").read_text()
+        html = (Path(__file__).parents[1] / "TOOLS" / "bms_host" / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('class="relay-tiles"', html)
         self.assertIn('class="condition-stack"', html)
         self.assertIn('class="data-section thermal-section"', html)
