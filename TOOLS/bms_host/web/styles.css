@@ -42,9 +42,11 @@
   --r-sm: 2px;
   --shadow: 0 12px 32px rgba(0, 0, 0, .34);
 
-  --mono: "Cascadia Mono", "Consolas", "DejaVu Sans Mono", monospace;
-  --ui: "Bahnschrift", "DIN Alternate", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
-  --cjk: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  /* 字体栈按目标平台 Windows 11 优先：界面用 Segoe UI Variable Text（Win10 回退 Segoe UI，
+     macOS 回退系统 SF Pro）；等宽栈里的中文字体让表格中文帧名等不落到宋体或日文兜底。 */
+  --mono: "Cascadia Mono", Menlo, Consolas, "Microsoft YaHei UI", "PingFang SC", monospace;
+  --ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --cjk: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
 
 * { box-sizing: border-box; }

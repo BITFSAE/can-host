@@ -82,6 +82,13 @@
 
 ### 2026-08-18
 
+#### Windows 11 字体回退修正
+
+- Win11 实机反馈界面字体有回退、部分不易读，定位到 `web/styles.css` 字体栈并修正：
+- `--ui` 去掉首位的 Bahnschrift（DIN 风格窄体，小字号可读性差），改为 `Segoe UI Variable Text`（Win11）→ `Segoe UI`（Win10）→ `-apple-system`（macOS 开发机），中文继续落到微软雅黑 UI / 苹方。
+- `--mono` 原来没有任何中文字体，CAN 监视器表格（`td` 全走等宽栈）里的中文帧名在 Win11 上落到通用等宽兜底，常显示为宋体或日文字形；现在等宽栈末尾补 `Microsoft YaHei UI` 和 `PingFang SC`，中文在等宽上下文里用雅黑渲染。
+- `--cjk` 补 `Microsoft YaHei` 二级回退；`__version_date__` 更新为 2026-08-18 并发布 `host-v0.1.0-rc2`。
+
 #### CI 预发布支持与首个预发布
 
 - `host-release.yml` 支持预发布标签：`host-vX.Y.Z-rc1` 这类版本号后带后缀的标签创建为 GitHub 预发布（Pre-release），版本号主体仍与 `__version__` 核对；不带后缀仍是正式 Release。`README.md` CI 一节同步说明。
