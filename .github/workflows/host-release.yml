@@ -25,9 +25,10 @@ jobs:
         shell: pwsh
         run: |
           $tagVersion = "$env:GITHUB_REF_NAME".Substring('host-v'.Length)
+          $baseVersion = "$tagVersion".Split('-')[0]
           $appVersion = python -c "from TOOLS.bms_host import __version__; print(__version__)"
-          if ($tagVersion -ne $appVersion) {
-            throw "标签 $env:GITHUB_REF_NAME 与 TOOLS/bms_host/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
+          if ($baseVersion -ne $appVersion) {
+            throw "标签 $env:GITHUB_REF_NAME 的版本 $baseVersion 与 TOOLS/bms_host/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
           }
 
       - name: 运行测试并 PyInstaller 打包
@@ -74,5 +75,8 @@ jobs:
           if (gh release view $tag) {
             gh release upload $tag $zip --clobber
           } else {
-            gh release create $tag $zip --title $tag --notes "$notes"
+            # 版本号后带 -rc1 / -pre 等后缀的标签创建为 GitHub 预发布（Pre-release）。
+            $extra = @()
+            if ($tag.Substring('host-v'.Length).Contains('-')) { $extra += '--prerelease' }
+            gh release create $tag $zip --title $tag --notes "$notes" @extra
           }

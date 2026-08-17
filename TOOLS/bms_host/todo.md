@@ -80,6 +80,13 @@
 
 ## 已完成变更
 
+### 2026-08-18
+
+#### CI 预发布支持与首个预发布
+
+- `host-release.yml` 支持预发布标签：`host-vX.Y.Z-rc1` 这类版本号后带后缀的标签创建为 GitHub 预发布（Pre-release），版本号主体仍与 `__version__` 核对；不带后缀仍是正式 Release。`README.md` CI 一节同步说明。
+- 推送 `host-v0.1.0-rc1` 发布首个预发布版本供下载试用；「发布前必须完成」清单（实机 Windows、真实 PCAN、FanController 实车验证）完成后再打正式标签。
+
 ### 2026-08-17
 
 #### GitHub CI 构建与发布

@@ -48,6 +48,7 @@ powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
 
 - `host-tests.yml`：main 分支推送和 Pull Request 涉及 `TOOLS/bms_host/` 或 `Tests/test_bms_host*.py` 时，自动运行上位机单元测试。
 - `host-release.yml`：推送 `host-v*` 标签（如 `host-v0.1.0`）时触发。先核对标签版本与 `TOOLS/bms_host/__init__.py` 的 `__version__` 一致，再执行本目录 `build_windows.ps1`（测试 + PyInstaller 打包），把 `dist\BITFSAE_BMS_Control_Desk\` 压缩为 `BITFSAE_BMS_Control_Desk_host-v0.1.0.zip` 并创建 GitHub Release 附上该 zip。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供 zip 产物下载，不创建 Release。
+- 标签版本号后带后缀（如 `host-v0.1.0-rc1`）时创建的是 GitHub 预发布（Pre-release），版本号主体仍须与 `__version__` 一致；不带后缀的 `host-vX.Y.Z` 创建正式 Release。
 
 发布新版本的操作：
 
