@@ -1,0 +1,78 @@
+name: BMS 上位机 Windows 构建与发布
+
+on:
+  push:
+    tags:
+      - 'host-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 核对标签版本与软件版本一致
+        if: startsWith(github.ref, 'refs/tags/host-v')
+        shell: pwsh
+        run: |
+          $tagVersion = "$env:GITHUB_REF_NAME".Substring('host-v'.Length)
+          $appVersion = python -c "from TOOLS.bms_host import __version__; print(__version__)"
+          if ($tagVersion -ne $appVersion) {
+            throw "标签 $env:GITHUB_REF_NAME 与 TOOLS/bms_host/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
+          }
+
+      - name: 运行测试并 PyInstaller 打包
+        run: powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
+
+      - name: 压缩发布目录
+        id: zip
+        shell: pwsh
+        run: |
+          if ("$env:GITHUB_REF".StartsWith('refs/tags/')) {
+            $base = "BITFSAE_BMS_Control_Desk_$($env:GITHUB_REF_NAME)"
+          } else {
+            $base = "BITFSAE_BMS_Control_Desk_$("$env:GITHUB_SHA".Substring(0, 7))"
+          }
+          Compress-Archive -Path dist/BITFSAE_BMS_Control_Desk -DestinationPath "$base.zip"
+          "base=$base" >> $env:GITHUB_OUTPUT
+          "path=$base.zip" >> $env:GITHUB_OUTPUT
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.base }}
+          path: ${{ steps.zip.outputs.path }}
+          if-no-files-found: error
+
+      - name: 创建 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/host-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "$env:GITHUB_REF_NAME"
+          $zip = "${{ steps.zip.outputs.path }}"
+          $notes = @"
+          解压后复制整个 BITFSAE_BMS_Control_Desk 文件夹到目标电脑，运行其中的 BITFSAE_BMS_Control_Desk.exe，不能只复制 exe。
+
+          目标电脑需要先安装：
+
+          - PEAK PCAN-USB 驱动（含 PCAN-Basic 运行组件）
+          - Microsoft Edge WebView2 Runtime
+
+          发布版只支持真实 PCAN，不包含源码运行用的内置模拟器。
+          "@
+          if (gh release view $tag) {
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip --title $tag --notes "$notes"
+          }

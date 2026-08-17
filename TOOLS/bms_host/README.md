@@ -42,6 +42,24 @@ powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
 1. PEAK PCAN-USB 驱动及 PCAN-Basic 运行组件；
 2. Microsoft Edge WebView2 Runtime。
 
+## CI 自动构建与发布
+
+仓库在 `.github/workflows/` 下提供两条 GitHub Actions 工作流，都在 windows-latest 上运行：
+
+- `host-tests.yml`：main 分支推送和 Pull Request 涉及 `TOOLS/bms_host/` 或 `Tests/test_bms_host*.py` 时，自动运行上位机单元测试。
+- `host-release.yml`：推送 `host-v*` 标签（如 `host-v0.1.0`）时触发。先核对标签版本与 `TOOLS/bms_host/__init__.py` 的 `__version__` 一致，再执行本目录 `build_windows.ps1`（测试 + PyInstaller 打包），把 `dist\BITFSAE_BMS_Control_Desk\` 压缩为 `BITFSAE_BMS_Control_Desk_host-v0.1.0.zip` 并创建 GitHub Release 附上该 zip。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供 zip 产物下载，不创建 Release。
+
+发布新版本的操作：
+
+```powershell
+# 1. 更新 TOOLS/bms_host/__init__.py 的 __version__ 和 __version_date__，连同代码一起提交推送
+# 2. 打标签并推送，CI 自动构建并创建 Release
+git tag host-v0.1.0
+git push origin host-v0.1.0
+```
+
+Release 附件是完整 one-folder 目录的压缩包，目标电脑安装要求与上一节相同。
+
 ## 文件入口
 
 | 文件 | 作用 |

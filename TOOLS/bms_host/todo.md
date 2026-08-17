@@ -24,6 +24,7 @@
 - [ ] 长时间记录`.bmslog`和CSV，检查高总线负载下的帧完整性、文件增长、停止记录、重新打开、暂停和拖动回放。
 - [ ] 用真实 FanController 验证风扇页：状态/诊断显示、五种命令的 `0x5A5` 应答、参数错误拒绝和手动模式到期自动回自动。
 - [ ] 完成Windows发布目录检查，确认无需网络字体、开发目录或未打包模块。
+- [ ] 推送 `host-v*` 标签走一遍 CI：确认版本核对、单测、PyInstaller 产物和 Release 附件 zip 完整可用，手动触发一次构建验证产物下载。
 
 ### 界面和操作验证
 
@@ -80,6 +81,12 @@
 ## 已完成变更
 
 ### 2026-08-17
+
+#### GitHub CI 构建与发布
+
+- 新增 `.github/workflows/host-tests.yml`：main 推送和 PR 涉及上位机代码或上位机测试时，在 windows-latest + Python 3.11 上运行 `Tests/test_bms_host*.py` 单元测试。
+- 新增 `.github/workflows/host-release.yml`：推送 `host-v*` 标签触发，先核对标签版本与 `TOOLS/bms_host/__init__.py` 的 `__version__` 一致（不一致直接失败），再复用 `build_windows.ps1` 在 windows-latest 完成测试和 PyInstaller 打包，将 one-folder 目录压缩为 `BITFSAE_BMS_Control_Desk_<标签>.zip` 并创建 GitHub Release 附上附件；手动触发时只上传构建产物，不创建 Release。
+- `README.md` 新增“CI 自动构建与发布”一节，说明标签约定和发布步骤。
 
 #### 整车风扇工具页
 
