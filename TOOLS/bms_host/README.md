@@ -47,8 +47,8 @@ powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
 | 文件 | 作用 |
 |---|---|
 | `app.py` | PyWebView 窗口和 JavaScript API |
-| `can_service.py` | 主监视、独立台架连接、独立 IVT 连接和 CAN 记录服务 |
-| `protocol.py` | F405 报文解析和工具命令编码 |
+| `can_service.py` | 主监视、独立台架连接、独立 IVT 连接、独立风扇连接和 CAN 记录服务 |
+| `protocol.py` | F405 报文解析、F405 工具命令编码和 FanController 命令编码 |
 | `ivt.py` | IVT 请求、响应解析和 BMS CANB 目标比较 |
 | `simulator.py` | 源码开发用内置模拟数据 |
 | `web/` | 无网络依赖的 HTML/CSS/JavaScript 界面 |

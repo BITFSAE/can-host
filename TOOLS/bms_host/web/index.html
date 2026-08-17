@@ -53,6 +53,10 @@
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>
               <span>IVT配置</span>
             </button>
+            <button class="nav-item" type="button" data-page="fan" title="整车风扇（Alt+8）">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1.8"/><path d="M12 10.2c0-2.9 1.4-4.7 3.7-4.7 1.6 0 2.5 1.2 2 2.6-.6 1.6-2.9 2.3-5.7 2.1Z"/><path d="M13.8 12c2.9 0 4.7 1.4 4.7 3.7 0 1.6-1.2 2.5-2.6 2-1.6-.6-2.3-2.9-2.1-5.7Z"/><path d="M12 13.8c0 2.9-1.4 4.7-3.7 4.7-1.6 0-2.5-1.2-2-2.6.6-1.6 2.9-2.3 5.7-2.1Z"/><path d="M10.2 12c-2.9 0-4.7-1.4-4.7-3.7 0-1.6 1.2-2.5 2.6-2 1.6.6 2.3 2.9 2.1 5.7Z"/></svg>
+              <span>整车风扇</span>
+            </button>
           </div>
         </details>
       </nav>
@@ -246,9 +250,6 @@
                 <span id="saveStatus" class="tag neutral" title="等待主控回报 Flash 保存状态">等待保存状态</span>
               </span>
             </header>
-            <div class="panel-body">
-              <p class="note tight">配置、电流方向、充电机类型和 Flash 日志只在自检、待机或故障保持态处理。预充和高压闭合期间主控会明确拒绝并返回原因。所有写命令都需要逐次勾选确认。</p>
-            </div>
           </article>
 
           <div class="grid">
@@ -259,12 +260,12 @@
               </header>
               <div class="panel-body">
                 <div class="field-grid">
-                  <label class="field"><span class="field-label">过压上限</span><span class="field-input"><input id="ovInput" type="number" min="3011" max="4190"><em>mV</em></span><small>3011 .. 4190</small></label>
-                  <label class="field"><span class="field-label">欠压下限</span><span class="field-input"><input id="uvInput" type="number" min="3010" max="4189"><em>mV</em></span><small>3010 .. 4189</small></label>
-                  <label class="field"><span class="field-label">过温上限</span><span class="field-input"><input id="otInput" type="number" min="6" max="65"><em>°C</em></span><small>6 .. 65</small></label>
-                  <label class="field"><span class="field-label">低温下限</span><span class="field-input"><input id="utInput" type="number" min="-25" max="49"><em>°C</em></span><small>-25 .. 49</small></label>
+                  <label class="field"><span class="field-label">过压上限</span><span class="field-input"><input id="ovInput" type="number" min="3011" max="4190" placeholder="4190"><em>mV</em></span></label>
+                  <label class="field"><span class="field-label">欠压下限</span><span class="field-input"><input id="uvInput" type="number" min="3010" max="4189" placeholder="3100"><em>mV</em></span></label>
+                  <label class="field"><span class="field-label">过温上限</span><span class="field-input"><input id="otInput" type="number" min="6" max="65" placeholder="60"><em>°C</em></span></label>
+                  <label class="field"><span class="field-label">低温下限</span><span class="field-input"><input id="utInput" type="number" min="-25" max="49" placeholder="0"><em>°C</em></span></label>
                 </div>
-                <div class="panel-foot"><button class="action-button" type="button" id="sendThresholds">确认并写入四项阈值</button></div>
+                <div class="panel-foot"><button class="action-button" type="button" id="sendThresholds">写入保护阈值</button></div>
               </div>
             </article>
 
@@ -277,16 +278,14 @@
                 <div class="duo-fields">
                   <label class="field big">
                     <span class="field-label">请求电压</span>
-                    <span class="field-input"><input id="chargeVoltage" type="number" min="415.4" max="578.2" step="0.1"><em>V</em></span>
-                    <small>允许 415.4 .. 578.2 V</small>
+                    <span class="field-input"><input id="chargeVoltage" type="number" min="415.4" max="578.2" step="0.1" placeholder="570.0"><em>V</em></span>
                   </label>
                   <label class="field big">
                     <span class="field-label">请求电流</span>
-                    <span class="field-input"><input id="chargeCurrent" type="number" min="0" max="4.5" step="0.1"><em>A</em></span>
-                    <small>固件硬上限 4.5 A</small>
+                    <span class="field-input"><input id="chargeCurrent" type="number" min="0" max="4.5" step="0.1" placeholder="3.0"><em>A</em></span>
                   </label>
                 </div>
-                <div class="panel-foot"><button class="action-button" type="button" id="sendChargeConfig">确认并写入充电请求</button></div>
+                <div class="panel-foot"><button class="action-button" type="button" id="sendChargeConfig">写入充电请求</button></div>
                 <dl class="mini-facts charge-feedback-facts">
                   <div title="主控保存并下发的充电请求值">
                     <dt>请求值</dt>
@@ -304,7 +303,7 @@
               <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><small class="muted">19 项整组写入</small></header>
               <div class="panel-body">
                 <div id="switchList" class="switch-list"></div>
-                <div class="panel-foot"><button class="action-button" type="button" id="sendSwitches">确认并写入全部开关</button></div>
+                <div class="panel-foot"><button class="action-button" type="button" id="sendSwitches">写入告警开关</button></div>
               </div>
             </article>
 
@@ -345,11 +344,11 @@
                 <ul class="action-list">
                   <li>
                     <span class="action-text"><b>清除 Flash 故障日志</b><small>只清历史日志，不消除实时故障，也不解除故障保持</small></span>
-                    <span class="action-controls"><button class="danger-outline" type="button" id="clearFaultLog">请求清除</button></span>
+                    <span class="action-controls"><button class="danger-outline" type="button" id="clearFaultLog">清除日志</button></span>
                   </li>
                   <li>
                     <span class="action-text"><b>故障保持复位</b><small>要求实时一级、二级告警已清除且 HV_ACC 已释放</small></span>
-                    <span class="action-controls"><button class="danger-outline" type="button" id="faultReset">请求复位</button></span>
+                    <span class="action-controls"><button class="danger-outline" type="button" id="faultReset">复位保持</button></span>
                   </li>
                 </ul>
               </div>
@@ -359,31 +358,28 @@
         </section>
 
         <section class="page" id="page-bench" aria-label="台架模拟从控">
-          <div class="page-lead tool-lead">
-            <div>
-              <span class="eyebrow">ENGINEERING TOOL / CAN1</span>
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
               <h2>台架模拟从控</h2>
-              <p>连接 F405 CAN1，按脚本模型周期发送六个从控的电压和温度帧，用于验证接收、告警和离线处理。</p>
+              <span class="tool-header-desc">CAN1 · 500 kbit/s · 六模组从控数据注入</span>
             </div>
-            <span id="benchStatus" class="tag neutral">未连接</span>
+            <div class="tool-header-connection">
+              <span id="benchStatus" class="tag neutral">未连接</span>
+              <div class="tool-connection-controls">
+                <select id="benchChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
+                <button class="action-button" type="button" id="connectBenchButton">连接</button>
+                <button class="danger-outline hidden" type="button" id="disconnectBenchButton">断开</button>
+              </div>
+            </div>
           </div>
 
           <div class="tool-layout bench-layout">
-            <article class="panel tool-connection-panel">
-              <header class="panel-head"><h3>连接 CAN1</h3><span id="benchConnectionInfo" class="panel-context">等待连接</span></header>
-              <div class="panel-body">
-                <div class="tool-connection-row">
-                  <label class="field compact-field"><span class="field-label">PCAN 通道</span><select id="benchChannelSelect"></select></label>
-                  <div class="tool-connection-actions"><button class="action-button" type="button" id="connectBenchButton">连接</button><button class="danger-outline hidden" type="button" id="disconnectBenchButton">断开</button></div>
-                </div>
-                <p class="tool-note">发送目标固定为 F405 CAN1，位率为 500 kbit/s。台架页只模拟从控。</p>
-              </div>
-            </article>
-
             <article class="panel bench-actions-panel">
-              <header class="panel-head"><h3>注入测试场景</h3><span class="panel-context">脚本模型</span></header>
+              <header class="panel-head">
+                <h3>注入测试场景</h3>
+                <span class="panel-context">快捷故障注入与自定义脚本</span>
+              </header>
               <div class="panel-body">
-                <p class="tool-note">快速按钮覆盖常用故障；需要精确修改时直接输入脚本命令。</p>
                 <div class="bench-actions">
                   <button class="outline-button" type="button" data-bench-command="reset">恢复默认</button>
                   <button class="outline-button" type="button" data-bench-command="scenario cellov on 4250">单体过压</button>
@@ -402,33 +398,31 @@
             </article>
 
             <article class="panel bench-state-panel">
-              <header class="panel-head"><h3>从控状态</h3><span id="benchFrameSummary" class="panel-context">未连接</span></header>
+              <header class="panel-head"><h3>从控模型状态</h3><span id="benchFrameSummary" class="panel-context">未连接</span></header>
               <div class="panel-body"><div id="benchSlaves" class="bench-slave-list"></div></div>
             </article>
           </div>
         </section>
 
         <section class="page" id="page-ivt" aria-label="IVT配置">
-          <div class="page-lead tool-lead">
-            <div>
-              <span class="eyebrow">ENGINEERING TOOL / CANB</span>
-              <h2>IVT配置</h2>
-              <p>连接真实 IVT-S，先读取当前配置，再决定是否写入 BMS CANB 目标或切换旧充电机所需的位率。</p>
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>IVT 能量计配置</h2>
+              <span class="tool-header-desc">CANB · 0x410/0x51A · 结果 0x512–0x519</span>
             </div>
-            <span id="ivtConfigStatus" class="tag neutral">未读取</span>
-          </div>
-
-          <article class="panel tool-connection-panel ivt-connection-panel">
-            <header class="panel-head"><h3>连接目标 IVT</h3><span id="ivtCurrentBus" class="panel-context">等待真实 PCAN</span></header>
-            <div class="panel-body">
-              <div class="tool-connection-row ivt-connection-row">
-                <label class="field compact-field"><span class="field-label">PCAN 通道</span><select id="ivtChannelSelect"></select></label>
-                <label class="field compact-field"><span class="field-label">当前位率</span><select id="ivtBitrateSelect"><option value="500000">500 kbit/s</option><option value="250000">250 kbit/s</option></select></label>
-                <div class="tool-connection-actions"><button class="action-button" type="button" id="connectIvtButton">连接</button><button class="danger-outline hidden" type="button" id="disconnectIvtButton">断开</button></div>
+            <div class="tool-header-connection">
+              <span id="ivtConfigStatus" class="tag neutral">未读取</span>
+              <div class="tool-connection-controls">
+                <select id="ivtChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
+                <select id="ivtBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
+                  <option value="500000">500 kbit/s</option>
+                  <option value="250000">250 kbit/s</option>
+                </select>
+                <button class="action-button" type="button" id="connectIvtButton">连接</button>
+                <button class="danger-outline hidden" type="button" id="disconnectIvtButton">断开</button>
               </div>
-              <p class="tool-note">PCAN 位率必须与 IVT 当前位率一致；总线上只保留 PCAN 和目标 IVT。配置或切换完成后，页面会自动等待 Alive 并重新读取。</p>
             </div>
-          </article>
+          </div>
 
           <div class="tool-layout ivt-layout">
             <article class="panel ivt-check-panel">
@@ -453,8 +447,7 @@
               <article class="panel ivt-action-panel">
                 <header class="panel-head"><h3>一次性配置为 BMS CANB</h3><span class="tag neutral">写入并复核</span></header>
                 <div class="panel-body">
-                  <p class="tool-note">首次安装或核对显示“配置不符”时使用。会写入通道格式、周期、结果地址和过流阈值，并重启 IVT。</p>
-                  <div class="ivt-action-fact"><b>配置目标</b><span>通道格式 · 0x410 / 0x51A · 结果 0x512–0x519</span><small>车辆链路使用 500 kbit/s，250 kbit/s 只在“旧充电机过渡”中单独切换。</small></div>
+                  <div class="ivt-action-fact"><b>配置目标</b><span>通道格式 · 0x410 / 0x51A · 结果 0x512–0x519</span><small>车辆链路使用 500 kbit/s</small></div>
                   <button class="action-button" type="button" id="configureIvt">配置为 BMS CANB</button>
                 </div>
               </article>
@@ -462,7 +455,6 @@
               <article class="panel ivt-action-panel legacy-panel">
                 <header class="panel-head"><h3>旧充电机过渡</h3><span class="tag warn">按需使用</span></header>
                 <div class="panel-body">
-                  <p class="tool-note">旧 Legacy 充电机链路使用 250 kbit/s。切回车辆主控时使用 500 kbit/s。</p>
                   <div class="ivt-actions bitrate-actions"><button class="outline-button" type="button" id="switchIvt250">切到 250 kbit/s</button><button class="outline-button" type="button" id="switchIvt500">切到 500 kbit/s</button></div>
                 </div>
               </article>
@@ -472,7 +464,6 @@
           <details class="panel ivt-advanced">
             <summary>高级：当前设备地址和过流核对值</summary>
             <div class="panel-body">
-              <p class="tool-note">通常留空即可自动尝试出厂地址和 BMS 目标地址；只有设备改过地址或阈值时才需要填写。</p>
               <div class="field-grid ivt-core-options">
                 <label class="field"><span class="field-label">当前 Command ID</span><span class="field-input"><input id="ivtCommandId" type="text" placeholder="自动探测" inputmode="text"><em>标准 ID</em></span></label>
                 <label class="field"><span class="field-label">当前 Response ID</span><span class="field-input"><input id="ivtResponseId" type="text" placeholder="自动探测" inputmode="text"><em>标准 ID</em></span></label>
@@ -486,6 +477,214 @@
               </div>
             </div>
           </details>
+        </section>
+
+        <section class="page" id="page-fan" aria-label="整车风扇">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>整车风扇</h2>
+              <span class="tool-header-desc">0x5A2–0x5A7 · 动力总成双回路冷却</span>
+            </div>
+            <div class="tool-header-connection">
+              <span id="fanToolStatus" class="tag neutral">未连接</span>
+              <div class="tool-connection-controls">
+                <select id="fanChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
+                <select id="fanBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
+                  <option value="500000">500 kbit/s</option>
+                  <option value="250000">250 kbit/s</option>
+                </select>
+                <button class="action-button" type="button" id="connectFanButton">连接</button>
+                <button class="danger-outline hidden" type="button" id="disconnectFanButton">断开</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="fan-workspace-grid">
+            <div class="fan-telemetry-column">
+              <article class="panel fan-telemetry-panel">
+                <header class="panel-head">
+                  <h3>动力总成冷却遥测</h3>
+                  <span id="fanFreshTag" class="panel-context">等待数据</span>
+                </header>
+                <div class="panel-body">
+                  <div class="fan-status-banner">
+                    <div class="fan-mode-badge-wrap">
+                      <span class="fan-metric-label">当前模式</span>
+                      <strong id="fanModeText" class="fan-mode-val">—</strong>
+                    </div>
+                    <div class="fan-temp-readouts">
+                      <div class="fan-temp-card">
+                        <div class="fan-temp-meta">
+                          <span class="fan-metric-label">电机最高温度</span>
+                          <span class="fan-source-chip" id="fanTempChip506">0x506</span>
+                        </div>
+                        <b id="fanMotorTemp" class="fan-temp-val">—</b>
+                      </div>
+                      <div class="fan-temp-card">
+                        <div class="fan-temp-meta">
+                          <span class="fan-metric-label">控制器最高温度</span>
+                          <span class="fan-source-chips">
+                            <span class="fan-source-chip" id="fanTempChip507">0x507</span>
+                            <span class="fan-source-chip" id="fanTempChip508">0x508</span>
+                          </span>
+                        </div>
+                        <b id="fanControllerTemp" class="fan-temp-val">—</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="fan-loops-container">
+                    <div class="fan-loop-card">
+                      <div class="fan-loop-head">
+                        <div class="fan-loop-title">
+                          <span class="fan-loop-tag">回路 1</span>
+                          <h4>电机水套冷却 (PWM1)</h4>
+                        </div>
+                        <span class="fan-duty-text" id="fanDuty1Text">—</span>
+                      </div>
+                      <div class="fan-duty-progress">
+                        <div class="meter"><i id="fanDuty1Bar" style="width: 0%"></i></div>
+                      </div>
+                      <div class="fan-tach-row">
+                        <div class="fan-tach-card" id="fanTachCard1">
+                          <div class="fan-tach-meta">
+                            <span>风扇 1 · 电机水套</span>
+                            <span class="fan-tach-state" id="fanState1">—</span>
+                          </div>
+                          <div class="fan-tach-val">
+                            <b id="fanRpm1">—</b><small>RPM</small>
+                          </div>
+                        </div>
+                        <div class="fan-tach-card" id="fanTachCard2">
+                          <div class="fan-tach-meta">
+                            <span>风扇 2 · 电机水套</span>
+                            <span class="fan-tach-state" id="fanState2">—</span>
+                          </div>
+                          <div class="fan-tach-val">
+                            <b id="fanRpm2">—</b><small>RPM</small>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="fan-loop-card">
+                      <div class="fan-loop-head">
+                        <div class="fan-loop-title">
+                          <span class="fan-loop-tag">回路 2</span>
+                          <h4>逆变器与IGBT冷却 (PWM2)</h4>
+                        </div>
+                        <span class="fan-duty-text" id="fanDuty2Text">—</span>
+                      </div>
+                      <div class="fan-duty-progress">
+                        <div class="meter"><i id="fanDuty2Bar" style="width: 0%"></i></div>
+                      </div>
+                      <div class="fan-tach-row single">
+                        <div class="fan-tach-card" id="fanTachCard3">
+                          <div class="fan-tach-meta">
+                            <span>风扇 3 · 逆变器散热</span>
+                            <span class="fan-tach-state" id="fanState3">—</span>
+                          </div>
+                          <div class="fan-tach-val">
+                            <b id="fanRpm3">—</b><small>RPM</small>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="fan-diagnostics-section">
+                    <div class="fan-diag-head">
+                      <h5>自检与故障诊断</h5>
+                      <span id="fanDiagStatus" class="fan-diag-summary">等待数据</span>
+                    </div>
+                    <div class="fan-fault-grid">
+                      <span class="fan-fault-badge" data-fan-fault="0"><i></i>风扇1停转</span>
+                      <span class="fan-fault-badge" data-fan-fault="1"><i></i>风扇2停转</span>
+                      <span class="fan-fault-badge" data-fan-fault="2"><i></i>风扇3停转</span>
+                      <span class="fan-fault-badge" data-fan-fault="3"><i></i>电机温度超时</span>
+                      <span class="fan-fault-badge" data-fan-fault="4"><i></i>控制器温度超时</span>
+                      <span class="fan-fault-badge" data-fan-fault="5"><i></i>PWM1启动失败</span>
+                      <span class="fan-fault-badge" data-fan-fault="6"><i></i>PWM2启动失败</span>
+                      <span class="fan-fault-badge" data-fan-fault="7"><i></i>测速启动失败</span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="fan-control-column">
+              <article class="panel fan-control-panel">
+                <header class="panel-head">
+                  <h3>运行模式设定</h3>
+                  <span id="fanModeStatusTag" class="tag neutral" title="模式命令操作码">0x01</span>
+                </header>
+                <div class="panel-body">
+                  <div class="field-grid fan-mode-fields">
+                    <label class="field"><span class="field-label">目标模式</span><span class="field-input"><select id="fanModeSelect"><option value="0">自动温控</option><option value="1">手动调速</option><option value="2">强制停机</option></select></span></label>
+                    <label class="field"><span class="field-label">有效时间</span><span class="field-input"><input id="fanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                    <label class="field"><span class="field-label">PWM1 目标</span><span class="field-input"><input id="fanDuty1Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">PWM2 目标</span><span class="field-input"><input id="fanDuty2Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
+                  </div>
+                  <p id="fanModeNote" class="fan-inline-note">自动温控 · 根据电机与逆变器温度自动计算目标占空比</p>
+                  <div class="panel-foot"><button class="action-button" type="button" id="sendFanControl">下发模式命令</button></div>
+                </div>
+              </article>
+
+              <article class="panel fan-policy-panel">
+                <header class="panel-head">
+                  <h3>温控曲线与失联保底</h3>
+                </header>
+                <div class="panel-body">
+                  <div class="fan-policy-subblock">
+                    <div class="fan-policy-subhead">
+                      <h4>自动温控曲线</h4>
+                      <span id="fanCurveReport" class="policy-reported-tag">当前值未读取</span>
+                    </div>
+                    <div class="field-grid five-col">
+                      <label class="field"><span class="field-label">关闭温度</span><span class="field-input"><input id="fanTempOffInput" type="number" min="0" max="150" placeholder="35"><em>°C</em></span></label>
+                      <label class="field"><span class="field-label">启动温度</span><span class="field-input"><input id="fanTempOnInput" type="number" min="1" max="150" placeholder="40"><em>°C</em></span></label>
+                      <label class="field"><span class="field-label">全速温度</span><span class="field-input"><input id="fanTempFullInput" type="number" min="2" max="150" placeholder="60"><em>°C</em></span></label>
+                      <label class="field"><span class="field-label">最低占空比</span><span class="field-input"><input id="fanMinDutyInput" type="number" min="10" max="100" placeholder="30"><em>%</em></span></label>
+                      <label class="field"><span class="field-label">上升速度</span><span class="field-input"><input id="fanRampUpInput" type="number" min="10" max="100" placeholder="20"><em>%/s</em></span></label>
+                    </div>
+                    <div class="policy-action-row"><button class="action-button" type="button" id="sendFanCurve">写入温控曲线</button></div>
+                  </div>
+
+                  <div class="fan-policy-subblock">
+                    <div class="fan-policy-subhead">
+                      <h4>温度失联策略</h4>
+                      <span id="fanFailsafeReport" class="policy-reported-tag">当前值未读取</span>
+                    </div>
+                    <div class="field-grid five-col">
+                      <label class="field"><span class="field-label">失联策略</span><span class="field-input"><select id="fanStrategySelect"><option value="1">固定保底</option><option value="0">保持最后</option><option value="2">全速运行</option></select></span></label>
+                      <label class="field"><span class="field-label">PWM1 保底</span><span class="field-input"><input id="fanFallback1Input" type="number" min="0" max="100" placeholder="50"><em>%</em></span></label>
+                      <label class="field"><span class="field-label">PWM2 保底</span><span class="field-input"><input id="fanFallback2Input" type="number" min="0" max="100" placeholder="50"><em>%</em></span></label>
+                      <label class="field"><span class="field-label">保持时间</span><span class="field-input"><input id="fanHoldInput" type="number" min="0" max="30" placeholder="5"><em>s</em></span></label>
+                      <label class="field"><span class="field-label">下降速度</span><span class="field-input"><input id="fanRampDownInput" type="number" min="10" max="100" placeholder="50"><em>%/s</em></span></label>
+                    </div>
+                    <div class="policy-action-row"><button class="action-button" type="button" id="sendFanFailsafe">写入失联策略</button></div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panel fan-maintenance-panel">
+                <header class="panel-head">
+                  <h3>策略维护与应答记录</h3>
+                  <span class="panel-context">策略保存于 RAM</span>
+                </header>
+                <div class="panel-body">
+                  <div class="fan-quick-actions">
+                    <button class="outline-button" type="button" id="fanQueryButton">查询当前策略</button>
+                    <button class="danger-outline" type="button" id="fanRestoreButton">恢复默认策略</button>
+                  </div>
+                  <div class="fan-ack-block">
+                    <div class="fan-ack-head"><b>0x5A5 命令应答记录</b></div>
+                    <div id="fanAckList" class="fan-ack-list"><div class="empty-state">尚未收到 0x5A5 应答。</div></div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
         </section>
 
         <section class="page" id="page-frames" aria-label="CAN 监视器">

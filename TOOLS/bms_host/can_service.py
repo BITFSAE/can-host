@@ -16,7 +16,8 @@ from .ivt import (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
                   compare_readback, expected_bms_canb_config)
 from .protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
-                       BmsProtocol, CanFrame, build_command, command_ack_matches)
+                       BmsProtocol, CanFrame, build_command, build_fan_command,
+                       command_ack_matches, fan_ack_matches)
 
 
 class CanService:
@@ -52,6 +53,7 @@ class CanService:
         self.replay_next_seq = 1
         self.replay_db_buffer: deque[tuple[Any, ...]] = deque()
         self.command_sequence = 0
+        self.fan_command_sequence = 0
         self.ivt_operation_lock = threading.Lock()
         self.ivt_rx_condition = threading.Condition(self.lock)
         self.ivt_rx_frames: deque[IvtFrame] = deque(maxlen=512)
@@ -243,6 +245,48 @@ class CanService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
+        if not acknowledged:
+            return {"ok": False, "error": "发送前必须确认本次写操作"}
+        with self.lock:
+            if not self.connection.get("connected"):
+                return {"ok": False, "error": "CAN 尚未连接"}
+            if self.connection.get("mode") != "pcan":
+                return {"ok": False, "error": "风扇命令只允许使用真实 PCAN 发送"}
+            if self.connection.get("bus_profile") not in {"canb", "canb_legacy"}:
+                return {"ok": False, "error": "风扇命令只允许从 CANB 发送"}
+            self.fan_command_sequence = (self.fan_command_sequence + 1) & 0xFF
+            sequence = self.fan_command_sequence
+            # A late lease-expiry ACK (result 5) may reuse an old sequence;
+            # match on opcode as well before treating it as this command's reply.
+            self.protocol.fan_acks.pop(sequence, None)
+        try:
+            frame = build_fan_command(name, {**(values or {}), "_sequence": sequence})
+            import can
+            message = can.Message(arbitration_id=frame.arbitration_id, data=frame.data,
+                                  is_extended_id=frame.is_extended_id, is_fd=False)
+            self.bus.send(message, timeout=0.2)
+            with self.lock:
+                self.protocol.ingest(frame)
+                self._record(frame)
+            deadline = time.monotonic() + 1.0
+            ack = None
+            while time.monotonic() < deadline:
+                with self.lock:
+                    candidate = self.protocol.fan_acks.get(sequence)
+                    ack = candidate if candidate is not None and fan_ack_matches(name, candidate) else None
+                if ack is not None:
+                    break
+                time.sleep(0.01)
+            if ack is None:
+                return {"ok": False, "sequence": sequence,
+                        "error": "风扇控制器在 1.0s 内没有应答；请确认 FanController 已上电并在 CANB 上"}
+            if not ack.get("accepted"):
+                return {"ok": False, "error": f"风扇控制器拒绝：{ack.get('result_name')}", "ack": ack}
+            return {"ok": True, "sequence": sequence, "message": ack.get("result_name", "已执行"), "ack": ack}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
         with self.lock:
             if self.protocol.fault.get("flags", {}).get("log_clear_pending"):
@@ -308,6 +352,11 @@ class CanService:
         with self.lock:
             return {"connection": dict(self.connection),
                     "ivt_config": dict(self.ivt_config) if self.ivt_config else None}
+
+    def fan_snapshot(self) -> dict[str, Any]:
+        """Return only the state needed by the independent fan page."""
+        with self.lock:
+            return {"connection": dict(self.connection), **self.protocol.fan_state()}
 
     def _start_bench(self, profile: str) -> None:
         if profile != "can1":

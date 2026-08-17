@@ -76,6 +76,42 @@ CANB_IDS = {
     0x519: "IVT 能量计数",
     0x1806E5F4: "Legacy 充电请求",
     0x18FF50E5: "Legacy 充电反馈",
+    0x506: "电机温度输入（四轮）",
+    0x507: "逆变器温度输入（四轮）",
+    0x508: "IGBT 温度输入（四轮）",
+    0x5A2: "风扇实际状态",
+    0x5A3: "风扇诊断",
+    0x5A4: "风扇命令",
+    0x5A5: "风扇命令应答",
+    0x5A6: "风扇自动曲线状态",
+    0x5A7: "风扇失联策略状态",
+}
+
+# FanController node on CANB (see FanController/Core/Src/fan_controller.c).
+# Status frames use big-endian 16-bit fields; commands carry CRC-8/SAE-J1850.
+FAN_STATUS_ID = 0x5A2
+FAN_DIAGNOSTIC_ID = 0x5A3
+FAN_COMMAND_ID = 0x5A4
+FAN_COMMAND_ACK_ID = 0x5A5
+FAN_CURVE_STATUS_ID = 0x5A6
+FAN_FAILSAFE_STATUS_ID = 0x5A7
+
+FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
+FAN_FAILSAFE_NAMES = {0: "保持最后目标", 1: "固定保底", 2: "全速"}
+FAN_RESULT_NAMES = {
+    0: "成功", 1: "CRC 错误", 2: "长度错误", 3: "参数错误",
+    4: "操作码不支持", 5: "模式超时，已回到自动",
+}
+FAN_FAULT_NAMES = [
+    "风扇 1 无转速", "风扇 2 无转速", "风扇 3 无转速", "电机温度超时",
+    "控制器温度超时", "PWM1 启动失败", "PWM2 启动失败", "测速启动失败",
+]
+FAN_COMMAND_CODES = {
+    "fan_control": 0x01,
+    "fan_curve": 0x02,
+    "fan_failsafe": 0x03,
+    "fan_restore_defaults": 0x04,
+    "fan_query": 0x05,
 }
 
 # Keep the names aligned with the firmware state constants and the DOC status
@@ -143,6 +179,19 @@ def command_ack_matches(name: str, ack: dict[str, Any]) -> bool:
     """Return whether an ACK belongs to the named command, not only its 8-bit sequence."""
     expected = COMMAND_CODES.get(name)
     return expected is not None and int(ack.get("command", -1)) == expected
+
+
+def _fan_opcode_name(opcode: int) -> str:
+    for name, code in FAN_COMMAND_CODES.items():
+        if code == opcode:
+            return name
+    return f"操作码 0x{opcode:02X}"
+
+
+def fan_ack_matches(name: str, ack: dict[str, Any]) -> bool:
+    """Return whether a FanController ACK echoes the named command's opcode and sequence."""
+    expected = FAN_COMMAND_CODES.get(name)
+    return expected is not None and int(ack.get("opcode", -1)) == expected
 
 IMD_STATUS_NAMES = {
     0: "正常", 1: "OK_HS 故障", 2: "PWM 无效", 3: "绝缘不通过",
@@ -234,6 +283,9 @@ class BmsProtocol:
         self.sensor_diag: dict[str, Any] = {}
         self.firmware: dict[str, Any] = {}
         self.command_acks: dict[int, dict[str, Any]] = {}
+        self.fan: dict[str, Any] = {"status": {}, "diagnostic": {}, "curve": {}, "failsafe": {}}
+        self.fan_acks: dict[int, dict[str, Any]] = {}
+        self.fan_ack_history: deque[dict[str, Any]] = deque(maxlen=40)
         self.flash_log_info: dict[str, Any] = {}
         self.flash_log_records: dict[int, dict[str, Any]] = {}
         self._flash_record_parts: dict[int, dict[int, bytes]] = {}
@@ -256,6 +308,10 @@ class BmsProtocol:
         self.last_runtime_diag_monotonic: float | None = None
         self.last_thresholds_monotonic: float | None = None
         self.last_switches_monotonic: float | None = None
+        self.last_fan_status_monotonic: float | None = None
+        self.last_fan_diagnostic_monotonic: float | None = None
+        self.last_fan_curve_monotonic: float | None = None
+        self.last_fan_failsafe_monotonic: float | None = None
         # Production Debug/Release firmware uses 350 ms. The identity frame
         # switches this to the 750 ms Debug-Bringup window when received.
         self.slave_sample_timeout_s = 0.35
@@ -549,6 +605,69 @@ class BmsProtocol:
             self.relay.update({"chroma_protect_bits": protect, "charger_feedback_state": 1 if protect else 0})
         elif can_id == 0x405 and not frame.is_extended_id and len(data) >= 4:
             self.relay["chroma_output_state"] = data[3]
+        elif can_id == FAN_STATUS_ID and not frame.is_extended_id and len(data) >= 8:
+            self.fan["status"] = {
+                "rpm": [_u16be(data), _u16be(data, 2), _u16be(data, 4)],
+                "duty_pct": [data[6], data[7]],
+            }
+            self.last_fan_status_monotonic = now_mono
+        elif can_id == FAN_DIAGNOSTIC_ID and not frame.is_extended_id and len(data) >= 8:
+            flags = data[1]
+            motor_raw = int.from_bytes(data[2:4], "big", signed=True)
+            controller_raw = int.from_bytes(data[4:6], "big", signed=True)
+            self.fan["diagnostic"] = {
+                "faults": data[0],
+                "fault_names": [FAN_FAULT_NAMES[bit] for bit in range(8) if data[0] & (1 << bit)],
+                "motor_temp_valid": bool(flags & 0x01),
+                "inverter_temp_valid": bool(flags & 0x02),
+                "igbt_temp_valid": bool(flags & 0x04),
+                "group1_running": bool(flags & 0x08),
+                "group2_running": bool(flags & 0x10),
+                "mode": (flags >> 5) & 0x03,
+                "mode_name": FAN_MODE_NAMES.get((flags >> 5) & 0x03, "未知"),
+                # 0x7FFF marks a stale source; do not show it as a temperature.
+                "motor_temp_c": motor_raw / 10.0 if motor_raw != 0x7FFF else None,
+                "controller_temp_c": controller_raw / 10.0 if controller_raw != 0x7FFF else None,
+                "target_pct": [data[6], data[7]],
+            }
+            self.last_fan_diagnostic_monotonic = now_mono
+        elif can_id == FAN_COMMAND_ACK_ID and not frame.is_extended_id and len(data) >= 8:
+            mode, failsafe = data[3] & 0x03, (data[3] >> 4) & 0x03
+            ack = {
+                "opcode": data[0], "opcode_name": _fan_opcode_name(data[0]),
+                "sequence": data[1], "result": data[2],
+                "result_name": FAN_RESULT_NAMES.get(data[2], f"未知 {data[2]}"),
+                "accepted": data[2] == 0, "mode": mode,
+                "mode_name": FAN_MODE_NAMES.get(mode, "未知"),
+                "failsafe": failsafe,
+                "failsafe_name": FAN_FAILSAFE_NAMES.get(failsafe, "未知"),
+                "duty_pct": [data[4], data[5]], "target_pct": [data[6], data[7]],
+            }
+            self.fan_acks[data[1]] = ack
+            if len(self.fan_acks) > 64:
+                self.fan_acks.pop(next(iter(self.fan_acks)))
+            self.fan_ack_history.appendleft({
+                "time": datetime.fromtimestamp(frame.timestamp).strftime("%H:%M:%S.%f")[:-3],
+                **{key: ack[key] for key in ("opcode_name", "sequence", "result", "result_name",
+                                              "mode_name", "failsafe_name", "accepted")},
+                "duty_pct": list(ack["duty_pct"]), "target_pct": list(ack["target_pct"]),
+            })
+        elif can_id == FAN_CURVE_STATUS_ID and not frame.is_extended_id and len(data) >= 5:
+            self.fan["curve"] = {
+                "temp_off_c": data[0], "temp_on_c": data[1], "temp_full_c": data[2],
+                "min_duty_pct": data[3], "ramp_up_pct_per_s": data[4],
+            }
+            self.last_fan_curve_monotonic = now_mono
+        elif can_id == FAN_FAILSAFE_STATUS_ID and not frame.is_extended_id and len(data) >= 7:
+            self.fan["failsafe"] = {
+                "failsafe": data[0],
+                "failsafe_name": FAN_FAILSAFE_NAMES.get(data[0], f"未知 {data[0]}"),
+                "fallback1_duty_pct": data[1], "fallback2_duty_pct": data[2],
+                "stale_hold_s": data[3], "ramp_down_pct_per_s": data[4],
+                "mode": data[5], "mode_name": FAN_MODE_NAMES.get(data[5], "未知"),
+                "lease_remaining_s": data[6],
+            }
+            self.last_fan_failsafe_monotonic = now_mono
 
         if now_mono - self._last_trend >= 0.45:
             relay_age = _age(now_mono, self.last_relay_command_monotonic)
@@ -653,6 +772,16 @@ class BmsProtocol:
     def _name_overview_state(self) -> None:
         self.overview["state_name"] = STATE_NAMES.get(self.overview.get("state"), f"未知 {self.overview.get('state')}")
         self.overview["alarm_level_name"] = ALARM_LEVEL_NAMES.get(self.overview.get("alarm_level"), "未知")
+
+    def fan_state(self) -> dict[str, Any]:
+        """Return the FanController view with freshness ages for the fan tool page."""
+        now = self.clock()
+        fan = {key: dict(value) for key, value in self.fan.items()}
+        fan["status_age"] = _age(now, self.last_fan_status_monotonic)
+        fan["diagnostic_age"] = _age(now, self.last_fan_diagnostic_monotonic)
+        fan["curve_age"] = _age(now, self.last_fan_curve_monotonic)
+        fan["failsafe_age"] = _age(now, self.last_fan_failsafe_monotonic)
+        return {"fan": fan, "fan_ack_history": list(self.fan_ack_history)}
 
     def snapshot(self, connection: dict[str, Any]) -> dict[str, Any]:
         now = self.clock()
@@ -821,6 +950,70 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
         request.extend(bytes([dt.year - 2000, dt.month, dt.day, dt.hour, dt.minute, dt.second]))
         return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     raise ValueError(f"未知命令：{name}")
+
+
+def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
+    """Build a validated FanController command frame (CANB 0x5A4, DLC 8).
+
+    Byte layout: opcode, sequence, five parameters, CRC-8/SAE-J1850 over
+    bytes 0..6.  Ranges mirror fan_controller.c process_command().
+    """
+    values = values or {}
+    sequence = int(values.get("_sequence", 0)) & 0xFF
+
+    def command_frame(opcode: int, parameters: bytes) -> CanFrame:
+        body = bytearray([opcode, sequence, *parameters])
+        body.append(_crc8_sae_j1850(body))
+        return CanFrame(FAN_COMMAND_ID, bytes(body), False, time.time(), "tx")
+
+    if name == "fan_control":
+        mode = int(values.get("mode", -1))
+        duty1 = int(values.get("duty1_pct", 0))
+        duty2 = int(values.get("duty2_pct", 0))
+        lease_s = int(values.get("lease_s", 0))
+        if mode not in (0, 1, 2):
+            raise ValueError("风扇模式必须是 0=自动、1=手动 或 2=关闭")
+        if not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
+            raise ValueError("占空比必须在 0..100 %")
+        if mode != 0 and not 1 <= lease_s <= 60:
+            raise ValueError("手动/关闭模式的有效时间必须在 1..60 秒")
+        if mode == 2 and (duty1 != 0 or duty2 != 0):
+            raise ValueError("关闭模式的两路占空比必须为 0")
+        if mode == 0:
+            duty1 = duty2 = lease_s = 0
+        return command_frame(0x01, bytes([mode, duty1, duty2, lease_s, 0]))
+    if name == "fan_curve":
+        temp_off, temp_on, temp_full = int(values["temp_off_c"]), int(values["temp_on_c"]), int(values["temp_full_c"])
+        min_duty = int(values["min_duty_pct"])
+        ramp_up = int(values["ramp_up_pct_per_s"])
+        if not (0 <= temp_off <= 150 and 0 <= temp_on <= 150 and 0 <= temp_full <= 150
+                and temp_off < temp_on < temp_full):
+            raise ValueError("温控曲线必须满足 关闭 < 启动 < 全速，且都不超过 150 ℃")
+        if not 10 <= min_duty <= 100:
+            raise ValueError("最低运行占空比必须在 10..100 %")
+        if not 10 <= ramp_up <= 100:
+            raise ValueError("占空比上升速度必须在 10..100 %/s")
+        return command_frame(0x02, bytes([temp_off, temp_on, temp_full, min_duty, ramp_up]))
+    if name == "fan_failsafe":
+        strategy = int(values["strategy"])
+        fallback1 = int(values["fallback1_duty_pct"])
+        fallback2 = int(values["fallback2_duty_pct"])
+        hold_s = int(values["stale_hold_s"])
+        ramp_down = int(values["ramp_down_pct_per_s"])
+        if strategy not in (0, 1, 2):
+            raise ValueError("失联策略必须是 0=保持最后目标、1=固定保底 或 2=全速")
+        if not (0 <= fallback1 <= 100 and 0 <= fallback2 <= 100):
+            raise ValueError("保底占空比必须在 0..100 %")
+        if not 0 <= hold_s <= 30:
+            raise ValueError("保持最后目标的时间必须在 0..30 秒")
+        if not 10 <= ramp_down <= 100:
+            raise ValueError("占空比下降速度必须在 10..100 %/s")
+        return command_frame(0x03, bytes([strategy, fallback1, fallback2, hold_s, ramp_down]))
+    if name == "fan_restore_defaults":
+        return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
+    if name == "fan_query":
+        return command_frame(0x05, bytes([0, 0, 0, 0, 0]))
+    raise ValueError(f"未知风扇命令：{name}")
 
 
 def switch_catalog() -> list[dict[str, Any]]:

@@ -23,11 +23,12 @@ class Api:
         # The source build keeps the simulator for UI/protocol development.
         # A frozen Windows release is a field tool and only exposes real PCAN.
         self._service = CanService(allow_simulation=not getattr(sys, "frozen", False))
-        # The two engineering tools have their own transport lifetime.  This
+        # The engineering tools have their own transport lifetime.  This
         # lets the operator keep the BMS monitor on CAN1 while the bench
-        # sender or the IVT configurator uses its own PCAN handle.
+        # sender, the IVT configurator, or the fan tool uses its own PCAN handle.
         self._bench_service = CanService(allow_simulation=False)
         self._ivt_service = CanService(allow_simulation=False)
+        self._fan_service = CanService(allow_simulation=False)
         self._window: Any = None
 
     def bootstrap(self) -> dict[str, Any]:
@@ -49,6 +50,7 @@ class Api:
             "simulation_enabled": self._service.allow_simulation,
             "bench_enabled": True,
             "ivt_enabled": True,
+            "fan_enabled": True,
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
             "profiles": profiles,
         }
@@ -84,6 +86,23 @@ class Api:
 
     def get_ivt_snapshot(self) -> dict[str, Any]:
         return self._ivt_service.ivt_snapshot()
+
+    def connect_fan(self, config: dict[str, Any]) -> dict[str, Any]:
+        profile = str(config.get("bus_profile") or "canb")
+        bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
+        return self._fan_service.connect({
+            "mode": "pcan", "bus_profile": profile,
+            "channel": config.get("channel"), "bitrate": bitrate,
+        })
+
+    def disconnect_fan(self) -> dict[str, Any]:
+        return self._fan_service.disconnect()
+
+    def get_fan_snapshot(self) -> dict[str, Any]:
+        return self._fan_service.fan_snapshot()
+
+    def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
+        return self._fan_service.send_fan_command(name, values, acknowledged)
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()
@@ -149,6 +168,7 @@ class Api:
         self._service.disconnect()
         self._bench_service.disconnect()
         self._ivt_service.disconnect()
+        self._fan_service.disconnect()
 
 
 def main() -> None:

@@ -287,6 +287,12 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   white-space: nowrap;
   overflow: hidden;
 }
+body.is-tool-page .statusbar {
+  display: none;
+}
+body.is-tool-page .workspace {
+  grid-template-rows: minmax(0, 1fr);
+}
 .statusbar .connect-button {
   flex: 0 1 auto;
   width: fit-content;
@@ -2057,4 +2063,491 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   .nav-tools > summary > i { display: none; }
   .nav-tool-items { margin-top: 3px; padding-left: 0; }
   .nav-tool-items .nav-item { width: 48px; min-height: 44px; margin-inline: auto; padding: 0; }
+}
+
+/* ---------- Fan tool page & Integrated Tool Header ---------- */
+
+.tool-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.tool-header-info {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tool-header-info h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.tool-header-desc {
+  font: 11px var(--mono);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.tool-header-connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.tool-connection-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-connection-controls select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 12px var(--mono);
+  cursor: pointer;
+  transition: border-color .14s ease;
+}
+
+.tool-connection-controls select:hover {
+  border-color: var(--line);
+}
+
+.tool-connection-controls .tool-channel-select {
+  min-width: 135px;
+}
+
+.tool-connection-controls .tool-bitrate-select {
+  min-width: 110px;
+}
+
+.tool-connection-controls button {
+  height: 34px;
+  min-width: 72px;
+}
+
+@media (max-width: 900px) {
+  .tool-header-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .tool-header-connection {
+    justify-content: space-between;
+  }
+}
+
+.fan-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.26fr) minmax(350px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.fan-telemetry-column,
+.fan-control-column {
+  display: grid;
+  gap: 12px;
+}
+
+/* Status Banner & Temperatures */
+.fan-status-banner {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+  align-items: stretch;
+}
+
+.fan-mode-badge-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.fan-metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: .04em;
+}
+
+.fan-mode-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.fan-temp-readouts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fan-temp-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, .018);
+}
+
+.fan-temp-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.fan-source-chips {
+  display: flex;
+  gap: 4px;
+}
+
+.fan-source-chip {
+  padding: 1px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  font: 10px var(--mono);
+  transition: all .16s ease;
+}
+
+.fan-source-chip.on {
+  color: var(--ok);
+  border-color: rgba(62, 207, 142, .4);
+  background: var(--ok-dim);
+}
+
+.fan-temp-val {
+  margin-top: 4px;
+  color: var(--text);
+  font: 20px var(--mono);
+  font-weight: 650;
+}
+
+/* Cooling Loops */
+.fan-loops-container {
+  display: grid;
+  gap: 10px;
+}
+
+.fan-loop-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.fan-loop-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fan-loop-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fan-loop-tag {
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.fan-loop-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fan-duty-text {
+  font: 12.5px var(--mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fan-duty-progress {
+  margin: 9px 0 11px;
+}
+
+.fan-duty-progress .meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.fan-duty-progress .meter i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ok);
+  transition: width .2s ease;
+}
+
+.fan-tach-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fan-tach-row.single {
+  grid-template-columns: 1fr;
+}
+
+.fan-tach-card {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.fan-tach-card.running {
+  border-color: rgba(62, 207, 142, .3);
+}
+
+.fan-tach-card.stalled {
+  border-color: rgba(242, 85, 77, .45);
+  background: var(--fault-dim);
+}
+
+.fan-tach-card.starting {
+  border-color: rgba(240, 180, 41, .35);
+}
+
+.fan-tach-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.fan-tach-state {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.fan-tach-state.ok { color: var(--ok); }
+.fan-tach-state.warn { color: var(--warn); }
+.fan-tach-state.bad { color: var(--fault); }
+.fan-tach-state.muted { color: var(--text-3); }
+
+.fan-tach-val {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.fan-tach-val b {
+  color: var(--text);
+  font: 19px var(--mono);
+  font-weight: 650;
+}
+
+.fan-tach-val small {
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+/* Diagnostics & Faults */
+.fan-diagnostics-section {
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, .2);
+}
+
+.fan-diag-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 9px;
+}
+
+.fan-diag-head h5 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.fan-diag-summary {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.fan-diag-summary.ok { color: var(--ok); }
+.fan-diag-summary.bad { color: var(--fault); }
+
+.fan-fault-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fan-fault-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-3);
+  font-size: 10.5px;
+  transition: all .15s ease;
+}
+
+.fan-fault-badge i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--idle);
+  flex: none;
+}
+
+.fan-fault-badge.on {
+  color: var(--fault);
+  border-color: rgba(242, 85, 77, .5);
+  background: var(--fault-dim);
+  font-weight: 600;
+}
+
+.fan-fault-badge.on i {
+  background: var(--fault);
+  box-shadow: 0 0 5px var(--fault);
+}
+
+/* Control & Policy Panels */
+.fan-mode-fields {
+  margin-bottom: 8px;
+}
+
+.fan-inline-note {
+  margin: 4px 0 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.fan-policy-subblock {
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.fan-policy-subblock + .fan-policy-subblock {
+  margin-top: 10px;
+}
+
+.fan-policy-subhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.fan-policy-subhead h4 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.policy-reported-tag {
+  font: 11px var(--mono);
+  color: var(--text-3);
+}
+
+.five-col {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.policy-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.policy-action-row button {
+  min-width: 110px;
+}
+
+.fan-quick-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fan-quick-actions button {
+  flex: 1 1 0;
+}
+
+.fan-ack-block {
+  display: grid;
+  gap: 6px;
+}
+
+.fan-ack-head {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.fan-ack-list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, .2);
+}
+
+.fan-ack-list .event-item p.ok { color: var(--ok); }
+.fan-ack-list .event-item p.bad { color: var(--fault); }
+
+@media (max-width: 1180px) {
+  .fan-workspace-grid { grid-template-columns: 1fr; }
+  .fan-fault-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .five-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  .fan-status-banner { grid-template-columns: 1fr; }
+  .fan-temp-readouts { grid-template-columns: 1fr; }
+  .five-col { grid-template-columns: 1fr; }
 }
