@@ -88,6 +88,7 @@
 - 新增 `.github/workflows/host-release.yml`：推送 `host-v*` 标签触发，先核对标签版本与 `TOOLS/bms_host/__init__.py` 的 `__version__` 一致（不一致直接失败），再复用 `build_windows.ps1` 在 windows-latest 完成测试和 PyInstaller 打包，将 one-folder 目录压缩为 `BITFSAE_BMS_Control_Desk_<标签>.zip` 并创建 GitHub Release 附上附件；手动触发时只上传构建产物，不创建 Release。
 - `README.md` 新增“CI 自动构建与发布”一节，说明标签约定和发布步骤。
 - CI 首跑发现 Windows 编码问题并修复：`test_overview_markup_matches_information_hierarchy` 读取 `web/index.html` 未指定编码，Windows 默认 cp1252 解码 UTF-8 中文直接报错（英文 Windows 上 `build_windows.ps1` 同样会挂）；改为 `read_text(encoding="utf-8")`。应用本体经 `file://` 由 WebView2 渲染界面，不受影响。
+- CI 首跑发现 `build_windows.ps1` 吞掉失败并修复：Windows PowerShell 对原生命令非零退出码默认不中止，单测失败后仍继续 PyInstaller 打包并以退出码 0 结束；现在 venv 创建、pip、单测和 PyInstaller 每步检查 `$LASTEXITCODE`，失败立即退出，测试不过不再出包。
 
 #### 整车风扇工具页
 
