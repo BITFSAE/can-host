@@ -24,6 +24,8 @@ const state = {
   lastZoomWheelAt: 0,
   chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0, connectionKey: null },
   saveWatch: null,
+  cellRefs: null,
+  frameRowPool: [],
 };
 
 const PACK_CAPACITY_AH = 16.2;
@@ -135,6 +137,7 @@ async function init() {
     populateConnectionOptions();
     populateToolChannelOptions();
     buildSwitchList();
+    buildSwitchStatusList();
     await poll();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
@@ -495,6 +498,18 @@ function buildSwitchList() {
     `<label class="switch-row" data-key="${item.key}" title="${item.name} · ${item.code} · ${item.variable}"><i class="switch-dot"></i>`
     + `<span class="switch-label"><b>${item.name}</b><small>${item.code}</small></span>`
     + `<b class="switch-state">等待</b><input type="checkbox" data-key="${item.key}"><span class="switch-track"></span></label>`
+  ).join("");
+}
+
+/** Build the protection-switch status grid once; renderConfig only patches state
+ *  text and class afterwards so the static title tooltips survive polling. */
+function buildSwitchStatusList() {
+  const catalog = state.bootstrap?.switch_catalog || [];
+  const statusList = $("#switchStatusList");
+  if (!statusList) return;
+  statusList.innerHTML = catalog.map(item =>
+    `<span class="protection-switch" title="${item.name} · ${item.code} · ${item.variable}">`
+    + `<i></i><span class="protection-label"><b>${item.name}</b><small>${item.code}</small></span><b class="switch-state">等待</b></span>`
   ).join("");
 }
 
@@ -1096,13 +1111,15 @@ function renderConfig() {
   if (statusList && state.bootstrap?.switch_catalog) {
     const enabledCount = state.bootstrap.switch_catalog.filter(item => switches[item.key]).length;
     text("#switchStatusSummary", hasSwitchReport ? `启用 ${enabledCount} / ${state.bootstrap.switch_catalog.length}` : "等待回报");
-    statusList.innerHTML = state.bootstrap.switch_catalog.map(item => {
+    [...statusList.querySelectorAll(".protection-switch")].forEach((node, index) => {
+      const item = state.bootstrap.switch_catalog[index];
+      if (!item) return;
       const enabled = hasSwitchReport && !!switches[item.key];
       const stateClass = !hasSwitchReport ? "pending" : enabled ? "enabled" : "disabled";
       const stateText = !hasSwitchReport ? "等待" : enabled ? "启用" : "关闭";
-      return `<span class="protection-switch ${stateClass}" title="${item.name} · ${item.code} · ${item.variable}">`
-        + `<i></i><span class="protection-label"><b>${item.name}</b><small>${item.code}</small></span><b>${stateText}</b></span>`;
-    }).join("");
+      node.className = `protection-switch ${stateClass}`;
+      node.querySelector(".switch-state").textContent = stateText;
+    });
   }
   if (!hasSwitchReport && !state.dirty.switches) {
     $$("#switchList input").forEach(input => input.checked = false);
@@ -1715,14 +1732,66 @@ function renderCellBadge() {
   $("#cellNavBadge").classList.toggle("hidden", missing === 0);
 }
 
+function makeCellItem(label, unit) {
+  const root = document.createElement("div");
+  root.className = "cell-item";
+  root.innerHTML = `<small>${label}</small><b><span class="cell-value"></span><em>${unit}</em></b>`;
+  return { root, value: root.querySelector(".cell-value") };
+}
+
+/** Build the fixed 6-module / 23-cell / 8-temp grid once so later polls only patch
+ *  text, class and title in place. Rebuilding the DOM every poll kept destroying the
+ *  element under the cursor, which made the native title tooltip (data age) flicker. */
+function buildCellGrids() {
+  const container = $("#cellModules");
+  container.innerHTML = "";
+  const placeholder = document.createElement("div");
+  placeholder.className = "filter-empty";
+  placeholder.innerHTML = "<b>当前没有异常或缺失数据</b><span>138 串电压与 48 路温度均在当前阈值范围内。</span>";
+  placeholder.classList.add("hidden");
+  container.appendChild(placeholder);
+  const modules = [];
+  for (let index = 0; index < 6; index++) {
+    const section = document.createElement("section");
+    section.className = "cell-module";
+    section.innerHTML = `<div class="cell-module-head"><strong>BMU ${index + 1}</strong>`
+      + `<span class="module-issue hidden"></span>`
+      + `<span class="module-stats"><span>电压 <b></b></span><span>压差 <b></b></span><span>温度 <b></b></span></span></div>`
+      + `<div class="combined-module-body">`
+      + `<div aria-label="BMU ${index + 1} 电压"><div class="cell-grid voltage-grid"></div></div>`
+      + `<div aria-label="BMU ${index + 1} 温度"><div class="cell-grid temperature-grid"></div></div></div>`;
+    container.appendChild(section);
+    const cells = Array.from({ length: 23 }, (_, i) => makeCellItem(`C${i + 1}`, "mV"));
+    const temps = Array.from({ length: 8 }, (_, i) => makeCellItem(`T${i + 1}`, "°C"));
+    section.querySelector(".voltage-grid").append(...cells.map(item => item.root));
+    section.querySelector(".temperature-grid").append(...temps.map(item => item.root));
+    const statBs = [...section.querySelectorAll(".module-stats b")];
+    modules.push({ section, issue: section.querySelector(".module-issue"), statBs, cells, temps });
+  }
+  state.cellRefs = { placeholder, modules };
+}
+
+function updateCellItem(item, ref, voltage, onlyAbnormal, thresholds) {
+  const status = cellStatus(item, voltage, thresholds);
+  ref.root.className = `cell-item ${status}`;
+  ref.root.classList.toggle("hidden", onlyAbnormal && !status);
+  ref.root.title = `${item.status} · 最近数据 ${item.age ?? "—"} s`;
+  ref.value.textContent = item.value ?? "—";
+}
+
 function renderCells() {
   if (!state.snapshot) return;
   if (state.snapshot.raw_cell_data_available !== true) {
     ["#gridMax", "#gridMin", "#gridDelta", "#tempGridMax", "#tempGridMin", "#tempGridDelta"].forEach(id => text(id, "—"));
     $("#cellDataIssue").classList.add("hidden");
-    $("#cellModules").innerHTML = '<div class="filter-empty"><b>CANB 无单体原始数据</b><span>请连接 CAN1 查看 138 串电压和 48 路温度。</span></div>';
+    const container = $("#cellModules");
+    if (state.cellRefs || !container.firstElementChild) {
+      state.cellRefs = null;
+      container.innerHTML = '<div class="filter-empty"><b>CANB 无单体原始数据</b><span>请连接 CAN1 查看 138 串电压和 48 路温度。</span></div>';
+    }
     return;
   }
+  if (!state.cellRefs) buildCellGrids();
   const cells = state.snapshot.cells || [], temps = state.snapshot.temps || [];
   const cellTotal = extremes(cells), tempTotal = extremes(temps);
   text("#gridMax", cellTotal.max == null ? "—" : `${cellTotal.max} mV`);
@@ -1743,46 +1812,85 @@ function renderCells() {
   text("#displayOt", thresholds.ot_c == null ? "等待数据" : `${thresholds.ot_c} °C`);
   text("#displayUt", thresholds.ut_c == null ? "等待数据" : `${thresholds.ut_c} °C`);
   const onlyAbnormal = $("#onlyAbnormal").checked;
-  const renderItem = (item, voltage, localNo) => {
-    const status = cellStatus(item, voltage, thresholds);
-    if (onlyAbnormal && !status) return "";
-    const label = voltage ? "C" : "T", unit = voltage ? "mV" : "°C";
-    return `<div class="cell-item ${status}" title="${item.status} · 最近数据 ${item.age ?? "—"} s">`
-      + `<small>${label}${localNo}</small><b>${item.value ?? "—"}<em>${unit}</em></b></div>`;
-  };
-  const modules = Array.from({ length: 6 }, (_, index) => {
+  let abnormalTotal = 0;
+  state.cellRefs.modules.forEach((refs, index) => {
     const cellGroup = cells.filter(item => item.module === index + 1);
     const tempGroup = temps.filter(item => item.module === index + 1);
     const module = state.snapshot.modules[index] || {};
     const cellStats = extremes(cellGroup), tempStats = extremes(tempGroup);
-    const cellMarkup = cellGroup.map((item, itemIndex) => renderItem(item, true, itemIndex + 1)).join("");
-    const tempMarkup = tempGroup.map((item, itemIndex) => renderItem(item, false, itemIndex + 1)).join("");
-    if (onlyAbnormal && !cellMarkup && !tempMarkup) return "";
+    let moduleAbnormal = 0;
+    cellGroup.forEach((item, itemIndex) => {
+      if (itemIndex >= refs.cells.length) return;
+      updateCellItem(item, refs.cells[itemIndex], true, onlyAbnormal, thresholds);
+      if (item.value == null || cellStatus(item, true, thresholds)) moduleAbnormal += 1;
+    });
+    tempGroup.forEach((item, itemIndex) => {
+      if (itemIndex >= refs.temps.length) return;
+      updateCellItem(item, refs.temps[itemIndex], false, onlyAbnormal, thresholds);
+      if (item.value == null || cellStatus(item, false, thresholds)) moduleAbnormal += 1;
+    });
+    abnormalTotal += moduleAbnormal;
     const missing = cellGroup.length - cellStats.valid + tempGroup.length - tempStats.valid;
-    const moduleIssue = !module.online
-      ? `<span class="module-issue">通信中断</span>`
-      : missing > 0 ? `<span class="module-issue">缺失 ${missing} 项</span>` : "";
-    return `<section class="cell-module"><div class="cell-module-head">`
-      + `<strong>BMU ${index + 1}</strong>`
-      + moduleIssue
-      + `<span class="module-stats"><span>电压 <b>${cellStats.min ?? "—"}–${cellStats.max ?? "—"} mV</b></span>`
-      + `<span>压差 <b>${cellStats.max == null ? "—" : cellStats.max - cellStats.min} mV</b></span>`
-      + `<span>温度 <b>${tempStats.min == null ? "—" : fmt(tempStats.min, 1)}–${tempStats.max == null ? "—" : fmt(tempStats.max, 1)} °C</b></span></span>`
-      + `</div><div class="combined-module-body"><div aria-label="BMU ${index + 1} 电压"><div class="cell-grid voltage-grid">${cellMarkup}</div></div>`
-      + `<div aria-label="BMU ${index + 1} 温度"><div class="cell-grid temperature-grid">${tempMarkup}</div></div></div></section>`;
-  }).join("");
-  $("#cellModules").innerHTML = modules || `<div class="filter-empty"><b>当前没有异常或缺失数据</b><span>138 串电压与 48 路温度均在当前阈值范围内。</span></div>`;
+    refs.issue.textContent = !module.online ? "通信中断" : missing > 0 ? `缺失 ${missing} 项` : "";
+    refs.issue.classList.toggle("hidden", module.online && missing === 0);
+    refs.statBs[0].textContent = `${cellStats.min ?? "—"}–${cellStats.max ?? "—"} mV`;
+    refs.statBs[1].textContent = cellStats.max == null ? "—" : `${cellStats.max - cellStats.min} mV`;
+    refs.statBs[2].textContent = `${tempStats.min == null ? "—" : fmt(tempStats.min, 1)}–${tempStats.max == null ? "—" : fmt(tempStats.max, 1)} °C`;
+    refs.section.classList.toggle("hidden", onlyAbnormal && moduleAbnormal === 0);
+  });
+  state.cellRefs.placeholder.classList.toggle("hidden", !(onlyAbnormal && abnormalTotal === 0));
 }
 
+function fillFrameRow(row, frame) {
+  row.className = frame.direction;
+  row.innerHTML = `<td>${frame.time}</td>`
+    + `<td><span class="dir-tag ${frame.direction}">${frame.direction.toUpperCase()}</span></td>`
+    + `<td>${frame.id}</td><td>${frame.extended ? "扩展" : "标准"}</td><td>${frame.dlc}</td>`
+    + `<td title="${frame.data}">${frame.data}</td><td title="${frame.name}">${frame.name}</td>`;
+}
+
+function frameKey(frame) {
+  return `${frame.time}|${frame.direction}|${frame.id}|${frame.extended}|${frame.dlc}|${frame.data}|${frame.name}`;
+}
+
+/** Reuse table rows keyed by their full content so unchanged rows keep their DOM node
+ *  and the native title tooltips on data/name cells stay visible while polling. */
 function renderFrames() {
   if (!state.snapshot) return;
   const frames = state.framePaused ? state.pausedFrames : state.snapshot.raw_frames;
   const query = $("#frameSearch").value.trim().toLowerCase();
   const filtered = frames.filter(frame => (state.frameKind === "all" || frame.direction === state.frameKind) && (!query || `${frame.id} ${frame.name} ${frame.data}`.toLowerCase().includes(query))).slice(0, 180);
-  $("#frameRows").innerHTML = filtered.map(frame => `<tr class="${frame.direction}"><td>${frame.time}</td>`
-    + `<td><span class="dir-tag ${frame.direction}">${frame.direction.toUpperCase()}</span></td>`
-    + `<td>${frame.id}</td><td>${frame.extended ? "扩展" : "标准"}</td><td>${frame.dlc}</td>`
-    + `<td title="${frame.data}">${frame.data}</td><td title="${frame.name}">${frame.name}</td></tr>`).join("");
+  const tbody = $("#frameRows");
+  const pooled = state.frameRowPool.filter(row => row.isConnected);
+  const freeByKey = new Map();
+  pooled.forEach(row => {
+    const key = row.dataset.key;
+    if (!freeByKey.has(key)) freeByKey.set(key, []);
+    freeByKey.get(key).push(row);
+  });
+  const used = new Set();
+  const next = filtered.map(frame => {
+    const key = frameKey(frame);
+    const pool = freeByKey.get(key);
+    let row = null;
+    if (pool) {
+      const candidate = pool.find(item => !used.has(item));
+      if (candidate) { row = candidate; used.add(candidate); }
+    }
+    if (!row) {
+      row = document.createElement("tr");
+      row.dataset.key = key;
+      fillFrameRow(row, frame);
+    }
+    return row;
+  });
+  const current = [...tbody.children];
+  const sameOrder = current.length === next.length && current.every((row, i) => row === next[i]);
+  if (!sameOrder) {
+    pooled.forEach(row => { if (!used.has(row)) row.remove(); });
+    next.forEach(row => tbody.appendChild(row));
+  }
+  state.frameRowPool = next;
   $("#frameEmpty").classList.toggle("hidden", filtered.length > 0);
 }
 
