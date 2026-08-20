@@ -248,10 +248,10 @@ FAULT_BIT_NAMES = [
     (4,  "LBK"), (5,  "TBK"), (6,  "DV"), (7,  "DT"),
     (8,  "BATTOV"), (9,  "BATTUV"), (10, "AUX"), (11, "SOCLO"),
     (12, "CHG_OCS"), (13, "DSCH_OCS"), (14, "CHG_OCT"), (15, "DSCH_OCT"),
-    (16, "BSUOFF"), (17, "PRECHG"), (18, "CRITICAL_IO"), (19, "HVREL"),
+    (16, "BSU_NRDY"), (17, "PRECHG"), (18, "CRITICAL_IO"), (19, "HVREL"),
     (20, "ISA"), (21, "CAN_RUNTIME"), (22, "SAFETY"), (23, "CHR_TELEM"),
-    (24, "CHR_CMD"), (25, "SLAVE1"), (26, "SLAVE2"), (27, "SLAVE3"),
-    (28, "SLAVE4"), (29, "SLAVE5"), (30, "SLAVE6"), (31, "IVT_U1"),
+    (24, "CHR_CMD"), (25, "SLAVE1_OFF"), (26, "SLAVE2_OFF"), (27, "SLAVE3_OFF"),
+    (28, "SLAVE4_OFF"), (29, "SLAVE5_OFF"), (30, "SLAVE6_OFF"), (31, "IVT_U1"),
 ]
 
 BAT_STATE_NAMES = {2: "自检", 3: "待机", 4: "预充", 5: "高压", 7: "故障"}

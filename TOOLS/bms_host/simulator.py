@@ -273,7 +273,7 @@ class BmsSimulator:
         self._send(0x186350F4, bytes([relay_byte0, 0x08]) + self.request_voltage.to_bytes(2, "big")
                    + self.request_current.to_bytes(2, "big") + max(0, precharge_01v).to_bytes(2, "big"))
         log_flags = (0x08 if self.log_clear_pending_cycles else 0) | (0x04 if phase == 2 else 0)
-        fault_data = bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 2])
+        fault_data = bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 3])
         self._send(0x187650F4, fault_data)
         self._send(0x187850F4, bytes(8))
         self._send(0x4B1, fault_data, False)

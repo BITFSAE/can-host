@@ -35,7 +35,7 @@ class BmsProtocolTest(unittest.TestCase):
     def test_summary_fault_alarm_and_config_decode(self) -> None:
         protocol = BmsProtocol()
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 0A 4E 1F 72"), True))
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("72 80 00 00 01 C6 21 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("72 80 00 00 01 C6 21 03"), True))
         alarm_bytes = bytearray(8)
         alarm_bytes[0] = 0b00001001  # index 0=1, index 1=2
         protocol.ingest(CanFrame(0x187850F4, bytes(alarm_bytes), True))
@@ -49,6 +49,8 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["fault"]["code_hex"], "0x80000001")
         self.assertTrue(snapshot["fault"]["slave_offline"][0])
         self.assertTrue(snapshot["fault"]["slave_offline"][5])
+        self.assertEqual(snapshot["alarms"][16]["name"], "从控数据未就绪")
+        self.assertEqual(snapshot["alarms"][25]["name"], "从控 1 离线")
         self.assertEqual(snapshot["alarms"][0]["level"], 1)
         self.assertEqual(snapshot["alarms"][1]["level"], 2)
         self.assertEqual(snapshot["config"]["thresholds"]["ov_mv"], 4190)
@@ -61,7 +63,7 @@ class BmsProtocolTest(unittest.TestCase):
         protocol = BmsProtocol(clock=lambda: clock[0])
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 0A 4E 1F 32"), True))
         clock[0] = 2.0
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 00 00 00 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 00 00 00 03"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["fault"]["age"], 0.0)
         self.assertEqual(snapshot["connection"]["summary_age"], 2.0)
@@ -95,7 +97,7 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186050F4, status, True))
         trend_count = len(protocol.snapshot({"connected": True})["trends"])
         clock[0] = 2.1
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 03"), True))
         self.assertEqual(len(protocol.snapshot({"connected": True})["trends"]), trend_count)
 
     def test_configuration_reports_expire_independently(self) -> None:
@@ -197,7 +199,7 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_charge_mode_summary_uses_direct_current_without_offset(self) -> None:
         protocol = BmsProtocol()
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 04 00 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 04 00 03"), True))
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 1E 50 1F 30"), True))
         self.assertEqual(protocol.snapshot({"connected": True})["overview"]["current_a"], 3.0)
 
@@ -238,7 +240,7 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186950F4, bytes.fromhex("00 00 00 00 00"), True))
         # fault_code bit22 is the external safety-circuit interruption event;
         # Byte5 bit6 is the independent BMS fault signal Q3 state.
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 40 00 00 40 00 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 40 00 00 40 00 03"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertFalse(snapshot["hv"]["hv_acc"])
         self.assertTrue(snapshot["fault"]["received"])
@@ -345,8 +347,8 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_fault_code_change_history_is_decoded(self) -> None:
         protocol = BmsProtocol()
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("31 00 00 00 01 00 00 02"), True))
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 02 00 00 02"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("31 00 00 00 01 00 00 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 02 00 00 03"), True))
         history = protocol.snapshot({"connected": True})["fault_history"]
         self.assertEqual(len(history), 2)
         self.assertEqual(history[0]["added"], ["单体欠压"])
@@ -414,7 +416,7 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_log_read_is_blocked_while_clear_is_pending(self) -> None:
         service = CanService()
-        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 08 00 02"), True))
+        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 08 00 03"), True))
         result = service.read_flash_fault_logs(50)
         self.assertFalse(result["ok"])
         self.assertIn("正在分阶段清除", result["error"])
@@ -422,7 +424,7 @@ class BmsProtocolTest(unittest.TestCase):
     def test_commands_are_blocked_when_total_status_is_stale(self) -> None:
         service = CanService()
         service.connection.update({"connected": True, "mode": "simulation", "bus_profile": "can1"})
-        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 02"), True))
+        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 03"), True))
         result = service.send_command("charge_config", {"voltage_v": 570.0, "current_a": 3.0}, True)
         self.assertFalse(result["ok"])
         self.assertIn("总状态帧", result["error"])
@@ -459,7 +461,7 @@ class BmsProtocolTest(unittest.TestCase):
                 writer.writerow([start.isoformat(timespec="milliseconds"), "rx", "0x186050F4", "扩展", 7,
                                  "16 44 00 0A 50 1F 30", "电池总状态"])
                 writer.writerow([(start + timedelta(milliseconds=40)).isoformat(timespec="milliseconds"), "rx",
-                                 "0x187650F4", "扩展", 8, "30 00 00 00 00 00 00 02", "统一故障状态"])
+                                 "0x187650F4", "扩展", 8, "30 00 00 00 00 00 00 03", "统一故障状态"])
             try:
                 result = service.load_replay(str(path))
                 self.assertTrue(result["ok"])
