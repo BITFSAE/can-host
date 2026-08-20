@@ -63,6 +63,7 @@
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
+| 2026-08-20 | Windows exe 更换默认图标为 BITFSAE 鲨鱼标：`app_icon.ico`（16–256 px 七档，≤128 px 为 BMP 帧、256 px 为 PNG 帧，均从 `web/assets/shark-mark.svg` 矢量渲染），spec 的 `EXE()` 加 `icon=`；ico 结构与各尺寸透明度经 Pillow 读回校验 | Windows 实际构建后的 exe/任务栏图标显示效果待发布时确认；旧安装位置需图标缓存刷新 |
 | 2026-08-20 | 修复悬浮提示（单体“最近数据 X s”等）时有时无的问题：单体网格、保护开关状态表和 CAN 监视器行改为保留 DOM 节点、只原地更新内容，轮询不再销毁鼠标下的元素；59 项主机测试和 `node --check` 通过 | DOM 复用逻辑靠代码审查覆盖，无自动化 UI 测试；实体 PCAN 实机悬浮效果待台架复核 |
 | 2026-08-20 | 修复 PCAN 接收时间戳按适配器计数导致故障码变化记录等处显示 1970 的问题，接收帧统一用上位机本机时间打戳；RTC 校时显示改为本次连接内持久显示最近应答，未校时时显示主控 RTC 有效性位；59 项主机测试（含 IVT）和 `node --check` 通过 | 实体 PCAN 实机显示效果待台架复核；旧记录文件时间无法恢复 |
 | 2026-08-17 | 整车风扇工具页：风扇协议测试已提交进 `Tests/test_bms_host_protocol.py`（`FanControllerToolTest`，与兄弟仓库 `Doc/风扇控制.md` 对照）——`build_fan_command` 7 组文档示例帧逐字节一致（含 CRC）、`0x5A2/0x5A3/0x5A5/0x5A6/0x5A7` 解码、16 组非法参数拒绝、扩展帧隔离、发送前置检查、主快照不含风扇数据；58 项主机测试全部通过，`node --check` 和 Python 编译检查通过 | 真实 FanController 实帧、实体 PCAN 和 Windows 发布环境仍待验证 |
@@ -83,6 +84,13 @@
 ## 已完成变更
 
 ### 2026-08-20
+
+#### Windows exe 图标
+
+- 打包产物 `BITFSAE_BMS_Control_Desk.exe` 之前是 PyInstaller 默认图标，原因：spec 的 `EXE()` 未传 `icon=`。现在 `bms_control_desk.spec` 指定 `icon=app_icon.ico`，`build_windows.ps1` 和 GitHub Actions 发布流程走同一 spec，无需额外改动。
+- `app_icon.ico` 由 `web/assets/shark-mark.svg`（天蓝 `#0EA5E9` 单色、透明背景，深浅任务栏均可辨识）用 cairosvg 按尺寸逐档矢量渲染生成：16/24/32/48/64/128 px 为 BMP（DIB）帧、256 px 为 PNG 帧。小尺寸帧不用 PNG 是因为 Windows 只官方保证 256 px 帧的 PNG 压缩，BMP 小帧在旧环境兼容性最好。文件已提交进仓库，构建时直接读取，不需要构建机装 SVG 工具。
+- 替换已安装目录里的旧 exe 后图标仍显示旧的，属于 Windows 图标缓存：把 exe 改名或换目录即可看到新图标，或运行 `ie4uinit.exe -show` 刷新缓存。
+- 验证：Pillow 读回 ico 确认 7 帧、帧类型正确、各尺寸四角透明、鲨鱼标占位 20%–29%。Windows 实机构建后的显示效果待正式发布时确认。
 
 #### 悬浮提示稳定性修复
 

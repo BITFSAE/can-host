@@ -35,7 +35,7 @@ macOS 主要用于界面开发和内置模拟数据调试。实体 PCAN 联调�
 powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
 ```
 
-产物位于 `dist\BITFSAE_BMS_Control_Desk\`，采用 one-folder 形式。发布版只支持真实 PCAN；复制整个文件夹到目标电脑，不能只复制 exe。
+产物位于 `dist\BITFSAE_BMS_Control_Desk\`，采用 one-folder 形式。发布版只支持真实 PCAN；复制整个文件夹到目标电脑，不能只复制 exe。exe 图标取自本目录 `app_icon.ico`（由 `web/assets/shark-mark.svg` 生成），换图标时替换该文件后重新构建。
 
 目标电脑仍需安装：
 

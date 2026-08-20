@@ -24,6 +24,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="BITFSAE_BMS_Control_Desk",
+    icon=str(package / "app_icon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
