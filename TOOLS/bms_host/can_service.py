@@ -865,14 +865,22 @@ class CanService:
         self.record_pending = 0
         return {"ok": True}
 
+    @staticmethod
+    def _frame_from_message(message: Any) -> CanFrame:
+        # python-can PCAN timestamps count from adapter/boot start whenever
+        # the optional uptime library is missing, so they are not Unix epoch.
+        # Stamp with host receive time so history, recordings, and replay all
+        # use one wall clock instead of rendering uptime as 1970.
+        return CanFrame(message.arbitration_id, bytes(message.data), message.is_extended_id,
+                        time.time(), "rx")
+
     def _receive_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
                 message = self.bus.recv(timeout=0.1)
                 if message is None:
                     continue
-                frame = CanFrame(message.arbitration_id, bytes(message.data), message.is_extended_id,
-                                 float(message.timestamp or time.time()), "rx")
+                frame = self._frame_from_message(message)
                 self._ingest(frame)
                 if (not frame.is_extended_id and frame.data
                         and frame.data[0] in IVT_RESPONSE_MUXES):

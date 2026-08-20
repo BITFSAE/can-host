@@ -63,7 +63,6 @@ const ALARM_RULE_TEXTS = [
 const PAGE_ORDER = ["overview", "cells", "alarms", "frames", "control", "bench", "ivt", "fan"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
-const RTC_REPLY_FRESH_MAX_S = 5;
 
 function fmt(value, digits = 1, fallback = "—") {
   return value === null || value === undefined || Number.isNaN(value) ? fallback : Number(value).toFixed(digits);
@@ -1242,7 +1241,7 @@ function renderControls() {
   text("#chargeModeTag", chargeLabel);
   $("#chargeModeTag").className = `tag ${charge == null ? "neutral" : charge ? "warn" : "neutral"}`;
   text("#heroChargeMode", chargeLabel);
-  renderRtcReply(state.snapshot.rtc_reply || {});
+  renderRtcReply(state.snapshot.rtc_reply || {}, runtime);
   const connectedCan1 = connection.connected && connection.bus_profile === "can1";
   const fresh = connection.summary_age != null && connection.summary_age <= 1.5;
   const allowedState = fresh && [2, 3, 7].includes(overview.state);
@@ -1255,12 +1254,15 @@ const RTC_STATUS_NAMES = {
   6: "工具协议版本错误", 7: "RTC 请求忙",
 };
 
-function renderRtcReply(reply) {
-  if (reply.status == null || !isFresh(reply.age, RTC_REPLY_FRESH_MAX_S)) return text("#rtcReply", "等待新回复");
-  const name = RTC_STATUS_NAMES[reply.status] || `未知 ${reply.status}`;
-  if (!reply.year) return text("#rtcReply", `${name} · 时间读取失败`);
+function renderRtcReply(reply, runtime) {
   const pad = value => String(value).padStart(2, "0");
-  text("#rtcReply", `${name} · ${reply.year}-${pad(reply.month)}-${pad(reply.day)} ${pad(reply.hour)}:${pad(reply.minute)}:${pad(reply.second)}`);
+  if (reply.status != null) {
+    const name = RTC_STATUS_NAMES[reply.status] || `未知 ${reply.status}`;
+    return text("#rtcReply", !reply.year ? `${name} · 时间读取失败`
+      : `${name} · ${reply.year}-${pad(reply.month)}-${pad(reply.day)} ${pad(reply.hour)}:${pad(reply.minute)}:${pad(reply.second)}`);
+  }
+  const runtimeFresh = runtime?.age != null && runtime.age <= 1.5;
+  text("#rtcReply", !runtimeFresh ? "等待数据" : runtime.rtc_valid ? "主控 RTC 有效" : "RTC 未校时");
 }
 
 function parseIvtNumber(id, label, maximum = 0xFFFF) {

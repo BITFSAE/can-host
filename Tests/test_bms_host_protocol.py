@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import csv
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 import sqlite3
 import tempfile
@@ -144,13 +145,32 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["temps"], [])
         self.assertEqual(snapshot["modules"], [])
 
-    def test_rtc_reply_has_sequence_and_expires(self) -> None:
+    def test_rtc_reply_keeps_last_result_with_growing_age(self) -> None:
         clock = [0.0]
         protocol = BmsProtocol(clock=lambda: clock[0])
         protocol.ingest(CanFrame(0x18A450F4, bytes.fromhex("00 2A 1A 08 03 0C 22 38"), True))
-        self.assertEqual(protocol.snapshot({"connected": True})["rtc_reply"]["sequence"], 0x2A)
+        reply = protocol.snapshot({"connected": True})["rtc_reply"]
+        self.assertEqual(reply["sequence"], 0x2A)
+        self.assertEqual(reply["status"], 0)
         clock[0] = 5.1
+        # The reply stays visible for the whole connection; age only feeds display.
         self.assertEqual(protocol.snapshot({"connected": True})["rtc_reply"]["age"], 5.1)
+        self.assertEqual(protocol.snapshot({"connected": True})["rtc_reply"]["status"], 0)
+
+    def test_received_frames_use_host_wall_clock(self) -> None:
+        # python-can PCAN timestamps count from adapter/boot start when the
+        # optional uptime library is missing; they must not become 1970 dates.
+        message = SimpleNamespace(arbitration_id=0x187650F4,
+                                   data=bytes.fromhex("31 00 00 00 01 00 00 03"),
+                                   is_extended_id=True, timestamp=42.7)
+        frame = CanService._frame_from_message(message)
+        self.assertEqual(frame.direction, "rx")
+        self.assertGreater(frame.timestamp, 1_000_000_000)
+        self.assertLess(frame.timestamp, time.time() + 5.0)
+        protocol = BmsProtocol()
+        protocol.ingest(frame)
+        history = protocol.snapshot({"connected": True})["fault_history"]
+        self.assertEqual(history[0]["time"][:4], datetime.now().strftime("%Y"))
 
     def test_disconnect_clears_previous_rtc_reply(self) -> None:
         service = CanService()
