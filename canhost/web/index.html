@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BMS Control Desk</title>
+  <title>BITFSAE CAN Host</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,11 +11,11 @@
     <aside class="rail">
       <div class="brand">
         <img class="brand-mark" src="assets/shark-mark.svg" alt="BITFSAE 银鲨图标">
-        <span class="brand-text"><strong>BMS</strong><small>CONTROL DESK</small></span>
+        <span class="brand-text"><strong>CAN</strong><small>HOST</small></span>
       </div>
 
       <nav id="nav" aria-label="主导航">
-        <span class="nav-group">监视</span>
+        <span class="nav-group">BMS</span>
         <button class="nav-item active" type="button" data-page="overview" title="运行总览（Alt+1）">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 14a8.5 8.5 0 0 1 17 0"/><path d="M12 14l4.2-3.6"/><circle cx="12" cy="14" r="1.3"/><path d="M3.5 18h17"/></svg>
           <span>运行总览</span>
@@ -30,14 +30,23 @@
           <span>故障与记录</span>
           <b id="alarmNavBadge" class="badge alert hidden">0</b>
         </button>
-        <button class="nav-item" type="button" data-page="frames" title="CAN 监视器（Alt+4）">
-          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12h4l3-7.5 4.4 15 3.1-7.5h4.5"/></svg>
-          <span>CAN 监视器</span>
-        </button>
-        <span class="nav-group operation">操作</span>
-        <button class="nav-item" type="button" data-page="control" title="参数与命令（Alt+5）">
+        <button class="nav-item" type="button" data-page="control" title="参数与命令（Alt+4）">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h9M18.5 7.5h2M3.5 16.5h3M11.5 16.5h9"/><circle cx="15.5" cy="7.5" r="2.4"/><circle cx="8.5" cy="16.5" r="2.4"/></svg>
           <span>参数与命令</span>
+        </button>
+        <span class="nav-group operation">整车</span>
+        <button class="nav-item" type="button" data-page="vehicle" title="整车总览（Alt+5）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5 5 8h14l2 5.5"/><path d="M3 13.5h18V18H3z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/><path d="M6.5 8 8 5h8l1.5 3"/></svg>
+          <span>整车总览</span>
+        </button>
+        <button class="nav-item" type="button" data-page="fan" title="整车风扇（Alt+6）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1.8"/><path d="M12 10.2c0-2.9 1.4-4.7 3.7-4.7 1.6 0 2.5 1.2 2 2.6-.6 1.6-2.9 2.3-5.7 2.1Z"/><path d="M13.8 12c2.9 0 4.7 1.4 4.7 3.7 0 1.6-1.2 2.5-2.6 2-1.6-.6-2.3-2.9-2.1-5.7Z"/><path d="M12 13.8c0 2.9-1.4 4.7-3.7 4.7-1.6 0-2.5-1.2-2-2.6.6-1.6 2.9-2.3 5.7-2.1Z"/><path d="M10.2 12c-2.9 0-4.7-1.4-4.7-3.7 0-1.6 1.2-2.5 2.6-2 1.6.6 2.3 2.9 2.1 5.7Z"/></svg>
+          <span>整车风扇</span>
+        </button>
+        <span class="nav-group operation">监视</span>
+        <button class="nav-item" type="button" data-page="frames" title="CAN 监视器（Alt+7）">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12h4l3-7.5 4.4 15 3.1-7.5h4.5"/></svg>
+          <span>CAN 监视器</span>
         </button>
         <details class="nav-tools">
           <summary>
@@ -45,17 +54,13 @@
             <span>工程工具</span><i aria-hidden="true">⌄</i>
           </summary>
           <div class="nav-tool-items">
-            <button class="nav-item" type="button" data-page="bench" title="台架模拟从控（Alt+6）">
+            <button class="nav-item" type="button" data-page="bench" title="台架模拟从控（Alt+8）">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="1.8"/><path d="M7 9h3M14 9h3M7 13h3M14 13h3M7 17h10"/></svg>
               <span>台架模拟从控</span>
             </button>
-            <button class="nav-item" type="button" data-page="ivt" title="IVT配置（Alt+7）">
+            <button class="nav-item" type="button" data-page="ivt" title="IVT配置（Alt+9）">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>
               <span>IVT配置</span>
-            </button>
-            <button class="nav-item" type="button" data-page="fan" title="整车风扇（Alt+8）">
-              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1.8"/><path d="M12 10.2c0-2.9 1.4-4.7 3.7-4.7 1.6 0 2.5 1.2 2 2.6-.6 1.6-2.9 2.3-5.7 2.1Z"/><path d="M13.8 12c2.9 0 4.7 1.4 4.7 3.7 0 1.6-1.2 2.5-2.6 2-1.6-.6-2.3-2.9-2.1-5.7Z"/><path d="M12 13.8c0 2.9-1.4 4.7-3.7 4.7-1.6 0-2.5-1.2-2-2.6.6-1.6 2.9-2.3 5.7-2.1Z"/><path d="M10.2 12c-2.9 0-4.7-1.4-4.7-3.7 0-1.6 1.2-2.5 2.6-2 1.6.6 2.3 2.9 2.1 5.7Z"/></svg>
-              <span>整车风扇</span>
             </button>
           </div>
         </details>
@@ -67,7 +72,6 @@
         </div>
         <dl class="rail-facts">
           <div><dt>上位机</dt><dd><span id="appVersion">v—</span><i aria-hidden="true">·</i><span class="fact-date" id="appVersionDate">—</span></dd></div>
-          <div><dt>PCB</dt><dd><span>V3.0</span><i aria-hidden="true">·</i><span class="fact-date">2026-05-30</span></dd></div>
         </dl>
       </div>
     </aside>
@@ -357,6 +361,123 @@
           </div>
         </section>
 
+        <section class="page" id="page-vehicle" aria-label="整车总览">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>整车总览</h2>
+              <span class="tool-header-desc">CANB · BMS 镜像 / SOP / IVT / PDM / 赛会能量计 / ECU / 胎温</span>
+            </div>
+            <div class="tool-header-connection">
+              <span id="vehicleStatusTag" class="tag neutral">未连接</span>
+              <div class="tool-connection-controls">
+                <select id="vehicleChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
+                <select id="vehicleBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
+                  <option value="500000">500 kbit/s</option>
+                  <option value="250000">250 kbit/s</option>
+                </select>
+                <button class="action-button" type="button" id="connectVehicleButton">连接</button>
+                <button class="danger-outline hidden" type="button" id="disconnectVehicleButton">断开</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="vehicle-layout">
+            <article class="data-section vehicle-sop-section">
+              <header><h3>SOP 限功率</h3><span id="vehSopAge" class="state-text">等待数据</span></header>
+              <div class="vehicle-limit-grid">
+                <div><span>放电电流上限</span><b id="vehSopDisA">等待数据</b><em>A</em></div>
+                <div><span>充电电流上限</span><b id="vehSopChgA">等待数据</b><em>A</em></div>
+                <div><span>放电功率上限</span><b id="vehSopDisKw">等待数据</b><em>kW</em></div>
+                <div><span>充电功率上限</span><b id="vehSopChgKw">等待数据</b><em>kW</em></div>
+              </div>
+              <dl class="vehicle-flag-list">
+                <div><dt>限值有效</dt><dd id="vehSopLimitsValid">—</dd></div>
+                <div><dt>允许行驶</dt><dd id="vehSopDrive">—</dd></div>
+                <div><dt>允许回收</dt><dd id="vehSopRegen">—</dd></div>
+                <div><dt>干预等级</dt><dd id="vehSopIntervention">—</dd></div>
+                <div><dt>配对 CRC</dt><dd id="vehSopCrc">—</dd></div>
+                <div><dt>BMS 状态</dt><dd id="vehSopBmsState">—</dd></div>
+              </dl>
+              <div class="state-table vehicle-ecu-ack">
+                <div><span>ECU 确认（0x4A4）</span><em id="vehEcuAckState">等待数据</em></div>
+                <div><span>ECU 最终放电 / 回收上限</span><em id="vehEcuPowers">—</em></div>
+                <div><span>确认序号 / 主要限制来源</span><em id="vehEcuMeta">—</em></div>
+              </div>
+            </article>
+
+            <article class="data-section vehicle-pack-section">
+              <header><h3>BMS 整车镜像</h3><span id="vehPackAge" class="state-text">0x4B0 · 等待数据</span></header>
+              <div class="vehicle-limit-grid">
+                <div><span>包电压</span><b id="vehPackV">等待数据</b><em>V</em></div>
+                <div><span>总电流</span><b id="vehPackI">等待数据</b><em>A</em></div>
+                <div><span>SOC</span><b id="vehPackSoc">等待数据</b><em>%</em></div>
+                <div><span>状态机</span><b id="vehPackState" class="veh-state-text">等待数据</b><em></em></div>
+              </div>
+              <dl class="vehicle-flag-list">
+                <div><dt>告警等级</dt><dd id="vehPackAlarm">—</dd></div>
+                <div><dt>故障码</dt><dd id="vehFaultCode">等待数据</dd></div>
+              </dl>
+            </article>
+
+            <article class="data-section vehicle-ivt-section">
+              <header><h3>自有 IVT-S</h3><span id="vehIvtNote" class="state-text">0x512–0x519 · 小端</span></header>
+              <div class="vehicle-channel-grid" id="vehIvtGrid"></div>
+            </article>
+
+            <article class="data-section vehicle-meter-section">
+              <header><h3>赛会能量计</h3><span id="vehMeterNote" class="state-text">0x521/0x522 · 大端</span></header>
+              <div class="vehicle-channel-grid" id="vehMeterGrid"></div>
+            </article>
+
+            <article class="data-section vehicle-pdm-section">
+              <header><h3>PDM 低压配电</h3><span id="vehPdmNote" class="state-text">0x5A0/0x5A1 · 2 Hz</span></header>
+              <div class="vehicle-pdm-grid">
+                <div class="vehicle-pdm-side">
+                  <div class="vehicle-pdm-head"><b>低压总线侧</b><span id="vehPdmBusState" class="state-text">OR-RING 后整车负载</span></div>
+                  <div class="vehicle-limit-grid">
+                    <div><span>电压</span><b id="vehPdmBusV">等待数据</b><em>V</em></div>
+                    <div><span>电流</span><b id="vehPdmBusI">等待数据</b><em>A</em></div>
+                    <div><span>功率</span><b id="vehPdmBusP">等待数据</b><em>W</em></div>
+                    <div title="MCU 上电后累计，655.36 Wh 回绕，不是 SOC"><span>累计电量</span><b id="vehPdmBusWh">等待数据</b><em>Wh</em></div>
+                  </div>
+                </div>
+                <div class="vehicle-pdm-side">
+                  <div class="vehicle-pdm-head"><b>低压电池侧</b><span id="vehPdmBatState" class="state-text">7S 磷酸铁锂</span></div>
+                  <div class="vehicle-limit-grid">
+                    <div><span>电压</span><b id="vehPdmBatV">等待数据</b><em>V</em></div>
+                    <div><span>电流</span><b id="vehPdmBatI">等待数据</b><em>A</em></div>
+                    <div><span>功率</span><b id="vehPdmBatP">等待数据</b><em>W</em></div>
+                    <div title="MCU 上电后累计，655.36 Wh 回绕，不是 SOC"><span>累计电量</span><b id="vehPdmBatWh">等待数据</b><em>Wh</em></div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="data-section vehicle-ecu-section">
+              <header><h3>ECU 四轮状态</h3><span id="vehEcuNote" class="state-text">0x502–0x509 · 10 ms</span></header>
+              <div class="vehicle-ecu-table" id="vehEcuTable"></div>
+              <dl class="vehicle-flag-list">
+                <div><dt>系统就绪</dt><dd id="vehEcuReady">—</dd></div>
+                <div><dt>轮上使能</dt><dd id="vehEcuEnable">—</dd></div>
+                <div><dt>故障</dt><dd id="vehEcuError">—</dd></div>
+              </dl>
+            </article>
+
+            <article class="data-section vehicle-tire-section">
+              <header><h3>轮胎温度</h3><span id="vehTireNote" class="state-text">0x071–0x074 · 轮位映射待实物确认</span></header>
+              <div class="vehicle-tire-grid" id="vehTireGrid"></div>
+            </article>
+
+            <article class="data-section vehicle-trend-section">
+              <header>
+                <h3>高压 / 低压趋势</h3>
+                <span class="trend-legend"><i class="voltage"></i>高压 <b id="vehTrendHvV">—</b><i class="current"></i>低压 <b id="vehTrendLvV">—</b></span>
+              </header>
+              <div class="trend-body"><canvas id="vehicleTrendCanvas" aria-label="高压与低压电压电流实时曲线"></canvas></div>
+            </article>
+          </div>
+        </section>
+
         <section class="page" id="page-bench" aria-label="台架模拟从控">
           <div class="tool-header-bar">
             <div class="tool-header-info">
@@ -483,7 +604,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>整车风扇</h2>
-              <span class="tool-header-desc">0x5A2–0x5A7 · 动力总成双回路冷却</span>
+              <span class="tool-header-desc">0x5A2–0x5A7 · 动力总成双回路冷却 · 使用整车连接</span>
             </div>
             <div class="tool-header-connection">
               <span id="fanToolStatus" class="tag neutral">未连接</span>
@@ -693,6 +814,10 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6 20 20"/></svg>
               <input id="frameSearch" placeholder="按 CAN ID、帧名称或数据筛选" aria-label="筛选报文">
             </label>
+            <div class="segmented small" id="frameSource" role="group" aria-label="数据源">
+              <button class="active" type="button" data-source="main">主连接</button>
+              <button type="button" data-source="vehicle">整车连接</button>
+            </div>
             <div class="segmented small" id="frameType" role="group" aria-label="方向筛选">
               <button class="active" type="button" data-kind="all">全部</button>
               <button type="button" data-kind="rx">接收</button>
@@ -729,10 +854,29 @@
         </section>
       </main>
 
+      <div class="quick-bar" id="quickBar" aria-label="常看值">
+        <span class="quick-cell"><span class="label">低压电压</span><b id="quickLvV">等待</b><em>V</em></span>
+        <span class="quick-cell"><span class="label">低压电流</span><b id="quickLvI">等待</b><em>A</em></span>
+        <span class="quick-cell"><span class="label">低压功率</span><b id="quickLvP">等待</b><em>W</em></span>
+        <span class="quick-divider" aria-hidden="true"></span>
+        <span class="quick-cell"><span class="label">高压电压</span><b id="quickHvV">等待</b><em>V</em></span>
+        <span class="quick-cell"><span class="label">高压电流</span><b id="quickHvI">等待</b><em>A</em></span>
+        <span class="quick-cell"><span class="label">SOC</span><b id="quickSoc">等待</b><em>%</em></span>
+        <span class="quick-divider" aria-hidden="true"></span>
+        <span class="quick-cell"><span class="label">SOP 放电</span><b id="quickSopDis">等待</b><em>kW</em></span>
+        <span class="quick-cell"><span class="label">SOP 充电</span><b id="quickSopChg">等待</b><em>kW</em></span>
+        <span class="quick-divider" aria-hidden="true"></span>
+        <span class="quick-cell"><span class="label">风扇最高</span><b id="quickFanRpm">等待</b><em>RPM</em></span>
+      </div>
+
       <footer class="statusbar">
         <button id="connectButton" class="connect-button" type="button">
           <span class="status-dot" aria-hidden="true"></span>
           <span class="connect-copy"><b>连接上位机</b><small>选择 CAN 总线</small></span>
+        </button>
+        <button id="vehicleStatusPill" class="vehicle-pill" type="button" title="整车连接状态，点击前往整车总览">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="connect-copy"><b>整车未连接</b><small>CANB</small></span>
         </button>
         <span class="status-divider" aria-hidden="true"></span>
         <span class="status-group traffic-group">
@@ -751,7 +895,7 @@
   <dialog id="connectDialog" class="modal">
     <form method="dialog">
           <header><h2>连接上位机</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
-          <div class="modal-body">
+      <div class="modal-body">
         <label class="field">
           <span class="field-label">监视总线</span>
           <select id="connectProfile"></select>
@@ -763,7 +907,7 @@
         <dl class="mini-facts spread boxed">
           <div><dt>位速率</dt><dd id="connectBitrate">500 kbit/s</dd></div>
         </dl>
-        <p class="note tight">这是 BMS 主上位机的监视连接。台架模拟从控和 IVT 配置各自使用工具页中的独立连接，不在这里切换连接方式。</p>
+        <p class="note tight">这是 BMS 主监视连接（CAN1/CANB）。整车页使用独立的 CANB 整车连接，台架和 IVT 配置各自使用工具页中的连接。</p>
         <div id="connectError" class="modal-error hidden"></div>
       </div>
       <footer>
@@ -793,6 +937,11 @@
   </dialog>
 
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/bms.js"></script>
+  <script src="js/vehicle.js"></script>
+  <script src="js/fan.js"></script>
+  <script src="js/bench.js"></script>
+  <script src="js/ivt.js"></script>
 </body>
 </html>

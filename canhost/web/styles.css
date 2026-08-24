@@ -1,4 +1,4 @@
-/* BITFSAE BMS Control Desk — compact pit-wall instrumentation.
+/* BITFSAE CAN Host — compact pit-wall instrumentation.
    Information density and deterministic status colours take priority over decoration. */
 
 :root {
@@ -199,7 +199,8 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   height: var(--app-height);
   overflow: hidden;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  /* 主区 + 快捷常看值条 + 状态栏；工具页隐藏后两行为 0 高度 */
+  grid-template-rows: minmax(0, 1fr) auto auto;
   background: var(--bg);
 }
 
@@ -294,6 +295,9 @@ body.is-tool-page .statusbar {
 }
 body.is-tool-page .workspace {
   grid-template-rows: minmax(0, 1fr);
+}
+body.is-tool-page .quick-bar {
+  display: none;
 }
 .statusbar .connect-button {
   flex: 0 1 auto;
@@ -2553,3 +2557,197 @@ body.is-tool-page .workspace {
   .fan-temp-readouts { grid-template-columns: 1fr; }
   .five-col { grid-template-columns: 1fr; }
 }
+
+/* ---------------- 常看值快捷条（状态栏上方，非工具页常驻） ---------------- */
+
+.quick-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 34px;
+  padding: 4px 16px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-1);
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.quick-cell { display: inline-flex; align-items: baseline; gap: 6px; padding: 0 13px; min-width: 0; }
+.quick-cell .label { font-size: 10px; }
+.quick-cell b {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.quick-cell em { font-style: normal; font-size: 9.5px; color: var(--text-3); }
+.quick-divider { width: 1px; height: 16px; flex: none; background: var(--line-soft); }
+
+/* 状态栏内的整车连接胶囊 */
+.vehicle-pill {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  width: fit-content;
+  min-width: 128px;
+  max-width: 190px;
+  margin-left: 10px;
+  padding: 0 10px;
+  min-height: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.vehicle-pill:hover { border-color: var(--line-soft); background: var(--surface-2); }
+.vehicle-pill b { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+.vehicle-pill small { font-size: 10px; color: var(--text-3); }
+.vehicle-pill .status-dot { grid-row: 1 / span 2; }
+.vehicle-pill.connected .status-dot { background: var(--ok); box-shadow: 0 0 6px rgba(62, 207, 142, .55); }
+
+/* ---------------- 整车总览页 ---------------- */
+
+.vehicle-layout {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.vehicle-sop-section { grid-column: span 7; }
+.vehicle-pack-section { grid-column: span 5; }
+.vehicle-ivt-section { grid-column: span 7; }
+.vehicle-meter-section { grid-column: span 5; }
+.vehicle-pdm-section { grid-column: span 12; }
+.vehicle-ecu-section { grid-column: span 7; }
+.vehicle-tire-section { grid-column: span 5; }
+.vehicle-trend-section { grid-column: span 12; }
+
+.vehicle-limit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.vehicle-limit-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+.vehicle-limit-grid span { font-size: 10.5px; color: var(--text-3); }
+.vehicle-limit-grid b {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vehicle-limit-grid em { font-style: normal; font-size: 10px; color: var(--text-3); }
+
+.vehicle-flag-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 14px;
+  margin: 12px 0 0;
+}
+.vehicle-flag-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px dashed var(--line-soft);
+  padding: 4px 0;
+}
+.vehicle-flag-list dt { font-size: 10.5px; color: var(--text-3); }
+.vehicle-flag-list dd { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+.vehicle-flag-list dd.bad { color: var(--fault); }
+.vehicle-flag-list dd.ok { color: var(--ok); }
+
+.veh-state-text.bad { color: var(--fault); }
+.veh-state-text.ok { color: var(--ok); }
+
+.vehicle-ecu-ack { margin-top: 12px; }
+
+.vehicle-channel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.veh-channel {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+.veh-channel span { font-size: 10.5px; color: var(--text-3); }
+.veh-channel b {
+  font-family: var(--mono);
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.veh-channel em { font-style: normal; font-size: 9.5px; color: var(--text-3); }
+.veh-channel .veh-channel-state { font-size: 9.5px; color: var(--text-3); }
+.veh-channel .veh-channel-state.ok { color: var(--ok); }
+.veh-channel .veh-channel-state.bad { color: var(--fault); }
+.veh-channel.stale b { color: var(--text-3); font-weight: 500; }
+
+.vehicle-pdm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.vehicle-pdm-side {
+  padding: 11px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+.vehicle-pdm-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.vehicle-pdm-head b { font-size: 12px; color: var(--text); }
+
+.veh-ecu-head, .veh-ecu-row {
+  display: grid;
+  grid-template-columns: 44px repeat(5, minmax(0, 1fr));
+  gap: 0 8px;
+  align-items: center;
+}
+.veh-ecu-head {
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--line);
+}
+.veh-ecu-row { padding: 7px 8px; border-bottom: 1px dashed var(--line-soft); }
+.veh-ecu-row b { font-size: 11.5px; color: var(--text-2); }
+.veh-ecu-row span {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vehicle-tire-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.veh-tire-group {
+  padding: 9px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+.veh-tire-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.veh-tire-head b { font-size: 11px; color: var(--text-2); font-family: var(--mono); }
+.veh-tire-state { font-size: 9.5px; color: var(--text-3); }
+.veh-tire-state.ok { color: var(--ok); }
+.veh-tire-points { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.veh-tire-point { display: grid; gap: 2px; }
+.veh-tire-point small { font-size: 9.5px; color: var(--text-3); }
+.veh-tire-point b { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--text); }
+.veh-tire-point em { font-style: normal; font-size: 9px; color: var(--text-3); }
