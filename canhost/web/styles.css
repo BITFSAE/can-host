@@ -1,4 +1,4 @@
-/* BITFSAE CAN Host — compact pit-wall instrumentation.
+/* BITFSAE CAN HOST — compact pit-wall instrumentation.
    Information density and deterministic status colours take priority over decoration. */
 
 :root {
@@ -2613,6 +2613,7 @@ body.is-tool-page .quick-bar {
 .vehicle-ecu-section { grid-column: span 7; }
 .vehicle-tire-section { grid-column: span 5; }
 .vehicle-trend-section { grid-column: span 12; }
+#vehicleTrendCanvas { display: block; width: 100%; height: 238px; }
 
 .vehicle-limit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .vehicle-limit-grid > div {

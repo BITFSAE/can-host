@@ -3,4 +3,4 @@
 __version__ = "0.2.0"
 # Date associated with this host-tool version; it is not the computer clock or
 # the firmware build date reported by the F405.
-__version_date__ = "2026-08-24"
+__version_date__ = "2026-08-25"

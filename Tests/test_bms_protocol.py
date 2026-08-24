@@ -573,7 +573,7 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("IVT 能量计配置", html)
         self.assertIn("整车风扇", html)
         self.assertIn("整车总览", html)
-        self.assertIn('class="brand-title">CAN host</span>', html)
+        self.assertIn('class="brand-title">CAN HOST</span>', html)
         self.assertNotIn('<strong>CAN</strong><small>HOST</small>', html)
         self.assertIn('id="vehicleConnectDialog"', html)
         self.assertIn('id="connectButton"', html)

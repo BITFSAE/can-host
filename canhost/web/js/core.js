@@ -50,7 +50,10 @@ function fmt(value, digits = 1, fallback = "—") {
 }
 function isFresh(age, limit = DATA_FRESH_MAX_S) { return age != null && age <= limit; }
 function text(id, value) { const node = $(id); if (node) node.textContent = value; }
-function setClass(id, className, enabled) { const node = $(id); if (node) node.classList.toggle(className, !!enabled); }
+function setClass(idOrNode, className, enabled) {
+  const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
+  if (node) node.classList.toggle(className, !!enabled);
+}
 
 function toast(message, error = false) {
   const node = document.createElement("div");
@@ -94,11 +97,15 @@ function stepUiScale(direction) {
 }
 
 async function waitForApi() {
-  if (window.pywebview?.api) return window.pywebview.api;
+  // pywebview.api is an empty object before its JS methods have been created.
+  // Waiting only for the object itself caused bootstrap() to be called too
+  // early, leaving the UI in "waiting" forever. Require a real API method.
+  const apiReady = () => typeof window.pywebview?.api?.bootstrap === "function";
+  if (apiReady()) return window.pywebview.api;
   return new Promise(resolve => {
     let done = false;
     const check = () => {
-      if (window.pywebview?.api && !done) {
+      if (apiReady() && !done) {
         done = true;
         resolve(window.pywebview.api);
         return true;
@@ -107,16 +114,12 @@ async function waitForApi() {
     };
     if (check()) return;
     window.addEventListener("pywebviewready", () => check(), { once: true });
+    // Keep waiting: in the desktop app pywebview injects its API shortly after
+    // the page loads. A timeout here would silently leave the UI without a
+    // backend and make Connect appear to do nothing.
     const timer = setInterval(() => {
       if (check()) clearInterval(timer);
-    }, 40);
-    setTimeout(() => {
-      clearInterval(timer);
-      if (!done) {
-        done = true;
-        resolve(window.pywebview?.api || null);
-      }
-    }, 4000);
+    }, 100);
   });
 }
 
@@ -182,8 +185,10 @@ function bindCoreControls() {
   $("#connectProfile").addEventListener("change", updateConnectionDialog);
   $("#doConnect").addEventListener("click", connectCan);
   $("#disconnectButton").addEventListener("click", disconnectCan);
-  $("#vehicleStatusPill").addEventListener("click", () => {
+  $("#vehicleStatusPill").addEventListener("click", () => $("#vehicleConnectDialog")?.showModal());
+  $("#frameType").addEventListener("click", event => {
     const button = event.target.closest("button"); if (!button) return;
+    state.frameKind = button.dataset.kind;
     $$("#frameType button").forEach(node => node.classList.toggle("active", node === button));
     renderFrames();
   });
@@ -326,18 +331,28 @@ async function poll() {
   try {
     state.snapshot = await state.api.get_snapshot();
     const page = state.page;
+    // Optional/side snapshots must never prevent the main BMS snapshot from
+    // being rendered. If one of them fails (for example a transient PyWebView
+    // bridge error), keep the main page live and retry on the next poll.
+    async function optionalSnapshot(loader, assign) {
+      try {
+        assign(await loader());
+      } catch (error) {
+        console.warn("可选数据快照获取失败：", error);
+      }
+    }
     if (page === "bench" && state.api.get_bench_snapshot) {
-      state.toolSnapshots.bench = await state.api.get_bench_snapshot();
+      await optionalSnapshot(state.api.get_bench_snapshot, value => { state.toolSnapshots.bench = value; });
     } else if (page === "ivt" && state.api.get_ivt_snapshot) {
-      state.toolSnapshots.ivt = await state.api.get_ivt_snapshot();
+      await optionalSnapshot(state.api.get_ivt_snapshot, value => { state.toolSnapshots.ivt = value; });
     }
     if ((page === "vehicle" || page === "fan"
          || (page === "frames" && state.frameSource === "vehicle"))
         && state.api.get_vehicle_snapshot) {
-      state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
+      await optionalSnapshot(state.api.get_vehicle_snapshot, value => { state.vehicleSnapshot = value; });
     }
     if (!TOOL_PAGES.includes(page) && state.api.get_quick_snapshot) {
-      state.quickSnapshot = await state.api.get_quick_snapshot();
+      await optionalSnapshot(state.api.get_quick_snapshot, value => { state.quickSnapshot = value; });
     }
     if (state.snapshot) {
       renderChargeTiming(state.snapshot.overview, state.snapshot.connection, state.snapshot.fault || {});

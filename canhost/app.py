@@ -187,7 +187,7 @@ def main() -> None:
         raise SystemExit("缺少 pywebview。请先执行：pip install -r requirements.txt")
     api = Api()
     window = webview.create_window(
-        "BITFSAE · CAN Host", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
+        "BITFSAE · CAN HOST", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
         width=1460, height=920, min_size=(1120, 720), background_color="#0D0E0F",
         zoomable=True,
     )

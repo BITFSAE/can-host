@@ -1,6 +1,6 @@
 # CAN 上位机与工具使用
 
-本文说明车队 CAN 上位机（BITFSAE CAN Host）各页面的职责、连接方法、接口边界和现场验证：BMS 监视四页、整车总览、整车风扇、台架模拟从控和 IVT 配置。
+本文说明车队 CAN 上位机（BITFSAE CAN HOST）各页面的职责、连接方法、接口边界和现场验证：BMS 监视四页、整车总览、整车风扇、台架模拟从控和 IVT 配置。
 
 帧格式的权威来源按接口分仓库：BMS 帧以 BMS-MASTER-F405 仓库 `DOC/CAN通信协议.md` 和固件 `App/bms_can_protocol.c` 为准；FanController 帧以 FanController 仓库 `Doc/风扇控制.md` 和 `Core/Src/fan_controller.c` 为准；PDM 帧以 PDM 仓库 `Doc/CAN接口.md` 和 `Core/Src/pdm_monitor.c` 为准；整车各节点的中央 DBC 登记在 vehicle-interfaces 仓库 `can/Vehicle_CanB.dbc`。两边不一致时以固件为准，同步修改本仓库实现、测试和 vehicle-interfaces。IVT 目标配置的完整表格在 BMS-MASTER-F405 仓库 `DOC/IVT能量计配置与CANB切换.md`。
 

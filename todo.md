@@ -1,4 +1,4 @@
-# BITFSAE CAN Host 进度、待办与变更
+# BITFSAE CAN HOST 进度、待办与变更
 
 本文档记录车队 CAN 上位机的剩余工作、风险、验证结果和已完成变更。原 `CHANGELOG.md` 的内容已经并入文末“已完成变更”节，本仓库只保留这一份进度文件，不再单独维护 changelog。上位机进度、风险和验证以本文件为准；固件仓库（BMS-MASTER-F405）的 `todo.md` 只记录固件侧内容和跨层联调摘要，两边互不重复。使用者说明见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)，安装和发布见 [`README.md`](README.md)。
 
@@ -19,7 +19,7 @@
 - CAN 监视器支持主连接/整车连接数据源切换。
 - 内置整车模拟器（源码运行）发出全部代表帧，macOS 可开发整车页面；Windows 发布版不打包。
 - 代码按模块拆分：后端 `canhost/decoders.py`（帧格式唯一定义）+ `bms/` + `vehicle/` 子包 + `transport.py`；前端 `web/js/` 六个模块（core/bms/vehicle/fan/bench/ivt）。
-- 界面 UI 与连接交互重构完成：左上角标题单行化（`CAN host`）；整车总览与整车风扇移除顶部冗余连接栏；底部状态栏对齐 BMS 主连接与整车连接两个独立入口并配备专属连接弹窗。
+- 界面 UI 与连接交互重构完成：左上角标题单行化（`CAN HOST`）；整车总览与整车风扇移除顶部冗余连接栏；底部状态栏对齐 BMS 主连接与整车连接两个独立入口并配备专属连接弹窗。
 - 整车模拟器 SOP 发送周期已同步为 10ms，与 F405/BMS 新协议一致。
 
 ## 待完成
@@ -99,12 +99,20 @@
 
 ## 已完成变更
 
+### 2026-08-25
+
+- 修复源码运行下“连接 BMS 模拟数据后页面仍像未启动”的前端问题：`waitForApi` 必须等 PyWebView 方法真正生成后再返回，不能只判断 `pywebview.api` 对象存在；主 BMS 快照渲染也不再被整车/快捷栏等可选快照的偶发失败阻塞。
+- 修复 `renderConnection` 在 macOS/真实 PyWebView 中抛出的 `querySelector` 语法错误：`setClass` 原先只接受选择器字符串，但车辆状态胶囊传入了 DOM 元素；现在同时兼容字符串和元素。
+- 修复底部“整车连接”按钮：现在点击会打开专属 `vehicleConnectDialog`；同时恢复 CAN 监视器方向筛选按钮的绑定。
+- 修复整车高低压趋势卡片无限变高的问题：`#vehicleTrendCanvas` 之前没有固定 CSS 高度，JS 每次按 `clientHeight` 重设 canvas 属性后，CSS `height:auto` 又按新宽高比回写，导致画布越来越高；现在与总览趋势一致固定为 238px。
+- 品牌左上角标题统一为 `CAN HOST`（全大写），同步页面测试与进度文档。
+
 ### 2026-08-24
 
 #### 从 BMS_MASTER_F405 迁出为独立仓库
 
 - `git filter-repo` 保留 `TOOLS/bms_host`、两个 PCAN CLI、上位机测试、CI 工作流和使用文档的 29 条提交历史，迁入本仓库（BITFSAE/can-host，私有，Electrical-core 团队写权限），内容与原仓库 HEAD 逐文件核对一致。
-- 目录重排：`TOOLS/bms_host` → `canhost` 包（`python -m canhost`），CLI 脚本移入 `cli/`，requirements/build/spec/图标/todo 提升到仓库根；应用更名 BITFSAE CAN Host，exe `BITFSAE_CAN_Host`，CI 标签规则 `host-v*` → `v*` 并保留 workflow_dispatch。
+- 目录重排：`TOOLS/bms_host` → `canhost` 包（`python -m canhost`），CLI 脚本移入 `cli/`，requirements/build/spec/图标/todo 提升到仓库根；应用更名 BITFSAE CAN HOST，exe `BITFSAE_CAN_Host`，CI 标签规则 `host-v*` → `v*` 并保留 workflow_dispatch。
 - 固件仓库删除迁移内容并按 FanController 模式登记兄弟仓库指引。
 
 #### 整车 CANB 总览与快捷栏
@@ -113,7 +121,7 @@
 - 前端：`web/js/` 按 core/bms/vehicle/fan/bench/ivt 拆分，无构建步骤不变；导航分组 BMS（Alt+1-4）/整车（Alt+5-6）/监视（Alt+7）/工程工具（Alt+8-9）；整车总览页八类卡片 + 高低压双轴趋势；风扇页并入整车连接；状态栏加整车连接胶囊和九格常看值快捷条；CAN 监视器加数据源切换。
 #### 界面 UI 与连接交互重构优化
 
-- 左侧栏标题单行化：将左上角分行的 `CAN` / `HOST` 改为与银鲨图标水平对齐的单行 `CAN host`，更新 `.brand-title` 样式。
+- 左侧栏标题单行化：将左上角分行的 `CAN` / `HOST` 改为与银鲨图标水平对齐的单行 `CAN HOST`，更新 `.brand-title` 样式。
 - 整车总览与整车风扇去冗：移除页面顶部重复占空间的整车连接栏（`.tool-header-bar`），释放垂直高度给整车各节点卡片与风扇遥测，使整车页面与 BMS 监视页面保持统一的紧凑顶格布局。
 - 底部状态栏连接逻辑理顺：
   - 底部状态栏提供两个对等、语义清晰的连接入口：`BMS 主连接`（CAN1 / CANB / 模拟）与 `整车连接`（CANB / 模拟）；

@@ -1,4 +1,4 @@
-# BITFSAE CAN Host
+# BITFSAE CAN HOST
 
 BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度、故障与记录、参数与命令）+ 整车 CANB 总览（SOP、自有 IVT-S、赛会能量计、PDM 低压、ECU 四轮、胎温、整车风扇）。主要面向 Windows + PCAN-USB。使用者操作、页面分工、连接关系和总线安全边界统一见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；进度、风险、验证和历史变更统一记录在 [`todo.md`](todo.md)。
 
