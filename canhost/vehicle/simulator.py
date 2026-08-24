@@ -42,7 +42,7 @@ class VehicleSimulator:
 
     def _run(self) -> None:
         next_fast = 0.0    # 10 ms: ECU debug frames
-        next_sop = 0.0     # 50 ms: SOP pair
+        next_sop = 0.0     # 10 ms: SOP pair
         next_mid = 0.0     # 100 ms: IVT, meter, tyres
         next_slow = 0.0    # 500 ms: pack, fault, PDM, fan
         while not self.stop_event.wait(0.005):
@@ -51,7 +51,7 @@ class VehicleSimulator:
                 next_fast = now + 0.01
                 self._emit_ecu()
             if now >= next_sop:
-                next_sop = now + 0.05
+                next_sop = now + 0.01
                 self._emit_sop()
             if now >= next_mid:
                 next_mid = now + 0.10

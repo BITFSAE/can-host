@@ -14,3 +14,6 @@ dist/
 
 # Windows WebView2 运行时调试日志
 debug.log
+
+# Local AI/agent workspace files
+.zcode/

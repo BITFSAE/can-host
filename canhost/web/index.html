@@ -11,7 +11,7 @@
     <aside class="rail">
       <div class="brand">
         <img class="brand-mark" src="assets/shark-mark.svg" alt="BITFSAE 银鲨图标">
-        <span class="brand-text"><strong>CAN</strong><small>HOST</small></span>
+        <span class="brand-title">CAN host</span>
       </div>
 
       <nav id="nav" aria-label="主导航">
@@ -362,25 +362,6 @@
         </section>
 
         <section class="page" id="page-vehicle" aria-label="整车总览">
-          <div class="tool-header-bar">
-            <div class="tool-header-info">
-              <h2>整车总览</h2>
-              <span class="tool-header-desc">CANB · BMS 镜像 / SOP / IVT / PDM / 赛会能量计 / ECU / 胎温</span>
-            </div>
-            <div class="tool-header-connection">
-              <span id="vehicleStatusTag" class="tag neutral">未连接</span>
-              <div class="tool-connection-controls">
-                <select id="vehicleChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
-                <select id="vehicleBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
-                  <option value="500000">500 kbit/s</option>
-                  <option value="250000">250 kbit/s</option>
-                </select>
-                <button class="action-button" type="button" id="connectVehicleButton">连接</button>
-                <button class="danger-outline hidden" type="button" id="disconnectVehicleButton">断开</button>
-              </div>
-            </div>
-          </div>
-
           <div class="vehicle-layout">
             <article class="data-section vehicle-sop-section">
               <header><h3>SOP 限功率</h3><span id="vehSopAge" class="state-text">等待数据</span></header>
@@ -601,25 +582,6 @@
         </section>
 
         <section class="page" id="page-fan" aria-label="整车风扇">
-          <div class="tool-header-bar">
-            <div class="tool-header-info">
-              <h2>整车风扇</h2>
-              <span class="tool-header-desc">0x5A2–0x5A7 · 动力总成双回路冷却 · 使用整车连接</span>
-            </div>
-            <div class="tool-header-connection">
-              <span id="fanToolStatus" class="tag neutral">未连接</span>
-              <div class="tool-connection-controls">
-                <select id="fanChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
-                <select id="fanBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
-                  <option value="500000">500 kbit/s</option>
-                  <option value="250000">250 kbit/s</option>
-                </select>
-                <button class="action-button" type="button" id="connectFanButton">连接</button>
-                <button class="danger-outline hidden" type="button" id="disconnectFanButton">断开</button>
-              </div>
-            </div>
-          </div>
-
           <div class="fan-workspace-grid">
             <div class="fan-telemetry-column">
               <article class="panel fan-telemetry-panel">
@@ -870,13 +832,13 @@
       </div>
 
       <footer class="statusbar">
-        <button id="connectButton" class="connect-button" type="button">
+        <button id="connectButton" class="connect-button" type="button" title="BMS 主监视连接（CAN1 / CANB / 模拟）">
           <span class="status-dot" aria-hidden="true"></span>
-          <span class="connect-copy"><b>连接上位机</b><small>选择 CAN 总线</small></span>
+          <span class="connect-copy"><b>BMS 未连接</b><small>选择 CAN1</small></span>
         </button>
-        <button id="vehicleStatusPill" class="vehicle-pill" type="button" title="整车连接状态，点击前往整车总览">
+        <button id="vehicleStatusPill" class="connect-button vehicle-connect-button" type="button" title="整车遥测连接（CANB）">
           <span class="status-dot" aria-hidden="true"></span>
-          <span class="connect-copy"><b>整车未连接</b><small>CANB</small></span>
+          <span class="connect-copy"><b>整车未连接</b><small>CANB · 500k</small></span>
         </button>
         <span class="status-divider" aria-hidden="true"></span>
         <span class="status-group traffic-group">
@@ -894,7 +856,7 @@
 
   <dialog id="connectDialog" class="modal">
     <form method="dialog">
-          <header><h2>连接上位机</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <header><h2>BMS 主连接</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
       <div class="modal-body">
         <label class="field">
           <span class="field-label">监视总线</span>
@@ -907,13 +869,39 @@
         <dl class="mini-facts spread boxed">
           <div><dt>位速率</dt><dd id="connectBitrate">500 kbit/s</dd></div>
         </dl>
-        <p class="note tight">这是 BMS 主监视连接（CAN1/CANB）。整车页使用独立的 CANB 整车连接，台架和 IVT 配置各自使用工具页中的连接。</p>
+        <p class="note tight">这是 BMS 主监视连接（CAN1/CANB/模拟）。整车遥测由独立的 CANB 整车连接管理，台架与 IVT 配置使用工具专属连接。</p>
         <div id="connectError" class="modal-error hidden"></div>
       </div>
       <footer>
         <button type="button" class="danger-outline hidden" id="disconnectButton">断开当前连接</button>
         <button value="cancel" class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="doConnect">连接</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="vehicleConnectDialog" class="modal">
+    <form method="dialog">
+      <header><h2>整车 CANB 连接</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <label class="field" id="vehicleChannelField">
+          <span class="field-label">PCAN 通道</span>
+          <select id="vehicleConnectChannel"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">波特率 / 模式</span>
+          <select id="vehicleConnectBitrate">
+            <option value="500000">500 kbit/s（标准整车 CANB）</option>
+            <option value="250000">250 kbit/s（旧充电机 / 过渡）</option>
+          </select>
+        </label>
+        <p class="note tight">整车 CANB 独立通道，用于整车总览遥测（SOP、IVT、赛会能量计、PDM、ECU、胎温）与风扇控制。可与 BMS CAN1 监视同时连接不同 PCAN 接口。</p>
+        <div id="vehicleConnectError" class="modal-error hidden"></div>
+      </div>
+      <footer>
+        <button type="button" class="danger-outline hidden" id="disconnectVehicleButton">断开当前连接</button>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="connectVehicleButton">连接</button>
       </footer>
     </form>
   </dialog>

@@ -122,19 +122,14 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   width: 30px; height: 30px;
   border-radius: 7px;
 }
-.brand-text strong {
+.brand-title {
   display: block;
-  font-size: 19px;
+  font-family: var(--ui);
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: .1em;
-  line-height: 1.15;
-}
-.brand-text small {
-  display: block;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: .22em;
-  color: var(--text-3);
+  letter-spacing: .04em;
+  line-height: 1;
+  color: var(--text);
 }
 
 #nav { display: grid; gap: 3px; }
@@ -308,6 +303,9 @@ body.is-tool-page .quick-bar {
   height: 32px;
   padding: 0 10px;
   gap: 0 8px;
+}
+.statusbar .vehicle-connect-button {
+  margin-left: 8px;
 }
 .statusbar .connect-button b { font-size: 11.5px; }
 .statusbar .connect-button small { font-size: 10px; }
@@ -2585,31 +2583,19 @@ body.is-tool-page .quick-bar {
 .quick-cell em { font-style: normal; font-size: 9.5px; color: var(--text-3); }
 .quick-divider { width: 1px; height: 16px; flex: none; background: var(--line-soft); }
 
-/* 状态栏内的整车连接胶囊 */
-.vehicle-pill {
-  display: grid;
-  grid-template-columns: 9px minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  column-gap: 8px;
-  align-items: center;
-  width: fit-content;
-  min-width: 128px;
-  max-width: 190px;
-  margin-left: 10px;
-  padding: 0 10px;
-  min-height: 32px;
-  height: 32px;
-  background: transparent;
+/* 状态栏内的整车连接按钮 */
+.vehicle-pill, .vehicle-connect-button {
+  background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   color: var(--text-2);
   cursor: pointer;
+  transition: border-color .14s ease, background .14s ease;
 }
-.vehicle-pill:hover { border-color: var(--line-soft); background: var(--surface-2); }
-.vehicle-pill b { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
-.vehicle-pill small { font-size: 10px; color: var(--text-3); }
-.vehicle-pill .status-dot { grid-row: 1 / span 2; }
-.vehicle-pill.connected .status-dot { background: var(--ok); box-shadow: 0 0 6px rgba(62, 207, 142, .55); }
+.vehicle-pill:hover, .vehicle-connect-button:hover {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
 
 /* ---------------- 整车总览页 ---------------- */
 
@@ -2646,30 +2632,84 @@ body.is-tool-page .quick-bar {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.vehicle-limit-grid em { font-style: normal; font-size: 10px; color: var(--text-3); }
-
 .vehicle-flag-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px 14px;
-  margin: 12px 0 0;
+  gap: 8px 10px;
+  margin: 10px 0 0;
 }
-.vehicle-flag-list div {
+.vehicle-pack-section .vehicle-flag-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.vehicle-ecu-section .vehicle-flag-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.vehicle-flag-list > div {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 1px dashed var(--line-soft);
-  padding: 4px 0;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  min-height: 32px;
 }
-.vehicle-flag-list dt { font-size: 10.5px; color: var(--text-3); }
-.vehicle-flag-list dd { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+.vehicle-flag-list dt {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.vehicle-flag-list dd {
+  margin: 0;
+  font-family: var(--cjk);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: right;
+  white-space: nowrap;
+}
 .vehicle-flag-list dd.bad { color: var(--fault); }
 .vehicle-flag-list dd.ok { color: var(--ok); }
 
 .veh-state-text.bad { color: var(--fault); }
 .veh-state-text.ok { color: var(--ok); }
 
-.vehicle-ecu-ack { margin-top: 12px; }
+.vehicle-ecu-ack {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+  margin-top: 10px;
+  border-top: 0;
+}
+.vehicle-ecu-ack > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  min-height: 32px;
+}
+.vehicle-ecu-ack span {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.vehicle-ecu-ack em {
+  font-family: var(--cjk);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: right;
+  white-space: nowrap;
+}
+.vehicle-ecu-ack em.ok { color: var(--ok); }
+.vehicle-ecu-ack em.bad { color: var(--fault); }
 
 .vehicle-channel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .veh-channel {
@@ -2708,6 +2748,8 @@ body.is-tool-page .quick-bar {
   align-items: baseline;
   gap: 10px;
   margin-bottom: 9px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
 }
 .vehicle-pdm-head b { font-size: 12px; color: var(--text); }
 
@@ -2723,6 +2765,7 @@ body.is-tool-page .quick-bar {
   color: var(--text-3);
   border-bottom: 1px solid var(--line);
 }
+.veh-ecu-head .num { text-align: right; }
 .veh-ecu-row { padding: 7px 8px; border-bottom: 1px dashed var(--line-soft); }
 .veh-ecu-row b { font-size: 11.5px; color: var(--text-2); }
 .veh-ecu-row span {

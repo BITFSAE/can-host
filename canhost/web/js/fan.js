@@ -4,36 +4,9 @@ function fanConnectionAvailable() {
   return vehicleConnectionAvailable();
 }
 
-async function connectFanChannel() {
-  if (!state.api) return toast("应用后端未就绪", true);
-  const bitrate = Number($("#fanBitrateSelect").value || 500000);
-  const button = $("#connectFanButton");
-  button.disabled = true; button.textContent = "连接中…";
-  const result = await state.api.connect_vehicle({
-    mode: "pcan",
-    channel: $("#fanChannelSelect").value,
-    bitrate,
-    bus_profile: bitrate === 250000 ? "canb_legacy" : "canb",
-  });
-  button.disabled = false; button.textContent = "连接";
-  if (!result.ok) return toast(result.error || "整车连接失败", true);
-  toast(`整车连接已建立 · CANB ${bitrate / 1000} kbit/s`);
-  await poll();
-}
-
-async function disconnectFanChannel() {
-  if (!state.api) return;
-  await state.api.disconnect_vehicle();
-  state.vehicleSnapshot = null;
-  toast("整车连接已断开");
-  await poll();
-}
-
 function bindFanControls() {
-  $("#connectFanButton").addEventListener("click", connectFanChannel);
-  $("#disconnectFanButton").addEventListener("click", disconnectFanChannel);
-  $("#fanModeSelect").addEventListener("change", renderFanControlFields);
-  $("#sendFanControl").addEventListener("click", () => {
+  $("#fanModeSelect")?.addEventListener("change", renderFanControlFields);
+  $("#sendFanControl")?.addEventListener("click", () => {
     const mode = $("#fanModeSelect").value;
     const values = { mode: +mode, duty1_pct: +$("#fanDuty1Input").value || 0, duty2_pct: +$("#fanDuty2Input").value || 0,
                      lease_s: +$("#fanLeaseInput").value || 10 };
@@ -113,13 +86,6 @@ function renderFan() {
   const snapshot = state.vehicleSnapshot || {};
   const connection = snapshot.connection || {};
   const available = fanConnectionAvailable();
-  const currentBitrate = Number(connection.bitrate || 0);
-  if (currentBitrate && document.activeElement !== $("#fanBitrateSelect")) {
-    const match = [...$("#fanBitrateSelect").options].find(option => Number(option.value) === currentBitrate);
-    if (match) $("#fanBitrateSelect").value = match.value;
-  }
-  $("#connectFanButton").classList.toggle("hidden", connection.connected === true);
-  $("#disconnectFanButton").classList.toggle("hidden", connection.connected !== true);
   ["#sendFanControl", "#sendFanCurve", "#sendFanFailsafe", "#fanQueryButton", "#fanRestoreButton"]
     .forEach(id => { const node = $(id); if (node) node.disabled = !available; });
 
@@ -132,6 +98,7 @@ function renderFan() {
   const duty = status.duty_pct || [];
   const target = diagFresh ? (diag.target_pct || []) : [];
   const faults = diagFresh ? (diag.faults || 0) : 0;
+  const receiving = statusFresh || diagFresh;
 
   // Render RPM and Tachometer card states
   const duty1 = duty[0] ?? 0;
@@ -208,14 +175,6 @@ function renderFan() {
       : faults === 0 ? "自检全部通过 (正常)" : `${diag.fault_names.length} 项故障活动`;
   }
 
-  // Header Status Tag
-  const statusNode = $("#fanToolStatus");
-  const faultsActive = diagFresh && faults !== 0;
-  const receiving = statusFresh || diagFresh;
-  statusNode.className = "tag " + (!available || !receiving ? "neutral" : faultsActive ? "bad" : "ok");
-  statusNode.textContent = !available ? "未连接"
-    : !receiving ? "已连接 · 等待数据"
-    : `${diag.mode_name || "风扇"} · ${faultsActive ? `${diag.fault_names.length} 项故障` : "正常"}`;
   const newestFanAge = Math.min(...[fan.status_age, fan.diagnostic_age].filter(age => age != null));
   text("#fanFreshTag", receiving ? `0x5A2/0x5A3 · ${fmt(newestFanAge, 1)} s 前` : "未收到状态帧");
 

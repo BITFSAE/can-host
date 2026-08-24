@@ -573,7 +573,10 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("IVT 能量计配置", html)
         self.assertIn("整车风扇", html)
         self.assertIn("整车总览", html)
-        self.assertIn('id="quickBar"', html)
+        self.assertIn('class="brand-title">CAN host</span>', html)
+        self.assertNotIn('<strong>CAN</strong><small>HOST</small>', html)
+        self.assertIn('id="vehicleConnectDialog"', html)
+        self.assertIn('id="connectButton"', html)
         self.assertIn('id="vehicleStatusPill"', html)
         self.assertIn('id="frameSource"', html)
         self.assertNotIn("benchIvtMode", html)
@@ -581,6 +584,11 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertNotIn("真实 IVT-S", html)
         for obsolete in ("chargeExpectedAt", "chargeAverageCurrent", "chargeEstimateNote"):
             self.assertNotIn(obsolete, html)
+
+    def test_fan_js_defines_receiving_used_for_fresh_tag(self) -> None:
+        js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")
+        self.assertIn("const receiving = statusFresh || diagFresh;", js)
+        self.assertIn("text(\"#fanFreshTag\", receiving ?", js)
 
     def test_alarm_detail_reports_whether_level_frame_was_received(self) -> None:
         protocol = BmsProtocol()

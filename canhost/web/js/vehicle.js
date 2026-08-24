@@ -28,33 +28,57 @@ function vehicleConnectionAvailable() {
 }
 
 function bindVehicleControls() {
-  $("#connectVehicleButton").addEventListener("click", connectVehicle);
-  $("#disconnectVehicleButton").addEventListener("click", disconnectVehicle);
+  $("#connectVehicleButton")?.addEventListener("click", connectVehicle);
+  $("#disconnectVehicleButton")?.addEventListener("click", disconnectVehicle);
+  $("#vehicleConnectBitrate")?.addEventListener("change", updateVehicleDialog);
 }
 
 function populateVehicleOptions() {
-  const select = $("#vehicleBitrateSelect");
+  const select = $("#vehicleConnectBitrate");
+  if (!select) return;
   if (state.bootstrap?.vehicle_simulation_enabled === true
       && ![...select.options].some(option => option.value === "simulation")) {
-    select.add(new Option("内置模拟数据", "simulation"));
+    const simOption = new Option("内置模拟数据 · CANB / 开发测试", "simulation");
+    select.insertBefore(simOption, select.firstChild);
+    if (!state.vehicleSnapshot?.connection?.connected) {
+      select.value = "simulation";
+    }
   }
+  updateVehicleDialog();
+}
+
+function updateVehicleDialog() {
+  const select = $("#vehicleConnectBitrate");
+  if (!select) return;
+  const isSim = select.value === "simulation";
+  $("#vehicleChannelField")?.classList.toggle("hidden", isSim);
 }
 
 async function connectVehicle() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const bitrateRaw = $("#vehicleBitrateSelect").value || "500000";
+  const bitrateSelect = $("#vehicleConnectBitrate");
+  const bitrateRaw = bitrateSelect?.value || "500000";
   const simulation = bitrateRaw === "simulation";
   const bitrate = simulation ? 500000 : Number(bitrateRaw);
+  const channelSelect = $("#vehicleConnectChannel");
   const button = $("#connectVehicleButton");
-  button.disabled = true; button.textContent = "连接中…";
+  if (button) { button.disabled = true; button.textContent = "连接中…"; }
+  text("#vehicleConnectError", "");
+  $("#vehicleConnectError")?.classList.add("hidden");
+
   const result = await state.api.connect_vehicle({
     mode: simulation ? "simulation" : "pcan",
-    channel: $("#vehicleChannelSelect").value,
+    channel: simulation ? null : channelSelect?.value,
     bitrate,
     bus_profile: simulation || bitrate === 500000 ? "canb" : "canb_legacy",
   });
-  button.disabled = false; button.textContent = "连接";
-  if (!result.ok) return toast(result.error || "整车连接失败", true);
+  if (button) { button.disabled = false; button.textContent = "连接"; }
+  if (!result.ok) {
+    text("#vehicleConnectError", result.error || "整车连接失败");
+    $("#vehicleConnectError")?.classList.remove("hidden");
+    return toast(result.error || "整车连接失败", true);
+  }
+  $("#vehicleConnectDialog")?.close();
   toast(simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`);
   await poll();
 }
@@ -63,6 +87,7 @@ async function disconnectVehicle() {
   if (!state.api) return;
   await state.api.disconnect_vehicle();
   state.vehicleSnapshot = null;
+  $("#vehicleConnectDialog")?.close();
   toast("整车连接已断开");
   await poll();
 }
@@ -115,20 +140,13 @@ function renderVehicle() {
   const available = vehicleConnectionAvailable();
   const simulation = connection.mode === "simulation";
   const currentBitrate = Number(connection.bitrate || 0);
-  if (currentBitrate && document.activeElement !== $("#vehicleBitrateSelect")) {
-    const match = [...$("#vehicleBitrateSelect").options].find(option => Number(option.value) === currentBitrate);
-    if (match) $("#vehicleBitrateSelect").value = match.value;
+  const bitrateSelect = $("#vehicleConnectBitrate");
+  if (bitrateSelect && document.activeElement !== bitrateSelect) {
+    const targetValue = simulation ? "simulation" : String(currentBitrate);
+    const match = [...bitrateSelect.options].find(option => option.value === targetValue);
+    if (match) bitrateSelect.value = match.value;
   }
-  $("#connectVehicleButton").classList.toggle("hidden", connection.connected === true);
-  $("#disconnectVehicleButton").classList.toggle("hidden", connection.connected !== true);
-
-  const statusNode = $("#vehicleStatusTag");
-  const receiving = isFresh(connection.last_rx_age, 4.0);
-  statusNode.className = "tag " + (!connection.connected ? "neutral" : !receiving ? "warn" : "ok");
-  statusNode.textContent = !connection.connected ? "未连接"
-    : simulation ? "模拟数据"
-    : !receiving ? "已连接 · 等待数据"
-    : `${connection.channel || "CANB"} · ${(currentBitrate || 500000) / 1000} kbit/s`;
+  $("#disconnectVehicleButton")?.classList.toggle("hidden", connection.connected !== true);
 
   // -- SOP ---------------------------------------------------------------
   const sop = snapshot.sop || {};

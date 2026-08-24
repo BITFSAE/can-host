@@ -1,10 +1,12 @@
 /* 框架层：状态、轮询、导航、确认弹窗、状态栏与快捷栏、CAN 监视器、回放。
  * 页面模块（bms/vehicle/fan/bench/ivt）在其后加载，函数在调用时解析。 */
 
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
+var $ = (selector) => document.querySelector(selector);
+var $$ = (selector) => [...document.querySelectorAll(selector)];
+window.$ = $;
+window.$$ = $$;
 
-const state = {
+var state = {
   api: null,
   bootstrap: null,
   snapshot: null,
@@ -33,6 +35,7 @@ const state = {
   cellRefs: null,
   frameRowPool: [],
 };
+window.state = state;
 
 const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
@@ -92,8 +95,29 @@ function stepUiScale(direction) {
 
 async function waitForApi() {
   if (window.pywebview?.api) return window.pywebview.api;
-  await new Promise(resolve => window.addEventListener("pywebviewready", resolve, { once: true }));
-  return window.pywebview.api;
+  return new Promise(resolve => {
+    let done = false;
+    const check = () => {
+      if (window.pywebview?.api && !done) {
+        done = true;
+        resolve(window.pywebview.api);
+        return true;
+      }
+      return false;
+    };
+    if (check()) return;
+    window.addEventListener("pywebviewready", () => check(), { once: true });
+    const timer = setInterval(() => {
+      if (check()) clearInterval(timer);
+    }, 40);
+    setTimeout(() => {
+      clearInterval(timer);
+      if (!done) {
+        done = true;
+        resolve(window.pywebview?.api || null);
+      }
+    }, 4000);
+  });
 }
 
 async function init() {
@@ -158,10 +182,8 @@ function bindCoreControls() {
   $("#connectProfile").addEventListener("change", updateConnectionDialog);
   $("#doConnect").addEventListener("click", connectCan);
   $("#disconnectButton").addEventListener("click", disconnectCan);
-  $("#vehicleStatusPill").addEventListener("click", () => showPage("vehicle"));
-  $("#frameType").addEventListener("click", event => {
+  $("#vehicleStatusPill").addEventListener("click", () => {
     const button = event.target.closest("button"); if (!button) return;
-    state.frameKind = button.dataset.kind;
     $$("#frameType button").forEach(node => node.classList.toggle("active", node === button));
     renderFrames();
   });
@@ -229,13 +251,16 @@ function populateConnectionOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data) return;
   const profiles = [...(data.profiles || [])];
-  if (data.simulation_enabled === true && !profiles.some(item => item.key === "simulation")) {
+  if (data.simulation_enabled === true && !profiles.some(item => item.key === "simulation" || item.mode === "simulation")) {
     profiles.unshift({ key: "simulation", mode: "simulation", name: "内置模拟数据 · CAN1 / 开发测试", bitrate: 500000 });
   }
   $("#connectProfile").innerHTML = profiles.map(item =>
-    `<option value="${item.key}" data-mode="${item.mode || "pcan"}" data-bitrate="${item.bitrate}">${item.name}</option>`
+    `<option value="${item.key}" data-mode="${item.mode || (item.key === "simulation" ? "simulation" : "pcan")}" data-bitrate="${item.bitrate}">${item.name}</option>`
   ).join("");
-  $("#connectChannel").innerHTML = data.channels.map(item => `<option>${item}</option>`).join("");
+  if (data.simulation_enabled === true && !state.snapshot?.connection?.connected) {
+    $("#connectProfile").value = "simulation";
+  }
+  $("#connectChannel").innerHTML = (data.channels || ["PCAN_USBBUS1"]).map(item => `<option>${item}</option>`).join("");
   updateConnectionDialog();
 }
 
@@ -243,34 +268,38 @@ function populateToolChannelOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data?.channels) return;
   const options = data.channels.map(item => `<option>${item}</option>`).join("");
-  ["#benchChannelSelect", "#ivtChannelSelect", "#fanChannelSelect", "#vehicleChannelSelect"]
+  ["#benchChannelSelect", "#ivtChannelSelect", "#vehicleConnectChannel"]
     .forEach(id => { if ($(id)) $(id).innerHTML = options; });
 }
 
 function updateConnectionDialog() {
-  const option = $("#connectProfile").selectedOptions[0];
-  const simulation = option?.dataset.mode === "simulation";
-  $("#channelField").classList.toggle("hidden", simulation);
-  text("#connectBitrate", simulation ? "虚拟 CAN1" : `${Number(option?.dataset.bitrate || 500000) / 1000} kbit/s`);
+  const option = $("#connectProfile").selectedOptions?.[0] || $("#connectProfile").options?.[0];
+  const simulation = option?.dataset?.mode === "simulation" || option?.value === "simulation";
+  $("#channelField")?.classList.toggle("hidden", simulation);
+  text("#connectBitrate", simulation ? "虚拟 CAN1" : `${Number(option?.dataset?.bitrate || 500000) / 1000} kbit/s`);
 }
 
 async function connectCan() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const option = $("#connectProfile").selectedOptions[0];
-  const mode = option?.dataset.mode || "pcan";
+  const option = $("#connectProfile").selectedOptions?.[0] || $("#connectProfile").options?.[0];
+  const mode = option?.dataset?.mode || (option?.value === "simulation" ? "simulation" : "pcan");
+  const profileVal = $("#connectProfile").value || "can1";
   resetChargeTiming();
   $("#doConnect").disabled = true; text("#doConnect", "连接中…");
   $("#connectError").classList.add("hidden");
   const result = await state.api.connect_can({
-    mode, bus_profile: mode === "simulation" ? "can1" : $("#connectProfile").value,
+    mode, bus_profile: mode === "simulation" ? "can1" : profileVal,
     channel: mode === "simulation" ? null : $("#connectChannel").value,
-    bitrate: Number(option?.dataset.bitrate || 500000),
+    bitrate: Number(option?.dataset?.bitrate || 500000),
   });
   $("#doConnect").disabled = false; text("#doConnect", "连接");
   if (result.ok) {
-    $("#connectDialog").close(); toast("上位机已连接"); await poll();
+    $("#connectDialog").close();
+    toast(mode === "simulation" ? "BMS 模拟数据已启动（CAN1）" : "BMS 主连接已建立");
+    await poll();
   } else {
-    text("#connectError", result.error); $("#connectError").classList.remove("hidden");
+    text("#connectError", result.error || "连接失败");
+    $("#connectError").classList.remove("hidden");
   }
 }
 
@@ -354,20 +383,20 @@ function renderConnection(connection) {
   state.recording = !!connection.recording;
   text("#recordButton", state.recording ? "■ 停止记录" : "● 记录数据");
   setClass("#recordButton", "active", state.recording);
-  text("#recordingState", state.recording ? `● 正在记录 ${connection.recording.format === "bmslog" ? "BMSLOG" : "CSV"}` : "");
-  text("#rxCount", connection.rx_count.toLocaleString()); text("#txCount", connection.tx_count.toLocaleString());
+  text("#rxCount", (connection.rx_count || 0).toLocaleString());
+  text("#txCount", (connection.tx_count || 0).toLocaleString());
   setClass("#connectButton", "connected", connection.connected);
   setClass("#connectButton", "simulation", connection.mode === "simulation");
   setClass("#connectButton", "replay", connection.mode === "replay");
   const profileNames = { can1: "CAN1 · F405", canb: "CANB · 500", canb_legacy: "CANB Legacy · 250" };
-  const modeName = connection.mode === "simulation" ? "内置模拟数据"
-    : connection.mode === "bench" ? "CAN1 从控台架"
-    : connection.mode === "replay" ? "历史回放" : connection.channel || "PCAN";
-  $("#connectButton b").textContent = connection.connected ? modeName : "连接上位机";
+  const modeName = connection.mode === "simulation" ? "BMS 模拟数据"
+    : connection.mode === "bench" ? "BMS 从控台架"
+    : connection.mode === "replay" ? "BMS 历史回放" : `BMS: ${connection.channel || "PCAN"}`;
+  $("#connectButton b").textContent = connection.connected ? modeName : "BMS 未连接";
   $("#connectButton small").textContent = connection.connected
-    ? connection.mode === "simulation" ? "虚拟 CAN1 · 开发测试"
-      : `${profileNames[connection.bus_profile] || "CAN"} · ${(connection.bitrate || 500000) / 1000} kbit/s`
-    : "选择 CAN 总线";
+    ? connection.mode === "simulation" ? "虚拟 CAN1 · 测试"
+      : `${profileNames[connection.bus_profile] || "CAN1"} · ${(connection.bitrate || 500000) / 1000} kbit/s`
+    : "选择 CAN1 总线";
   $("#disconnectButton").classList.toggle("hidden", !connection.connected);
 
   const vehicleConnection = state.quickSnapshot?.vehicle?.connection
@@ -376,13 +405,14 @@ function renderConnection(connection) {
   if (vehiclePill) {
     const connected = vehicleConnection.connected === true;
     setClass(vehiclePill, "connected", connected);
+    setClass(vehiclePill, "simulation", vehicleConnection.mode === "simulation");
     vehiclePill.querySelector("b").textContent = connected
-      ? (vehicleConnection.mode === "simulation" ? "整车模拟数据" : vehicleConnection.channel || "整车已连接")
+      ? (vehicleConnection.mode === "simulation" ? "整车模拟数据" : `整车: ${vehicleConnection.channel || "PCAN"}`)
       : "整车未连接";
     vehiclePill.querySelector("small").textContent = connected
       ? vehicleConnection.mode === "simulation" ? "虚拟 CANB"
         : `CANB · ${(vehicleConnection.bitrate || 500000) / 1000} kbit/s`
-      : "CANB";
+      : "CANB · 500 kbit/s";
   }
 
   const firmware = state.snapshot?.firmware || {};
