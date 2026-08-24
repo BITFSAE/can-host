@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from collections import deque
 
-from canhost.can_service import CanService
+from canhost.transport import CanService
 from canhost.ivt import (
     BMS_CANB_CMD_ID,
     BMS_CANB_RSP_ID,

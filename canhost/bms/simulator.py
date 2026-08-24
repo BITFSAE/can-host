@@ -9,7 +9,8 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from .protocol import CAN1_COMMAND_REQ_EXT_ID, TOOL_PROTOCOL_VERSION, CanFrame
+from ..decoders import CanFrame
+from .protocol import CAN1_COMMAND_REQ_EXT_ID, TOOL_PROTOCOL_VERSION
 
 
 class BmsSimulator:

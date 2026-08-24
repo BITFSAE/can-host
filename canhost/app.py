@@ -8,8 +8,8 @@ import sys
 from typing import Any
 
 from . import __version__, __version_date__
-from .can_service import CanService
-from .protocol import switch_catalog
+from .transport import CanService
+from .bms.protocol import switch_catalog
 
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -28,7 +28,11 @@ class Api:
         # sender, the IVT configurator, or the fan tool uses its own PCAN handle.
         self._bench_service = CanService(allow_simulation=False)
         self._ivt_service = CanService(allow_simulation=False)
-        self._fan_service = CanService(allow_simulation=False)
+        # The vehicle connection is a second independent CANB channel.  It
+        # feeds the vehicle pages and the quick-value strip while the main
+        # BMS connection stays on CAN1 for parameter work.
+        self._vehicle_service = CanService(protocol_kind="vehicle",
+                                           allow_simulation=not getattr(sys, "frozen", False))
         self._window: Any = None
 
     def bootstrap(self) -> dict[str, Any]:
@@ -50,7 +54,8 @@ class Api:
             "simulation_enabled": self._service.allow_simulation,
             "bench_enabled": True,
             "ivt_enabled": True,
-            "fan_enabled": True,
+            "vehicle_enabled": True,
+            "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
             "profiles": profiles,
         }
@@ -87,22 +92,26 @@ class Api:
     def get_ivt_snapshot(self) -> dict[str, Any]:
         return self._ivt_service.ivt_snapshot()
 
-    def connect_fan(self, config: dict[str, Any]) -> dict[str, Any]:
+    def connect_vehicle(self, config: dict[str, Any]) -> dict[str, Any]:
+        mode = "simulation" if config.get("mode") == "simulation" else "pcan"
         profile = str(config.get("bus_profile") or "canb")
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
-        return self._fan_service.connect({
-            "mode": "pcan", "bus_profile": profile,
+        return self._vehicle_service.connect({
+            "mode": mode, "bus_profile": profile,
             "channel": config.get("channel"), "bitrate": bitrate,
         })
 
-    def disconnect_fan(self) -> dict[str, Any]:
-        return self._fan_service.disconnect()
+    def disconnect_vehicle(self) -> dict[str, Any]:
+        return self._vehicle_service.disconnect()
 
-    def get_fan_snapshot(self) -> dict[str, Any]:
-        return self._fan_service.fan_snapshot()
+    def get_vehicle_snapshot(self) -> dict[str, Any]:
+        return self._vehicle_service.vehicle_snapshot()
+
+    def get_quick_snapshot(self) -> dict[str, Any]:
+        return {"vehicle": self._vehicle_service.quick_snapshot()}
 
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
-        return self._fan_service.send_fan_command(name, values, acknowledged)
+        return self._vehicle_service.send_fan_command(name, values, acknowledged)
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()
@@ -168,7 +177,7 @@ class Api:
         self._service.disconnect()
         self._bench_service.disconnect()
         self._ivt_service.disconnect()
-        self._fan_service.disconnect()
+        self._vehicle_service.disconnect()
 
 
 def main() -> None:

@@ -15,16 +15,19 @@ from typing import Any
 from .ivt import (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
                   compare_readback, expected_bms_canb_config)
-from .protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
-                       BmsProtocol, CanFrame, build_command, build_fan_command,
-                       command_ack_matches, fan_ack_matches)
+from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
+                           BmsProtocol, build_command, command_ack_matches)
+from .decoders import CanFrame, build_fan_command, fan_ack_matches
+from .vehicle.protocol import VehicleProtocol
 
 
 class CanService:
-    def __init__(self, allow_simulation: bool = True) -> None:
+    def __init__(self, protocol_kind: str = "bms", allow_simulation: bool = True) -> None:
+        if protocol_kind not in {"bms", "vehicle"}:
+            raise ValueError(f"未知协议类型：{protocol_kind}")
         self.lock = threading.RLock()
+        self.protocol_kind = protocol_kind
         self.allow_simulation = allow_simulation
-        self.protocol = BmsProtocol()
         self.bus: Any = None
         self.worker: threading.Thread | None = None
         self.stop_event = threading.Event()
@@ -66,6 +69,11 @@ class CanService:
         self.bench_lock = threading.RLock()
         self.bench_last_tx_error = ""
         self.bench_last_tx_error_time = 0.0
+        self.protocol = self._new_protocol()
+
+    def _new_protocol(self, clock=None) -> BmsProtocol | VehicleProtocol:
+        protocol_class = VehicleProtocol if self.protocol_kind == "vehicle" else BmsProtocol
+        return protocol_class(clock) if clock is not None else protocol_class()
 
     def connect(self, config: dict[str, Any]) -> dict[str, Any]:
         self.disconnect()
@@ -75,8 +83,12 @@ class CanService:
         channel = str(config.get("channel") or "PCAN_USBBUS1")
         if mode == "bench" and profile != "can1":
             return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；CANB 请使用真实 PCAN 和真实 IVT"}
+        if mode == "bench" and self.protocol_kind != "bms":
+            return {"ok": False, "error": "台架注入只支持 BMS 协议连接"}
+        if mode == "simulation" and self.protocol_kind == "vehicle" and profile == "can1":
+            return {"ok": False, "error": "整车连接只在 CANB 上工作；请选择 CANB 或 Legacy 位率"}
         with self.lock:
-            self.protocol = BmsProtocol()
+            self.protocol = self._new_protocol()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
             self.connection.update({"connected": False, "mode": mode, "channel": channel,
@@ -85,8 +97,12 @@ class CanService:
             if mode == "simulation":
                 if not self.allow_simulation:
                     raise RuntimeError("当前发布版仅支持真实 PCAN 设备")
-                from .simulator import BmsSimulator
-                self.simulator = BmsSimulator(self._ingest, bus_profile=profile)
+                if self.protocol_kind == "vehicle":
+                    from .vehicle.simulator import VehicleSimulator
+                    self.simulator = VehicleSimulator(self._ingest)
+                else:
+                    from .bms.simulator import BmsSimulator
+                    self.simulator = BmsSimulator(self._ingest, bus_profile=profile)
                 self.simulator.start()
             else:
                 try:
@@ -151,7 +167,7 @@ class CanService:
             # A disconnect ends the identity of the attached BMS. Do not let
             # RTC replies, fault history, or measurements from the previous
             # device survive into the next connection.
-            self.protocol = BmsProtocol()
+            self.protocol = self._new_protocol()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
             self.ivt_rx_condition.notify_all()
@@ -162,6 +178,8 @@ class CanService:
     def send_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
         if not acknowledged:
             return {"ok": False, "error": "发送前必须确认本次写操作"}
+        if self.protocol_kind != "bms":
+            return {"ok": False, "error": "此连接不支持 F405 工具命令"}
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "CAN 尚未连接"}
@@ -248,6 +266,8 @@ class CanService:
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
         if not acknowledged:
             return {"ok": False, "error": "发送前必须确认本次写操作"}
+        if self.protocol_kind != "vehicle":
+            return {"ok": False, "error": "风扇命令通过整车连接发送；当前连接不是整车连接"}
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "CAN 尚未连接"}
@@ -288,6 +308,8 @@ class CanService:
             return {"ok": False, "error": str(exc)}
 
     def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
+        if self.protocol_kind != "bms":
+            return {"ok": False, "error": "此连接不支持 F405 工具命令"}
         with self.lock:
             if self.protocol.fault.get("flags", {}).get("log_clear_pending"):
                 return {"ok": False, "error": "主控正在分阶段清除 Flash 故障日志，请等待清除完成"}
@@ -353,10 +375,17 @@ class CanService:
             return {"connection": dict(self.connection),
                     "ivt_config": dict(self.ivt_config) if self.ivt_config else None}
 
-    def fan_snapshot(self) -> dict[str, Any]:
-        """Return only the state needed by the independent fan page."""
+    def vehicle_snapshot(self) -> dict[str, Any]:
+        """Return the full vehicle-page state for the dedicated CANB connection."""
         with self.lock:
-            return {"connection": dict(self.connection), **self.protocol.fan_state()}
+            return self.protocol.snapshot(dict(self.connection))
+
+    def quick_snapshot(self) -> dict[str, Any]:
+        """Small state polled by the always-visible quick-value strip."""
+        with self.lock:
+            return {"connection": {key: self.connection.get(key) for key in
+                                   ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error")},
+                    **self.protocol.quick_values()}
 
     def _start_bench(self, profile: str) -> None:
         if profile != "can1":
@@ -673,6 +702,8 @@ class CanService:
 
     def load_replay(self, path: str) -> dict[str, Any]:
         """Load a native BMS log or CSV and start read-only replay."""
+        if self.protocol_kind != "bms":
+            return {"ok": False, "error": "历史回放只在主连接（BMS 记录）上提供"}
         database: sqlite3.Connection | None = None
         try:
             frames: list[CanFrame] = []
@@ -732,7 +763,7 @@ class CanService:
                 bitrate = 250000 if profile == "canb_legacy" else 500000
             self.disconnect()
             with self.lock:
-                self.protocol = BmsProtocol(clock=lambda: self.replay_position)
+                self.protocol = self._new_protocol(clock=lambda: self.replay_position)
                 self.replay_frames = frames
                 self.replay_relative = relative
                 self.replay_db = database
@@ -925,7 +956,7 @@ class CanService:
             self._rebuild_database_replay(position)
             return
         self.replay_position = 0.0
-        self.protocol = BmsProtocol(clock=lambda: self.replay_position)
+        self.protocol = self._new_protocol(clock=lambda: self.replay_position)
         self.replay_index = 0
         while (self.replay_index < len(self.replay_frames)
                and self.replay_relative[self.replay_index] <= position):
@@ -1027,7 +1058,7 @@ class CanService:
         target = self.replay_first_timestamp + position
         recent_start = max(self.replay_first_timestamp, target - 130.0)
         self.replay_position = 0.0
-        self.protocol = BmsProtocol(clock=lambda: self.replay_position)
+        self.protocol = self._new_protocol(clock=lambda: self.replay_position)
 
         fault_rows = self.replay_db.execute(
             "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
@@ -1095,7 +1126,7 @@ class CanService:
             return
         if not self.record_writer:
             return
-        from .protocol import frame_name
+        from .bms.protocol import frame_name
         self.record_writer.writerow([
             datetime.fromtimestamp(frame.timestamp).isoformat(timespec="milliseconds"), frame.direction,
             f"0x{frame.arbitration_id:08X}" if frame.is_extended_id else f"0x{frame.arbitration_id:03X}",
