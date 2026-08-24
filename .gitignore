@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 本地虚拟环境与构建产物
+.venv-canhost/
+.venv-canhost-build/
+.venv-bms-host*/
+build/
+dist/
+
+# Windows WebView2 运行时调试日志
+debug.log

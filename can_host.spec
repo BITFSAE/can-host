@@ -1,20 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-root = Path(SPECPATH).resolve().parents[1]
-package = root / "TOOLS" / "bms_host"
+root = Path(SPECPATH).resolve()
+package = root / "canhost"
 
 a = Analysis(
     [str(package / "__main__.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[(str(package / "web"), "TOOLS/bms_host/web")],
-    hiddenimports=["can.interfaces.pcan"],
+    datas=[(str(package / "web"), "canhost/web")],
+    hiddenimports=["can.interfaces.pcan", "cli.pcan_bms_bench"],
     hookspath=[],
     runtime_hooks=[],
     # The field release is connected to real PCAN hardware.  Keep the
     # simulator available to source runs, but do not ship it in the EXE.
-    excludes=["TOOLS.bms_host.simulator"],
+    excludes=["canhost.simulator"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -23,12 +23,12 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="BITFSAE_BMS_Control_Desk",
-    icon=str(package / "app_icon.ico"),
+    name="BITFSAE_CAN_Host",
+    icon=str(root / "app_icon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=True, name="BITFSAE_BMS_Control_Desk")
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=True, name="BITFSAE_CAN_Host")

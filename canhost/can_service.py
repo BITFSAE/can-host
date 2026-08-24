@@ -362,7 +362,7 @@ class CanService:
         if profile != "can1":
             raise RuntimeError("主上位机台架只支持 CAN1 从控帧")
         try:
-            from .. import pcan_bms_bench as bench_module
+            from cli import pcan_bms_bench as bench_module
         except ImportError as exc:
             raise RuntimeError("台架模式需要 python-can") from exc
         if bench_module.can is None:

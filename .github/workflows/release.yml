@@ -1,9 +1,9 @@
-name: BMS 上位机 Windows 构建与发布
+name: 上位机 Windows 构建与发布
 
 on:
   push:
     tags:
-      - 'host-v*'
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -21,29 +21,29 @@ jobs:
           python-version: '3.11'
 
       - name: 核对标签版本与软件版本一致
-        if: startsWith(github.ref, 'refs/tags/host-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          $tagVersion = "$env:GITHUB_REF_NAME".Substring('host-v'.Length)
+          $tagVersion = "$env:GITHUB_REF_NAME".Substring('v'.Length)
           $baseVersion = "$tagVersion".Split('-')[0]
-          $appVersion = python -c "from TOOLS.bms_host import __version__; print(__version__)"
+          $appVersion = python -c "from canhost import __version__; print(__version__)"
           if ($baseVersion -ne $appVersion) {
-            throw "标签 $env:GITHUB_REF_NAME 的版本 $baseVersion 与 TOOLS/bms_host/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
+            throw "标签 $env:GITHUB_REF_NAME 的版本 $baseVersion 与 canhost/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
           }
 
       - name: 运行测试并 PyInstaller 打包
-        run: powershell -ExecutionPolicy Bypass -File TOOLS\bms_host\build_windows.ps1
+        run: powershell -ExecutionPolicy Bypass -File build_windows.ps1
 
       - name: 压缩发布目录
         id: zip
         shell: pwsh
         run: |
           if ("$env:GITHUB_REF".StartsWith('refs/tags/')) {
-            $base = "BITFSAE_BMS_Control_Desk_$($env:GITHUB_REF_NAME)"
+            $base = "BITFSAE_CAN_Host_$($env:GITHUB_REF_NAME)"
           } else {
-            $base = "BITFSAE_BMS_Control_Desk_$("$env:GITHUB_SHA".Substring(0, 7))"
+            $base = "BITFSAE_CAN_Host_$("$env:GITHUB_SHA".Substring(0, 7))"
           }
-          Compress-Archive -Path dist/BITFSAE_BMS_Control_Desk -DestinationPath "$base.zip"
+          Compress-Archive -Path dist/BITFSAE_CAN_Host -DestinationPath "$base.zip"
           "base=$base" >> $env:GITHUB_OUTPUT
           "path=$base.zip" >> $env:GITHUB_OUTPUT
 
@@ -55,7 +55,7 @@ jobs:
           if-no-files-found: error
 
       - name: 创建 GitHub Release
-        if: startsWith(github.ref, 'refs/tags/host-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,7 +63,7 @@ jobs:
           $tag = "$env:GITHUB_REF_NAME"
           $zip = "${{ steps.zip.outputs.path }}"
           $notes = @"
-          解压后复制整个 BITFSAE_BMS_Control_Desk 文件夹到目标电脑，运行其中的 BITFSAE_BMS_Control_Desk.exe，不能只复制 exe。
+          解压后复制整个 BITFSAE_CAN_Host 文件夹到目标电脑，运行其中的 BITFSAE_CAN_Host.exe，不能只复制 exe。
 
           目标电脑需要先安装：
 
@@ -77,6 +77,6 @@ jobs:
           } else {
             # 版本号后带 -rc1 / -pre 等后缀的标签创建为 GitHub 预发布（Pre-release）。
             $extra = @()
-            if ($tag.Substring('host-v'.Length).Contains('-')) { $extra += '--prerelease' }
+            if ($tag.Substring('v'.Length).Contains('-')) { $extra += '--prerelease' }
             gh release create $tag $zip --title $tag --notes "$notes" @extra
           }

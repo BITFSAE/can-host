@@ -175,7 +175,7 @@ def main() -> None:
     try:
         import webview
     except ImportError:
-        raise SystemExit("缺少 pywebview。请先执行：pip install -r TOOLS/bms_host/requirements.txt")
+        raise SystemExit("缺少 pywebview。请先执行：pip install -r requirements.txt")
     api = Api()
     window = webview.create_window(
         "BITFSAE · BMS Control Desk", url=(WEB_DIR / "index.html").as_uri(), js_api=api,

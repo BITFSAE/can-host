@@ -11,11 +11,11 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from TOOLS.bms_host.can_service import CanService
-from TOOLS.bms_host.app import Api
-from TOOLS.bms_host.protocol import (BmsProtocol, CanFrame, build_command, build_fan_command,
+from canhost.can_service import CanService
+from canhost.app import Api
+from canhost.protocol import (BmsProtocol, CanFrame, build_command, build_fan_command,
                                      command_ack_matches, fan_ack_matches, switch_catalog)
-from TOOLS.bms_host.simulator import BmsSimulator
+from canhost.simulator import BmsSimulator
 
 
 class BmsProtocolTest(unittest.TestCase):
@@ -546,7 +546,7 @@ class BmsProtocolTest(unittest.TestCase):
             service.disconnect()
 
     def test_overview_markup_matches_information_hierarchy(self) -> None:
-        html = (Path(__file__).parents[1] / "TOOLS" / "bms_host" / "web" / "index.html").read_text(encoding="utf-8")
+        html = (Path(__file__).parents[1] / "canhost" / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('class="relay-tiles"', html)
         self.assertIn('class="condition-stack"', html)
         self.assertIn('class="data-section thermal-section"', html)

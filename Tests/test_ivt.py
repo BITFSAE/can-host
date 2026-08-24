@@ -5,8 +5,8 @@ from __future__ import annotations
 import unittest
 from collections import deque
 
-from TOOLS.bms_host.can_service import CanService
-from TOOLS.bms_host.ivt import (
+from canhost.can_service import CanService
+from canhost.ivt import (
     BMS_CANB_CMD_ID,
     BMS_CANB_RSP_ID,
     BMS_CANB_RESULT_IDS,
@@ -196,7 +196,7 @@ class IvtServiceBoundaryTest(unittest.TestCase):
             service.disconnect()
 
     def test_bench_command_reuses_pcan_bench_model(self) -> None:
-        from TOOLS import pcan_bms_bench
+        from cli import pcan_bms_bench
 
         service = CanService()
         try:
