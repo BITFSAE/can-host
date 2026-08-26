@@ -133,8 +133,13 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 02 00 00 00 00 00 00"), True))
         protocol.ingest(cell_frame)
         clock[0] = 0.5
-        self.assertEqual(protocol.slave_sample_timeout_s, 0.75)
+        self.assertEqual(protocol.slave_sample_timeout_s, 1.5)
         self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
+
+        clock[0] = 1.89
+        self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
+        clock[0] = 1.91
+        self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
 
     def test_canb_snapshot_does_not_invent_slave_data(self) -> None:
         protocol = BmsProtocol()

@@ -78,6 +78,7 @@
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
+| 2026-08-26 | Bringup 从控监视超时改为 1.5s；`unittest discover Tests/test_*.py` 87 项通过 | 实体 PCAN 与 F405 Bringup 联调仍待验证 |
 | 2026-08-24 | 仓库迁移与整车扩展：filter-repo 保留 29 条 host 提交历史迁入本仓库并推送 GitHub（私有，Electrical-core 团队写权限）；后端拆分 decoders/bms/vehicle/transport，前端拆分六个 JS 模块；新增整车总览页、快捷栏、监视器数据源切换；86 项单测全绿、全部 JS `node --check` 通过、模拟模式 Api 冒烟通过 | 实车 CANB 各节点、双 PCAN 并发、Windows 打包（新仓库 CI 待手动触发验证） |
 | 2026-08-20 | Windows exe 更换默认图标为 BITFSAE 鲨鱼标：`app_icon.ico`（16–256 px 七档，≤128 px 为 BMP 帧、256 px 为 PNG 帧，均从 `web/assets/shark-mark.svg` 矢量渲染），spec 的 `EXE()` 加 `icon=`；ico 结构与各尺寸透明度经 Pillow 读回校验 | Windows 实际构建后的 exe/任务栏图标显示效果待发布时确认；旧安装位置需图标缓存刷新 |
 | 2026-08-20 | 修复悬浮提示（单体“最近数据 X s”等）时有时无的问题：单体网格、保护开关状态表和 CAN 监视器行改为保留 DOM 节点、只原地更新内容，轮询不再销毁鼠标下的元素；59 项主机测试和 `node --check` 通过 | DOM 复用逻辑靠代码审查覆盖，无自动化 UI 测试；实体 PCAN 实机悬浮效果待台架复核 |
@@ -98,6 +99,10 @@
 | 2026-08-02 | 16 项主机协议测试、PyWebView API 不公开检查、JavaScript 语法、HTML ID 引用、`node --check` 和 `git diff --check` 通过；Chromium 模拟快照（五页导航、确认/工程弹窗、CAN 列表滚动）无脚本错误，1460×920 与 1120×720 无水平溢出；总览信息、同页 138 串/48 温度、只读故障页、独立命令页、异常筛选、充电计时、预计时间、趋势曲线和统一字号通过 | 修正后的 PyWebView 原生窗口复测、实体 PCAN、F405 台架、Windows 打包和长时间记录 |
 
 ## 已完成变更
+
+### 2026-08-26
+
+- Debug-Bringup 从控逐帧新鲜度窗口随 F405 从 750ms 改为 1500ms：身份帧 `variant=2` 时 `slave_sample_timeout_s=1.5`，并补测试覆盖 1.49s 仍有效、1.51s 清空。正式 Debug/Release 仍为 350ms。
 
 ### 2026-08-25
 

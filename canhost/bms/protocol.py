@@ -205,7 +205,7 @@ class BmsProtocol:
         self.last_thresholds_monotonic: float | None = None
         self.last_switches_monotonic: float | None = None
         # Production Debug/Release firmware uses 350 ms. The identity frame
-        # switches this to the 750 ms Debug-Bringup window when received.
+        # switches this to the 1500 ms Debug-Bringup window when received.
         self.slave_sample_timeout_s = 0.35
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
@@ -315,7 +315,7 @@ class BmsProtocol:
             charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
             charger_variant_code = (data[1] >> 2) & 0x03
-            self.slave_sample_timeout_s = 0.75 if variant == 2 else 0.35
+            self.slave_sample_timeout_s = 1.5 if variant == 2 else 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),

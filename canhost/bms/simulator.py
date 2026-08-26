@@ -26,7 +26,7 @@ class BmsSimulator:
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = False
-        self.charger_type = 0
+        self.charger_type = 1
         self.tick = 0
         self.log_clear_pending_cycles = 0
         self.config_save_pending_cycles = 0
