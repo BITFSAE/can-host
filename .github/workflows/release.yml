@@ -78,8 +78,8 @@ jobs:
 
           发布版只支持真实 PCAN，不包含源码运行用的内置模拟器。
 
-         软件内更新会通过 GitHub Release 下载 ZIP 包并校验附件 SHA256（.zip.sha256），
-         校验通过后可一键退出、备份旧目录、替换并自动启动新版本。
+          软件内更新会通过 GitHub Release 下载 ZIP 包并校验附件 SHA256（.zip.sha256），
+          校验通过后可一键退出、备份旧目录、替换并自动启动新版本。
           "@
           if (gh release view $tag) {
             gh release upload $tag $zip $checksum --clobber
