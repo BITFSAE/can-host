@@ -450,7 +450,7 @@ class HostUpdater:
                         "error": f"没有版本 {tag} 的检查结果，请重新检查更新"}
             self._state.update({
                 "state": "downloading",
-                "message": f"正在下载 {latest.get("tag_name")}…",
+                "message": f"正在下载 {latest.get('tag_name')}…",
                 "error": None,
                 "progress": 0.0,
                 "downloaded_zip": "",
@@ -580,7 +580,7 @@ class HostUpdater:
     def _download_payload(self, asset: dict[str, Any], target: Path, progress: bool = False) -> None:
         url = str(asset.get("url") or "")
         if not url:
-            raise ValueError(f"发布资产 {asset.get("name")} 缺少下载地址")
+            raise ValueError(f"发布资产 {asset.get('name')} 缺少下载地址")
         request = urllib.request.Request(url, headers=self._headers("application/octet-stream"))
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
