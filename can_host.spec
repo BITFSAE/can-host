@@ -14,6 +14,9 @@ a = Analysis(
     runtime_hooks=[],
     # The field release is connected to real PCAN hardware.  Keep the
     # simulator available to source runs, but do not ship it in the EXE.
+    # The updater uses only the standard library; keep it in frozen builds so
+    # the release can check GitHub, verify and replace itself.  The field tool
+    # deliberately does not ship the simulator.
     excludes=["canhost.simulator"],
     noarchive=False,
 )

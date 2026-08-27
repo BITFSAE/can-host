@@ -185,6 +185,23 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .rail-facts dd span { overflow: hidden; text-overflow: ellipsis; }
 .rail-facts dd .fact-date { font-size: 10px; letter-spacing: -.02em; }
 .rail-facts dd i { flex: none; color: var(--text-3); font-style: normal; }
+.rail-fact-button {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.rail-fact-button:hover { color: var(--text); }
 
 /* ---------- Workspace ---------- */
 
@@ -1146,6 +1163,51 @@ body.is-tool-page .quick-bar {
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* Software update dialog */
+#updaterDialog { width: 620px; }
+.updater-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.updater-facts > div { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line-soft); }
+.updater-facts > div:last-child { border-right: 0; }
+.updater-facts dt { color: var(--text-3); font-size: 10.5px; }
+.updater-facts dd { overflow: hidden; font-family: var(--mono); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.updater-notes { display: grid; gap: 5px; min-width: 0; }
+.updater-notes-label { color: var(--text-3); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; }
+.updater-notes pre {
+  max-height: 128px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--cjk);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+.updater-progress { display: grid; gap: 5px; }
+.updater-progress-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--text-3); font-size: 11px; }
+.updater-progress-head b { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--text-2); }
+.updater-status-line { color: var(--text-2); font-size: 13px; }
+.updater-status-line.active { color: var(--accent); }
+.updater-status-line.bad { color: var(--fault); }
+.updater-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 9px;
+  align-items: end;
+}
+.updater-token-row .action-button { min-width: 0; }
 
 .callout {
   padding: 13px 15px;

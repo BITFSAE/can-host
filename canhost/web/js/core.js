@@ -145,6 +145,7 @@ async function init() {
     buildSwitchList();
     buildSwitchStatusList();
     await poll();
+    if (typeof initUpdater === "function") initUpdater();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
     const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [

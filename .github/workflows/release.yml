@@ -44,14 +44,19 @@ jobs:
             $base = "BITFSAE_CAN_Host_$("$env:GITHUB_SHA".Substring(0, 7))"
           }
           Compress-Archive -Path dist/BITFSAE_CAN_Host -DestinationPath "$base.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 -Path "$base.zip").Hash
+          "$hash  $base.zip" | Set-Content -Encoding ascii "$base.zip.sha256"
           "base=$base" >> $env:GITHUB_OUTPUT
           "path=$base.zip" >> $env:GITHUB_OUTPUT
+          "checksum=$base.zip.sha256" >> $env:GITHUB_OUTPUT
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.zip.outputs.base }}
-          path: ${{ steps.zip.outputs.path }}
+          path: |
+            ${{ steps.zip.outputs.path }}
+            ${{ steps.zip.outputs.checksum }}
           if-no-files-found: error
 
       - name: 创建 GitHub Release
@@ -62,6 +67,7 @@ jobs:
         run: |
           $tag = "$env:GITHUB_REF_NAME"
           $zip = "${{ steps.zip.outputs.path }}"
+          $checksum = "${{ steps.zip.outputs.checksum }}"
           $notes = @"
           解压后复制整个 BITFSAE_CAN_Host 文件夹到目标电脑，运行其中的 BITFSAE_CAN_Host.exe，不能只复制 exe。
 
@@ -71,12 +77,15 @@ jobs:
           - Microsoft Edge WebView2 Runtime
 
           发布版只支持真实 PCAN，不包含源码运行用的内置模拟器。
+
+         软件内更新会通过 GitHub Release 下载 ZIP 包并校验附件 SHA256（.zip.sha256），
+         校验通过后可一键退出、备份旧目录、替换并自动启动新版本。
           "@
           if (gh release view $tag) {
-            gh release upload $tag $zip --clobber
+            gh release upload $tag $zip $checksum --clobber
           } else {
             # 版本号后带 -rc1 / -pre 等后缀的标签创建为 GitHub 预发布（Pre-release）。
             $extra = @()
             if ($tag.Substring('v'.Length).Contains('-')) { $extra += '--prerelease' }
-            gh release create $tag $zip --title $tag --notes "$notes" @extra
+            gh release create $tag $zip $checksum --title $tag --notes "$notes" @extra
           }

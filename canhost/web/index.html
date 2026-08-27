@@ -71,7 +71,7 @@
           <img class="team-logo" src="assets/bitfsae-logo.svg" alt="BITFSAE">
         </div>
         <dl class="rail-facts">
-          <div><dt>上位机</dt><dd><span id="appVersion">v—</span><i aria-hidden="true">·</i><span class="fact-date" id="appVersionDate">—</span></dd></div>
+          <div><dt>上位机</dt><dd><button id="appVersionFact" class="rail-fact-button" type="button" title="软件内更新"><span id="appVersion">v—</span><i aria-hidden="true">·</i><span class="fact-date" id="appVersionDate">—</span></button></dd></div>
         </dl>
       </div>
     </aside>
@@ -924,6 +924,60 @@
     </form>
   </dialog>
 
+  <dialog id="updaterDialog" class="modal">
+    <form method="dialog">
+      <header><h2>软件内更新</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <dl class="updater-facts">
+          <div><dt>当前版本</dt><dd id="updaterCurrent">等待数据</dd></div>
+          <div><dt>最新版本</dt><dd id="updaterLatest">等待数据</dd></div>
+          <div><dt>发布时间</dt><dd id="updaterPublished">—</dd></div>
+          <div><dt>文件大小</dt><dd id="updaterSize">—</dd></div>
+        </dl>
+
+        <div class="updater-notes">
+          <span class="updater-notes-label">Release Notes</span>
+          <pre id="updaterNotes">此次 Release 未填写说明。</pre>
+        </div>
+
+        <div class="updater-progress hidden">
+          <div class="updater-progress-head"><span>下载进度</span><b id="updaterProgressText">0%</b></div>
+          <div class="meter"><i id="updaterProgress"></i></div>
+        </div>
+
+        <p class="updater-status-line" id="updaterMessage">尚未检查更新</p>
+        <div id="updaterError" class="modal-error hidden"></div>
+        <p id="updaterFile" class="note tight hidden"></p>
+
+        <label class="checkbox">
+          <input id="updaterPrerelease" type="checkbox">
+          <span>包含预发布版（Pre-release）</span>
+        </label>
+
+        <div class="updater-token-row">
+          <label class="field">
+            <span class="field-label">私有仓库访问令牌</span>
+            <input id="updaterTokenInput" type="password" autocomplete="off" placeholder="只保存在本机，不返回给界面">
+          </label>
+          <button type="button" class="action-button" id="updaterSaveToken">保存令牌</button>
+          <button type="button" class="outline-button" id="updaterClearToken">清除令牌</button>
+        </div>
+        <p class="note tight" id="updaterTokenState">未配置令牌</p>
+
+        <dl class="mini-facts boxed">
+          <div><dt>仓库</dt><dd id="updaterRepo">BITFSAE/can-host</dd></div>
+          <div><dt>令牌设置</dt><dd id="updaterSettingsPath">—</dd></div>
+        </dl>
+        <p class="note tight" id="updaterAutoNote"></p>
+      </div>
+      <footer>
+        <button type="button" class="outline-button" id="updaterCheck">检查更新</button>
+        <button type="button" class="outline-button" id="updaterDownload">下载更新</button>
+        <button type="button" class="action-button" id="updaterInstall">退出并安装</button>
+      </footer>
+    </form>
+  </dialog>
+
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <script src="js/core.js"></script>
   <script src="js/bms.js"></script>
@@ -931,5 +985,6 @@
   <script src="js/fan.js"></script>
   <script src="js/bench.js"></script>
   <script src="js/ivt.js"></script>
+  <script src="js/updater.js"></script>
 </body>
 </html>

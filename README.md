@@ -61,7 +61,28 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-Release 附件是完整 one-folder 目录的压缩包，目标电脑安装要求与上一节相同。
+Release 同时附上 `BITFSAE_CAN_Host_vX.Y.Z.zip` 和同名 `.sha256` 校验文件（软件内更新也会使用同样附件）。ZIP 是完整 one-folder 目录的压缩包，目标电脑安装要求与上一节相同。
+
+## 软件内更新
+
+Windows 发布版左下角版本信息可点击，会打开“软件内更新”窗口：
+
+1. 启动时自动检查一次 `BITFSAE/can-host` 的正式 Release；需要手动检查时点击“检查更新”，勾选“包含预发布版（Pre-release）”可列出 `-rc1` 等预发布。
+2. 点击“下载更新”后自动下载 ZIP 和 `.sha256`，先校验 SHA256，再校验 ZIP 只包含预期的 `BITFSAE_CAN_Host/` 目录（拒绝绝对路径、`..` 和符号链接）。
+3. 点击“退出并安装”后应用退出，由隐藏 PowerShell 助手等待旧进程结束、备份旧目录为 `.old-<时间戳>`、替换为新目录并重新启动；启动新版本失败时自动恢复旧目录。成功替换后才能删除备份。
+
+公开仓库的 Release 无需任何凭据即可检查、下载。若仓库保持私有，使用者在更新窗口保存有 `repo:contents:read` 的只读 GitHub PAT；令牌只保存在本机 `%APPDATA%\BITFSAE\CAN Host\settings.json`，不返回前端、不写入日志。源码运行只能检查更新，不能替换安装目录。
+
+发布新版本只需更新版本号、提交推送，再打 `v*` 标签：
+
+```powershell
+# 1. 更新 canhost/__init__.py 的 __version__ 和 __version_date__，连同代码一起提交推送
+# 2. 打标签并推送，CI 自动构建并创建 Release；标签版本必须与 __version__ 一致
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+此后已有发布版会在启动时检测到新版本。示例版本号请按当前 `canhost/__init__.py` 的实际值替换。
 
 ## 文件入口
 
@@ -73,7 +94,8 @@ Release 附件是完整 one-folder 目录的压缩包，目标电脑安装要求
 | `canhost/bms/` | BMS 协议状态机、工具命令编码、BMS 模拟器 |
 | `canhost/vehicle/` | 整车协议状态机（含风扇命令应答）与整车模拟器 |
 | `canhost/ivt.py` | IVT 请求、响应解析和 BMS CANB 目标比较 |
+| `canhost/updater.py` | GitHub Release 检查、SHA256 校验、安全解压与 Windows 退出安装 |
 | `canhost/web/` | 无网络依赖的 HTML/CSS/JavaScript 界面（`js/` 按页面模块拆分） |
 | `cli/` | 独立命令行工具 `pcan_bms_bench.py`、`pcan_ivt_tool.py` |
-| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle） |
+| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / updater） |
 | `todo.md` | 上位机待办、风险、验证和变更摘要 |
