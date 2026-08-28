@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 from io import StringIO
 import json
+import statistics
 import threading
 import time
 from typing import Any, Callable
@@ -18,11 +19,19 @@ from typing import Any, Callable
 class FanCalibrationSession:
     """Manages automated or step-by-step fan calibration sweeps."""
 
+    DEFAULT_STEPS = [0, 5, 8, 10, 12, 15, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+    DEFAULT_HOLD_S = 6.0
+    SETTLE_S = 3.0
+    SAMPLE_S = 3.0
+    BASELINE_INTERVAL = 4
+
     def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
                  snapshot_fn: Callable[[], dict[str, Any]]) -> None:
         self.send_fn = send_fn
         self.snapshot_fn = snapshot_fn
-        self.lock = threading.Lock()
+        # CanService.vehicle_snapshot()会在持有本锁时再次调用get_snapshot()。
+        # 使用可重入锁避免标定启动自死锁，同时保留worker/snapshot之间的互斥。
+        self.lock = threading.RLock()
         self.status: str = "idle"  # "idle", "running", "aborted", "completed"
         self.abort_reason: str = ""
         self.channel: int = 1  # 1 (PWM1), 2 (PWM2), or 3 (both)
@@ -38,8 +47,8 @@ class FanCalibrationSession:
         """Verify bus and vehicle safety conditions before calibration."""
         snap = self.snapshot_fn()
         conn = snap.get("connection", {})
-        if conn.get("mode") not in ("pcan", "simulation"):
-            return {"ok": False, "error": "请先连接 CANB（真实 PCAN 或仿真）"}
+        if not conn.get("connected", False) or conn.get("mode") != "pcan":
+            return {"ok": False, "error": "请先连接真实 PCAN 上的 CANB，禁止模拟连接发送标定命令"}
 
         fan = snap.get("fan", {})
         fan_status = fan.get("status", {})
@@ -49,14 +58,24 @@ class FanCalibrationSession:
         power_status = fan.get("power_status", {})
 
         pdm_age = bus.get("age")
+        fan_status_age = fan.get("status_age")
+        fan_diag_age = fan.get("diagnostic_age")
+        power_status_age = fan.get("power_status_age")
         if pdm_age is None or pdm_age > 1.0 or bus.get("offline", True):
             return {"ok": False, "error": "PDM 低压总线遥测离线或超时（>1.0s），无法进行标定"}
+        if fan_status_age is None or fan_status_age > 1.0:
+            return {"ok": False, "error": "FanController 0x5A2 状态超时（>1.0s），无法进行标定"}
+        if fan_diag_age is None or fan_diag_age > 1.0:
+            return {"ok": False, "error": "FanController 0x5A3 诊断超时（>1.0s），无法进行标定"}
+        if power_status_age is None or power_status_age > 1.0:
+            return {"ok": False, "error": "FanController 0x5A8 功率状态超时（>1.0s），无法进行标定"}
 
         power_supply_state = power_status.get("power_supply_state")
         # In simulation mode, allow calibration if simulated state is DcdcReady (3) or not yet sent
-        if conn.get("mode") != "simulation" and power_supply_state != 3:
+        if power_supply_state not in (None, 1, 2, 3):
+            # 固件自动识别未启用时，允许在发送 Action=4 确认后再进入 DCDC_READY。
             state_name = power_status.get("power_supply_name", str(power_supply_state))
-            return {"ok": False, "error": f"供电必须为 DCDC_READY 稳态供电（当前：{state_name}），禁止电池模式标定"}
+            return {"ok": False, "error": f"供电状态异常（当前：{state_name}），禁止开始标定"}
 
         motor_temp = fan_diag.get("motor_temp_c")
         ctrl_temp = fan_diag.get("controller_temp_c")
@@ -72,18 +91,26 @@ class FanCalibrationSession:
         return {"ok": True}
 
     def start_sweep(self, channel: int = 1, steps: list[int] | None = None,
-                    hold_s: float = 4.0, max_current_a: float = 18.0) -> dict[str, Any]:
+                    hold_s: float = DEFAULT_HOLD_S,
+                    max_current_a: float = 18.0) -> dict[str, Any]:
         """Start a background automated calibration sweep."""
+        if channel not in (1, 2):
+            return {"ok": False, "error": "计划要求先分别标定回路 1/2，暂不开放双回路联合扫频"}
+        # 前置检查（内部会经 vehicle_snapshot() -> get_snapshot()）必须放在
+        # 本锁外，不能持有 session 锁去获取 service 锁，否则 service 侧
+        # 同步调用会反过来获取 session 锁，形成跨锁死锁。
+        pre_check = self.check_preconditions()
+        if not pre_check["ok"]:
+            return pre_check
+
+        if steps is None:
+            steps = list(self.DEFAULT_STEPS)
+        if not steps or any(not (0 <= int(d) <= 100) for d in steps):
+            return {"ok": False, "error": "扫描点必须在 0..100 % 且至少包含一个点"}
+
         with self.lock:
             if self.status == "running":
                 return {"ok": False, "error": "标定会话已在进行中"}
-
-            pre_check = self.check_preconditions()
-            if not pre_check["ok"]:
-                return pre_check
-
-            if steps is None:
-                steps = [0, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
             self.status = "running"
             self.abort_reason = ""
@@ -113,13 +140,33 @@ class FanCalibrationSession:
                 self.status = "aborted"
                 self.abort_reason = reason
 
-        # Send stop command to fan controller
-        try:
-            self.send_fn("fan_calib", {"action": 3, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0}, False)
-        except Exception:
-            pass
+        send_result = self._stop_and_restore_auto()
+        with self.lock:
+            if not send_result["ok"]:
+                self.status = "aborted"
+                self.abort_reason = f"{reason}；固件恢复失败：{'；'.join(send_result['errors'])}"
+        return {
+            "ok": send_result["ok"],
+            "status": self.status,
+            "reason": self.abort_reason,
+            "errors": send_result["errors"],
+        }
 
-        return {"ok": True, "status": self.status, "reason": self.abort_reason}
+    def _stop_and_restore_auto(self) -> dict[str, Any]:
+        """停止标定并通过确认命令恢复自动模式。"""
+        commands = [
+            ("fan_calib", {"action": 3, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0}),
+            ("fan_control", {"mode": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0}),
+        ]
+        errors: list[str] = []
+        for name, values in commands:
+            try:
+                result = self.send_fn(name, values, True)
+                if not result.get("ok"):
+                    errors.append(f"{name}: {result.get('error', '发送失败')}")
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        return {"ok": not errors, "errors": errors}
 
     def get_snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -163,166 +210,276 @@ class FanCalibrationSession:
                 "channel": self.channel,
                 "status": self.status,
                 "abort_reason": self.abort_reason,
+                "steps": list(self.DEFAULT_STEPS),
+                "hold_s": self.DEFAULT_HOLD_S,
+                "settle_s": self.SETTLE_S,
+                "sample_s": self.SAMPLE_S,
                 "baseline": self.baseline,
                 "records": self.records,
                 "exported_at": time.time(),
             }
             return json.dumps(data, ensure_ascii=False, indent=2)
 
-    def _run_sweep(self, channel: int, steps: list[int], hold_s: float, max_current_a: float) -> None:
-        try:
-            # Step 1: Establish baseline with 0% duty
-            baseline_samples = []
-            self.send_fn("fan_calib", {"action": 1, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 15}, True)
-            t_end = time.monotonic() + 3.0
-            while time.monotonic() < t_end:
+    def _sample_until(self, seconds: float) -> list[dict[str, float]]:
+        """采集指定时长内的 PDM 快照样本（约 0.1s 一个）。"""
+        samples: list[dict[str, float]] = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self._stop_event.is_set():
+                return samples
+            snap = self.snapshot_fn()
+            bus = snap.get("pdm", {}).get("bus", {})
+            if not bus.get("offline", True) and bus.get("current_a") is not None:
+                samples.append({
+                    "v": bus.get("voltage_v") or 24.0,
+                    "i": bus.get("current_a") or 0.0,
+                    "p": bus.get("power_w") or 0.0,
+                })
+            time.sleep(0.1)
+        return samples
+
+    @staticmethod
+    def _stable_summary(samples: list[dict[str, float]]) -> tuple[dict[str, float], bool]:
+        """返回中位数/离散度；数量不足或波动过大时标记不稳定。"""
+        if len(samples) < 10:
+            return {"median_v": 0.0, "median_i": 0.0, "median_p": 0.0,
+                    "std_i": 0.0, "std_p": 0.0}, False
+        median_v = statistics.median(s["v"] for s in samples)
+        median_i = statistics.median(s["i"] for s in samples)
+        median_p = statistics.median(s["p"] for s in samples)
+        std_i = statistics.pstdev(s["i"] for s in samples)
+        std_p = statistics.pstdev(s["p"] for s in samples)
+        stable = std_i <= 0.05 and std_p <= 2.0
+        return {"median_v": median_v, "median_i": median_i, "median_p": median_p,
+                "std_i": std_i, "std_p": std_p}, stable
+
+    def _measure_baseline(self, step_label: int) -> dict[str, float] | None:
+        """先归零并等待 3s，再采集 3s 稳态基线。"""
+        cmd_res = self.send_fn("fan_calib", {
+            "action": 1, "step": step_label, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 15,
+        }, True)
+        if not cmd_res.get("ok"):
+            return None
+        self._sample_until(self.SETTLE_S)
+        if self._stop_event.is_set():
+            return None
+        samples = self._sample_until(self.SAMPLE_S)
+        summary, _ = self._stable_summary(samples)
+        if not samples:
+            return None
+        return {
+            "voltage_v": round(summary["median_v"], 3),
+            "current_a": round(summary["median_i"], 3),
+            "power_w": round(summary["median_p"], 2),
+            "sample_count": len(samples),
+        }
+
+    def _abort_and_return(self, reason: str) -> None:
+        self.abort(reason)
+
+    def _wait_for_dcdc_confirm(self, timeout_s: float = 3.0) -> bool:
+        """等待固件上报 DCDC_READY；超时或连接失败返回 False。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                return False
+            snap = self.snapshot_fn()
+            state = snap.get("fan", {}).get("power_status", {}).get("power_supply_state")
+            if state == 3:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def _watchdog(self, snap: dict[str, Any], max_current_a: float) -> str | None:
+        """扫描期间持续安全检查，返回中止原因；None 表示通过。"""
+        conn = snap.get("connection", {})
+        fan = snap.get("fan", {})
+        fan_diag = fan.get("diagnostic", {})
+        fan_power = fan.get("power_status", {})
+        bus = snap.get("pdm", {}).get("bus", {})
+
+        if conn.get("mode") != "pcan":
+            return "连接模式已变化，触发安全中止"
+        if bus.get("offline", True) or (bus.get("age") is not None and bus.get("age") > 1.0):
+            return "PDM 遥测超时 (>1.0s)，触发安全中止"
+        if fan_power.get("power_supply_state") not in (None, 3):
+            state_name = fan_power.get("power_supply_name", str(fan_power.get("power_supply_state")))
+            return f"供电脱离 DCDC_READY 状态（当前：{state_name}），触发安全中止"
+        if fan_diag.get("faults", 0) & 0x07:
+            return "检测到风扇停转故障，触发安全中止"
+
+        i_curr = bus.get("current_a") or 0.0
+        if i_curr > max_current_a:
+            return f"总线电流 ({i_curr:.1f} A) 超过安全限制 ({max_current_a:.1f} A)"
+        motor_temp = fan_diag.get("motor_temp_c")
+        ctrl_temp = fan_diag.get("controller_temp_c")
+        if motor_temp is not None and motor_temp >= 72.0:
+            return f"电机温度超限 ({motor_temp:.1f} ℃ >= 72 ℃)"
+        if ctrl_temp is not None and ctrl_temp >= 68.0:
+            return f"控制器温度超限 ({ctrl_temp:.1f} ℃ >= 68 ℃)"
+        return None
+
+    def _apply_step(self, step: int, duty1: int, duty2: int,
+                    hold_s: float, max_current_a: float,
+                    baseline: dict[str, float]) -> dict[str, Any] | None:
+        """下发一个目标点，等待稳定并采集后 3s 中位数，返回记录或 None。"""
+        cmd_res = self.send_fn("fan_calib", {
+            "action": 2, "step": step, "duty1_pct": duty1, "duty2_pct": duty2, "lease_s": 15,
+        }, True)
+        if not cmd_res.get("ok"):
+            self._abort_and_return(f"下发标定步骤 {step} 命令失败：{cmd_res.get('error')}")
+            return None
+
+        # 前 3s 让占空比和转速稳定；同时持续执行安全看门狗。
+        settle_end = time.monotonic() + self.SETTLE_S
+        while time.monotonic() < settle_end:
+            if self._stop_event.is_set():
+                return None
+            reason = self._watchdog(self.snapshot_fn(), max_current_a)
+            if reason:
+                self._abort_and_return(reason)
+                return None
+            time.sleep(0.1)
+
+        with self.lock:
+            self.current_step = step
+            self.current_duty = [duty1, duty2]
+
+        samples: list[dict[str, float]] = []
+        sample_end = time.monotonic() + (hold_s - self.SETTLE_S)
+        while time.monotonic() < sample_end:
+            if self._stop_event.is_set():
+                return None
+            snap = self.snapshot_fn()
+            reason = self._watchdog(snap, max_current_a)
+            if reason:
+                self._abort_and_return(reason)
+                return None
+            fan_status = snap.get("fan", {}).get("status", {})
+            fan_diag = snap.get("fan", {}).get("diagnostic", {})
+            bus = snap.get("pdm", {}).get("bus", {})
+            if not bus.get("offline", True) and bus.get("current_a") is not None:
+                rpm = fan_status.get("rpm", [0, 0, 0]) or [0, 0, 0]
+                samples.append({
+                    "v": bus.get("voltage_v") or 24.0,
+                    "i": bus.get("current_a") or 0.0,
+                    "p": bus.get("power_w") or 0.0,
+                    "rpm1": rpm[0] if len(rpm) > 0 else 0,
+                    "rpm2": rpm[1] if len(rpm) > 1 else 0,
+                    "rpm3": rpm[2] if len(rpm) > 2 else 0,
+                    "mt": fan_diag.get("motor_temp_c"),
+                    "ct": fan_diag.get("controller_temp_c"),
+                })
+            time.sleep(0.1)
+
+        summary, stable = self._stable_summary(samples)
+        if not samples or not stable:
+            # 波动过大或样本不足：延长一轮再采集一次，避免把瞬态当成稳态。
+            extra: list[dict[str, float]] = []
+            extra_end = time.monotonic() + self.SAMPLE_S
+            while time.monotonic() < extra_end:
                 if self._stop_event.is_set():
-                    return
-                snap = self.snapshot_fn()
-                bus = snap.get("pdm", {}).get("bus", {})
-                if not bus.get("offline", True):
-                    baseline_samples.append({
-                        "v": bus.get("voltage_v", 24.0),
-                        "i": bus.get("current_a", 0.0),
-                        "p": bus.get("power_w", 0.0),
-                    })
+                    return None
+                reason = self._watchdog(self.snapshot_fn(), max_current_a)
+                if reason:
+                    self._abort_and_return(reason)
+                    return None
                 time.sleep(0.1)
+            samples.extend(extra)
+            summary, stable = self._stable_summary(samples)
+            if not samples or not stable:
+                self._abort_and_return(f"步骤 {step} 数据波动过大或样本不足，中止标定")
+                return None
 
-            if baseline_samples:
-                base_v = sum(s["v"] for s in baseline_samples) / len(baseline_samples)
-                base_i = sum(s["i"] for s in baseline_samples) / len(baseline_samples)
-                base_p = sum(s["p"] for s in baseline_samples) / len(baseline_samples)
-            else:
-                base_v, base_i, base_p = 24.0, 0.0, 0.0
+        last = samples[-1]
+        return {
+            "step": step,
+            "channel": self.channel,
+            "duty1_pct": duty1,
+            "duty2_pct": duty2,
+            "rpm1": int(statistics.median(s["rpm1"] for s in samples)),
+            "rpm2": int(statistics.median(s["rpm2"] for s in samples)),
+            "rpm3": int(statistics.median(s["rpm3"] for s in samples)),
+            "voltage_v": round(summary["median_v"], 3),
+            "current_a": round(summary["median_i"], 3),
+            "power_w": round(summary["median_p"], 2),
+            "delta_current_a": round(max(0.0, summary["median_i"] - baseline.get("current_a", 0.0)), 3),
+            "delta_power_w": round(max(0.0, summary["median_p"] - baseline.get("power_w", 0.0)), 2),
+            "std_current_a": round(summary["std_i"], 3),
+            "std_power_w": round(summary["std_p"], 3),
+            "motor_temp_c": last.get("mt"),
+            "controller_temp_c": last.get("ct"),
+            "timestamp": round(time.time(), 3),
+        }
 
+    def _run_sweep(self, channel: int, steps: list[int],
+                   hold_s: float, max_current_a: float) -> None:
+        """执行计划中的上升+下降双向阶梯扫频。"""
+        try:
+            current_state = self.snapshot_fn().get("fan", {}).get("power_status", {}).get("power_supply_state")
+            if current_state != 3:
+                # 当前不是自动识别出的 DCDC_READY：由操作者通过 Action=4 显式确认。
+                confirm = self.send_fn("fan_calib", {
+                    "action": 4, "step": 0, "duty1_pct": 0, "duty2_pct": 0,
+                    "lease_s": 60,
+                }, True)
+                if not confirm.get("ok"):
+                    self._abort_and_return(
+                        f"DCDC 就绪确认命令失败：{confirm.get('error', '未知错误')}"
+                    )
+                    return
+                if not self._wait_for_dcdc_confirm():
+                    self._abort_and_return("确认后未在 3s 内进入 DCDC_READY，中止标定")
+                    return
+
+            baseline = self._measure_baseline(0)
+            if baseline is None:
+                self._abort_and_return("无法采集 0% 静态基线，中止标定")
+                return
             with self.lock:
                 self.baseline = {
-                    "voltage_v": round(base_v, 3),
-                    "current_a": round(base_i, 3),
-                    "power_w": round(base_p, 2),
+                    "voltage_v": baseline["voltage_v"],
+                    "current_a": baseline["current_a"],
+                    "power_w": baseline["power_w"],
+                    "sample_count": baseline.get("sample_count", 0),
                 }
 
-            # Step 2: Sweep each target step
-            for idx, target_duty in enumerate(steps, start=1):
-                if self._stop_event.is_set():
-                    return
-
-                d1 = target_duty if channel in (1, 3) else 0
-                d2 = target_duty if channel in (2, 3) else 0
-
-                with self.lock:
-                    self.current_step = idx
-                    self.current_duty = [d1, d2]
-
-                cmd_res = self.send_fn("fan_calib", {
-                    "action": 2, "step": idx, "duty1_pct": d1, "duty2_pct": d2, "lease_s": 15
-                }, True)
-                if not cmd_res.get("ok"):
-                    with self.lock:
-                        self.status = "aborted"
-                        self.abort_reason = f"下发标定步骤命令失败：{cmd_res.get('error')}"
-                    return
-
-                # Wait for steady state while actively monitoring safety
-                step_samples = []
-                step_end = time.monotonic() + hold_s
-                while time.monotonic() < step_end:
+            directions: list[list[int]] = [steps, list(reversed(steps))]
+            record_index = 0
+            for direction in directions:
+                for index, target_duty in enumerate(direction, start=1):
                     if self._stop_event.is_set():
                         return
+                    if index > 1 and (index - 1) % self.BASELINE_INTERVAL == 0:
+                        fresh = self._measure_baseline(index)
+                        if fresh is None:
+                            self._abort_and_return(f"步骤 {index} 前方重新采集 0% 基线失败，中止标定")
+                            return
+                        with self.lock:
+                            self.baseline = {
+                                "voltage_v": fresh["voltage_v"],
+                                "current_a": fresh["current_a"],
+                                "power_w": fresh["power_w"],
+                                "sample_count": fresh.get("sample_count", 0),
+                            }
 
-                    snap = self.snapshot_fn()
-                    conn = snap.get("connection", {})
-                    fan = snap.get("fan", {})
-                    fan_status = fan.get("status", {})
-                    fan_diag = fan.get("diagnostic", {})
-                    pdm = snap.get("pdm", {})
-                    bus = pdm.get("bus", {})
-                    power_status = fan.get("power_status", {})
-
-                    # Safety Watchdog 1: PDM offline or stale
-                    pdm_age = bus.get("age")
-                    if pdm_age is not None and pdm_age > 1.0:
-                        self.abort("PDM 遥测超时 (>1.0s)，触发安全中止")
+                    d1 = target_duty if channel == 1 else 0
+                    d2 = target_duty if channel == 2 else 0
+                    record = self._apply_step(record_index + 1, d1, d2, hold_s, max_current_a, self.baseline)
+                    if record is None:
                         return
+                    record_index += 1
+                    with self.lock:
+                        self.current_step = record_index
+                        self.records.append(record)
 
-                    # Safety Watchdog 2: DCDC lost
-                    if conn.get("mode") != "simulation" and power_status.get("power_supply_state") not in (None, 3):
-                        self.abort(f"供电脱离 DCDC_READY 状态，触发安全中止")
-                        return
-
-                    # Safety Watchdog 3: Over-current
-                    i_curr = bus.get("current_a", 0.0) or 0.0
-                    if i_curr > max_current_a:
-                        self.abort(f"总线电流 ({i_curr:.1f} A) 超过安全限制 ({max_current_a:.1f} A)")
-                        return
-
-                    # Safety Watchdog 4: Temperature
-                    mt = fan_diag.get("motor_temp_c")
-                    ct = fan_diag.get("controller_temp_c")
-                    if mt is not None and mt >= 72.0:
-                        self.abort(f"电机温度超限 ({mt:.1f} ℃ >= 72 ℃)")
-                        return
-                    if ct is not None and ct >= 68.0:
-                        self.abort(f"控制器温度超限 ({ct:.1f} ℃ >= 68 ℃)")
-                        return
-
-                    # Collect samples during the last 1.5s
-                    if step_end - time.monotonic() <= 1.5:
-                        rpm = fan_status.get("rpm", [0, 0, 0]) or [0, 0, 0]
-                        step_samples.append({
-                            "v": bus.get("voltage_v", 24.0) or 24.0,
-                            "i": i_curr,
-                            "p": bus.get("power_w", 0.0) or 0.0,
-                            "rpm1": rpm[0] if len(rpm) > 0 else 0,
-                            "rpm2": rpm[1] if len(rpm) > 1 else 0,
-                            "rpm3": rpm[2] if len(rpm) > 2 else 0,
-                            "mt": mt,
-                            "ct": ct,
-                        })
-
-                    time.sleep(0.1)
-
-                # Process averages for this step
-                if step_samples:
-                    avg_v = sum(s["v"] for s in step_samples) / len(step_samples)
-                    avg_i = sum(s["i"] for s in step_samples) / len(step_samples)
-                    avg_p = sum(s["p"] for s in step_samples) / len(step_samples)
-                    avg_r1 = int(sum(s["rpm1"] for s in step_samples) / len(step_samples))
-                    avg_r2 = int(sum(s["rpm2"] for s in step_samples) / len(step_samples))
-                    avg_r3 = int(sum(s["rpm3"] for s in step_samples) / len(step_samples))
-                    last_mt = step_samples[-1]["mt"]
-                    last_ct = step_samples[-1]["ct"]
-                else:
-                    avg_v, avg_i, avg_p = 24.0, 0.0, 0.0
-                    avg_r1 = avg_r2 = avg_r3 = 0
-                    last_mt = last_ct = None
-
-                delta_i = max(0.0, avg_i - base_i)
-                delta_p = max(0.0, avg_p - base_p)
-
-                with self.lock:
-                    self.records.append({
-                        "step": idx,
-                        "channel": channel,
-                        "duty1_pct": d1,
-                        "duty2_pct": d2,
-                        "rpm1": avg_r1,
-                        "rpm2": avg_r2,
-                        "rpm3": avg_r3,
-                        "voltage_v": round(avg_v, 3),
-                        "current_a": round(avg_i, 3),
-                        "power_w": round(avg_p, 2),
-                        "delta_current_a": round(delta_i, 3),
-                        "delta_power_w": round(delta_p, 2),
-                        "motor_temp_c": last_mt,
-                        "controller_temp_c": last_ct,
-                        "timestamp": round(time.time(), 3),
-                    })
-
-            # Clean completion
-            self.send_fn("fan_calib", {"action": 3, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0}, False)
+            result = self._stop_and_restore_auto()
             with self.lock:
-                self.status = "completed"
-
+                if result["ok"]:
+                    self.status = "completed"
+                    self.current_duty = [0, 0]
+                else:
+                    self.status = "aborted"
+                    self.abort_reason = "扫描完成但固件恢复自动失败：" + "；".join(result["errors"])
         except Exception as exc:
-            self.abort(f"标定执行发生异常：{exc}")
+            self._abort_and_return(f"标定执行发生异常：{exc}")

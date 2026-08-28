@@ -36,6 +36,9 @@ class FanControllerToolTest(unittest.TestCase):
             (build_fan_command("fan_calib", {"_sequence": 9, "action": 1, "step": 0, "duty1_pct": 0,
                                              "duty2_pct": 0, "lease_s": 15}),
              bytes.fromhex("08 09 01 00 00 00 0F 45")),
+            (build_fan_command("fan_calib", {"_sequence": 10, "action": 4, "step": 0, "duty1_pct": 0,
+                                             "duty2_pct": 0, "lease_s": 60}),
+             bytes.fromhex("08 0A 04 00 00 00 3C 3D")),
         ]
         for frame, expected in frames:
             self.assertEqual(frame.arbitration_id, 0x5A4)
@@ -60,9 +63,10 @@ class FanControllerToolTest(unittest.TestCase):
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 101, "fallback2_duty_pct": 50, "stale_hold_s": 5, "ramp_down_pct_per_s": 50}),
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 50, "fallback2_duty_pct": 50, "stale_hold_s": 31, "ramp_down_pct_per_s": 50}),
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 50, "fallback2_duty_pct": 50, "stale_hold_s": 5, "ramp_down_pct_per_s": 101}),
-            ("fan_calib", {"action": 4, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 15}),
             ("fan_calib", {"action": 1, "step": 1, "duty1_pct": 101, "duty2_pct": 50, "lease_s": 15}),
             ("fan_calib", {"action": 1, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 65}),
+            ("fan_calib", {"action": 4, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 0}),
+            ("fan_calib", {"action": 5, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 15}),
         ]
         for name, values in cases:
             with self.assertRaises(ValueError, msg=f"{name} {values}"):
@@ -209,6 +213,7 @@ class FanControllerToolTest(unittest.TestCase):
                 "status": {"rpm": [3000, 3000, 0]},
                 "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
                 "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+                "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
             }
         }
         session = FanCalibrationSession(fake_send, lambda: fake_snap)
@@ -219,8 +224,8 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertFalse(session.check_preconditions()["ok"])
         fake_snap["pdm"]["bus"]["offline"] = False
 
-        # Fail when battery mode
-        fake_snap["fan"]["power_status"]["power_supply_state"] = 1
+        # Fail when power limited / unknown source before explicit DCDC confirmation
+        fake_snap["fan"]["power_status"]["power_supply_state"] = 4
         self.assertFalse(session.check_preconditions()["ok"])
         fake_snap["fan"]["power_status"]["power_supply_state"] = 3
 
@@ -243,7 +248,109 @@ class FanControllerToolTest(unittest.TestCase):
         json_data = session.export_json()
         self.assertIn("delta_power_w", json_data)
 
+    def test_calibration_preconditions_require_real_pcan_and_fresh_fan_frames(self) -> None:
+        sent_commands = []
+        def fake_send(name, vals, ack):
+            sent_commands.append((name, vals, ack))
+            return {"ok": True}
+
+        fake_snap = {
+            "connection": {"mode": "simulation", "connected": True},
+            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
+                            "age": 0.1, "offline": False}},
+            "fan": {"status": {}, "diagnostic": {}, "power_status": {},
+                    "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1},
+        }
+        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        result = session.check_preconditions()
+        self.assertFalse(result["ok"])
+        self.assertIn("真实 PCAN", result["error"])
+
+        fake_snap["connection"] = {"mode": "pcan", "connected": True}
+        fake_snap["fan"] = {
+            "status": {"rpm": [3000, 3000, 0]},
+            "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
+            "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+            "status_age": None, "diagnostic_age": 0.1, "power_status_age": 0.1,
+        }
+        result = session.check_preconditions()
+        self.assertFalse(result["ok"])
+        self.assertIn("0x5A2", result["error"])
+
+    def test_calibration_start_does_not_deadlock_with_rlock(self) -> None:
+        sent = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+        fake_snap = {
+            "connection": {"mode": "pcan", "connected": True},
+            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
+                            "age": 0.1, "offline": False}},
+            "fan": {
+                "status": {"rpm": [3000, 3000, 0]},
+                "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
+                "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+                "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+            },
+        }
+        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        try:
+            result = session.start_sweep(channel=1, steps=[0], hold_s=0.2, max_current_a=18.0)
+            self.assertTrue(result["ok"], result)
+            # 不等待后台线程完成，只验证调用没有持锁卡死。
+            self.assertEqual(session.status, "running")
+        finally:
+            session._stop_event.set()
+
+    def test_calibration_abort_uses_acknowledged_stop_and_auto(self) -> None:
+        sent = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+        fake_snap = {
+            "connection": {"mode": "pcan", "connected": True},
+            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
+                            "age": 0.1, "offline": False}},
+            "fan": {"status": {}, "diagnostic": {}, "power_status": {},
+                    "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1},
+        }
+        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        session.status = "running"
+        result = session.abort("测试中止")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(session.status, "aborted")
+        self.assertEqual([item[2] for item in sent], [True, True])
+        self.assertEqual(sent[0][0], "fan_calib")
+        self.assertEqual(sent[0][1]["action"], 3)
+        self.assertEqual(sent[1][0], "fan_control")
+        self.assertEqual(sent[1][1]["mode"], 0)
+
+
+class FanCalibrationWatchdogTest(unittest.TestCase):
+    def test_watchdog_stops_on_pdm_loss_and_dcdc_loss(self) -> None:
+        sent = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+        def snapshot(offline=False, state=3, current=2.0, motor=45.0, ctrl=40.0, faults=0):
+            return {
+                "connection": {"mode": "pcan", "connected": True},
+                "pdm": {"bus": {"voltage_v": 24.0, "current_a": current, "power_w": 48.0,
+                                "age": 0.1, "offline": offline}},
+                "fan": {
+                    "status": {"rpm": [3000, 3000, 0]},
+                    "diagnostic": {"faults": faults, "motor_temp_c": motor, "controller_temp_c": ctrl},
+                    "power_status": {"power_supply_state": state, "power_supply_name": "DCDC就绪"},
+                },
+            }
+        session = FanCalibrationSession(fake_send, snapshot)
+        self.assertIsNone(session._watchdog(snapshot(motor=71.8), 18.0))
+        self.assertIn("PDM", session._watchdog(snapshot(offline=True), 18.0))
+        self.assertIn("供电", session._watchdog(snapshot(state=1), 18.0))
+        self.assertIn("总线电流", session._watchdog(snapshot(current=18.1), 18.0))
+        self.assertIn("电机温度", session._watchdog(snapshot(motor=72.0), 18.0))
+        self.assertIn("停转", session._watchdog(snapshot(faults=0x01), 18.0))
+
 
 if __name__ == "__main__":
     unittest.main()
-

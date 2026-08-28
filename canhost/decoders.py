@@ -113,6 +113,8 @@ CANB_IDS = {
     0x5A5: "风扇命令应答",
     0x5A6: "风扇自动曲线状态",
     0x5A7: "风扇失联策略状态",
+    0x5A8: "风扇功率仲裁状态",
+    0x5A9: "风扇标定状态",
     0x1806E5F4: "Legacy 充电请求",
     0x18FF50E5: "Legacy 充电反馈",
 }
@@ -304,7 +306,7 @@ FAN_POWER_SUPPLY_NAMES = {
 }
 FAN_POWER_LIMIT_NAMES = {
     0: "无限制", 1: "总线电流限制", 2: "电池电流限制", 3: "PDM超时",
-    4: "DCDC切换保持", 5: "停转保护",
+    4: "DCDC切换保持", 5: "停转保护", 6: "超温保护", 7: "安全中止",
 }
 FAN_CALIB_STATE_NAMES = {
     0: "未激活", 1: "标定中", 2: "已中止", 3: "已完成",
@@ -496,19 +498,21 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
             raise ValueError("占空比下降速度必须在 10..100 %/s")
         return command_frame(0x03, bytes([strategy, fallback1, fallback2, hold_s, ramp_down]))
     if name == "fan_calib":
-        action = int(values.get("action", 1)) # 1=Start, 2=Lease/Update, 3=Stop
+        action = int(values.get("action", 1)) # 1=Start, 2=Lease/Update, 3=Stop, 4=ConfirmDcdc
         step = int(values.get("step", 0)) & 0xFF
         duty1 = int(values.get("duty1_pct", 0))
         duty2 = int(values.get("duty2_pct", 0))
         lease_s = int(values.get("lease_s", 10))
-        if action not in (1, 2, 3):
-            raise ValueError("标定动作必须是 1=启动、2=续约 或 3=停止")
+        if action not in (1, 2, 3, 4):
+            raise ValueError("标定动作必须是 1=启动、2=续约、3=停止 或 4=确认DCDC就绪")
         if not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
             raise ValueError("占空比必须在 0..100 %")
-        if action != 3 and not 1 <= lease_s <= 60:
+        if action not in (3,) and not 1 <= lease_s <= 60:
             raise ValueError("标定租约必须在 1..60 秒")
         if action == 3:
             duty1 = duty2 = lease_s = 0
+        if action == 4:
+            step = duty1 = duty2 = 0
         return command_frame(0x08, bytes([action, step, duty1, duty2, lease_s]))
     if name == "fan_restore_defaults":
         return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
