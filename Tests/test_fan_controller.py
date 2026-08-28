@@ -295,7 +295,7 @@ class FanControllerToolTest(unittest.TestCase):
         }
         session = FanCalibrationSession(fake_send, lambda: fake_snap)
         try:
-            result = session.start_sweep(channel=1, steps=[0], hold_s=0.2, max_current_a=18.0)
+            result = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
             self.assertTrue(result["ok"], result)
             # 不等待后台线程完成，只验证调用没有持锁卡死。
             self.assertEqual(session.status, "running")
@@ -346,15 +346,24 @@ class FanControllerToolTest(unittest.TestCase):
                 },
             }
         session = FanCalibrationSession(fake_send, snapshot)
-        rejected = session.start_sweep(channel=1, steps=[0], hold_s=0.2,
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
                                       max_current_a=18.0, confirm_dcdc=False)
         self.assertFalse(rejected["ok"])
-        self.assertIn("确认 DCDC", rejected["error"])
-        # 明确确认后才允许启动，并会在后台发送 Action=4。
-        accepted = session.start_sweep(channel=1, steps=[0], hold_s=0.2,
-                                       max_current_a=18.0, confirm_dcdc=True)
+        self.assertIn("自动识别", rejected["error"])
+        # 即使勾选确认，后台也不会自动把电池模式提升为 DCDC。
+        rejected_confirm = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                               max_current_a=18.0, confirm_dcdc=True)
+        self.assertFalse(rejected_confirm["ok"])
+        self.assertIn("自动识别", rejected_confirm["error"])
+        # 固件已是自动 DCDC_READY 时才允许。
+        state["value"] = 3
+        accepted = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                       max_current_a=18.0)
         self.assertTrue(accepted["ok"], accepted)
-        self.assertTrue(any(vals.get("action") == 4 for name, vals, _ in sent))
+        self.assertFalse(any(
+            name == "fan_calib" and vals.get("action") == 4
+            for name, vals, _ in sent
+        ), "自动阶梯扫频不得自动发送 Action=4")
         session._stop_event.set()
 
 

@@ -729,15 +729,10 @@
                 <div class="panel-body">
                   <div class="field-grid fan-calib-fields">
                     <label class="field"><span class="field-label">标定通道</span><span class="field-input"><select id="fanCalibChannelSelect"><option value="1">回路 1 (PWM1, 双 2H4PU)</option><option value="2">回路 2 (PWM2, 单 2H6P)</option></select></span></label>
-                    <label class="field"><span class="field-label">稳态保持时间</span><span class="field-input"><input id="fanCalibHoldInput" type="number" min="2" max="10" value="4"><em>s</em></span></label>
+                    <label class="field"><span class="field-label">稳态保持时间</span><span class="field-input"><input id="fanCalibHoldInput" type="number" min="3" max="10" value="6"><em>s</em></span></label>
                     <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="fanCalibMaxCurrentInput" type="number" min="5" max="20" value="18"><em>A</em></span></label>
                   </div>
                   <div class="fan-calib-actions">
-                    <label class="field" title="仅在确认实物 DCDC 正常供电时勾选；勾选后会通过 0x08 Action=4 使用 60 秒短租约">
-                      <span class="field-label">已确认 DCDC 就绪</span>
-                      <span class="field-input"><input type="checkbox" id="fanConfirmDcdcInput"></span>
-                    </label>
-                    <button class="outline-button" type="button" id="confirmFanDcdcButton">确认 DCDC 就绪</button>
                     <button class="action-button" type="button" id="startFanCalibButton">启动自动阶梯扫频</button>
                     <button class="danger-button" type="button" id="abortFanCalibButton" disabled>安全中止标定</button>
                     <button class="outline-button" type="button" id="exportFanCalibCsv">导出 CSV 记录</button>

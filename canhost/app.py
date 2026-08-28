@@ -191,9 +191,8 @@ class Api:
         steps = opts.get("steps")
         hold_s = float(opts.get("hold_s", 6.0))
         max_current_a = float(opts.get("max_current_a", 18.0))
-        confirm_dcdc = bool(opts.get("confirm_dcdc", False))
         return self._vehicle_service.start_fan_calibration(
-            channel, steps, hold_s, max_current_a, confirm_dcdc)
+            channel, steps, hold_s, max_current_a)
 
     def confirm_dcdc_ready(self) -> dict[str, Any]:
         """操作者独立确认 DCDC 已实际供电，供标定使用短租约覆盖。"""

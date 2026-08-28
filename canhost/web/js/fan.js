@@ -54,29 +54,14 @@ function bindFanControls() {
   });
 
   // Calibration controls
-  $("#confirmFanDcdcButton")?.addEventListener("click", async () => {
-    if (!fanConnectionAvailable()) return toast("请先连接 CANB", true);
-    try {
-      const res = await pywebview.api.confirm_dcdc_ready();
-      if (res && res.ok) {
-        toast(res.message || "DCDC 就绪已确认");
-      } else {
-        toast(`确认失败：${res?.error || "未知原因"}`, true);
-      }
-    } catch (e) {
-      toast(`调用确认接口异常：${e}`, true);
-    }
-  });
-
   $("#startFanCalibButton")?.addEventListener("click", async () => {
     if (!fanConnectionAvailable()) return toast("请先连接 CANB", true);
     const channel = +$("#fanCalibChannelSelect").value || 1;
     const hold_s = +$("#fanCalibHoldInput").value || 6;
     const max_current_a = +$("#fanCalibMaxCurrentInput").value || 18;
-    const confirm_dcdc = !!$("#fanConfirmDcdcInput")?.checked;
     try {
       const res = await pywebview.api.start_fan_calibration({
-        channel, hold_s, max_current_a, confirm_dcdc,
+        channel, hold_s, max_current_a,
       });
       if (res && res.ok) {
         toast("风扇自动扫频标定已启动");
