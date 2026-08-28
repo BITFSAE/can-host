@@ -616,6 +616,32 @@
                     </div>
                   </div>
 
+                  <!-- 0x5A8 供电状态与功率仲裁 -->
+                  <div class="fan-power-arbitration-block">
+                    <div class="fan-power-head">
+                      <h5>供电状态与功率仲裁 (0x5A8)</h5>
+                      <span id="fanPowerStatusFresh" class="policy-reported-tag">等待数据</span>
+                    </div>
+                    <div class="fan-power-grid">
+                      <div class="fan-power-card">
+                        <span class="fan-metric-label">供电状态</span>
+                        <strong id="fanPowerSupplyState" class="fan-power-val">—</strong>
+                      </div>
+                      <div class="fan-power-card">
+                        <span class="fan-metric-label">限功率原因</span>
+                        <strong id="fanPowerLimitReason" class="fan-power-val">—</strong>
+                      </div>
+                      <div class="fan-power-card">
+                        <span class="fan-metric-label">电流预算</span>
+                        <strong id="fanCurrentBudget" class="fan-power-val">—</strong>
+                      </div>
+                      <div class="fan-power-card">
+                        <span class="fan-metric-label">预测总线电流</span>
+                        <strong id="fanPredictedCurrent" class="fan-power-val">—</strong>
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="fan-loops-container">
                     <div class="fan-loop-card">
                       <div class="fan-loop-head">
@@ -693,6 +719,47 @@
                   </div>
                 </div>
               </article>
+
+              <!-- 风扇标定工作台 -->
+              <article class="panel fan-calib-panel">
+                <header class="panel-head">
+                  <h3>风扇台架功率标定 (0x5A9)</h3>
+                  <span id="fanCalibStateTag" class="tag neutral">未激活</span>
+                </header>
+                <div class="panel-body">
+                  <div class="field-grid fan-calib-fields">
+                    <label class="field"><span class="field-label">标定通道</span><span class="field-input"><select id="fanCalibChannelSelect"><option value="1">回路 1 (PWM1, 双 2H4PU)</option><option value="2">回路 2 (PWM2, 单 2H6P)</option><option value="3">双回路联合标定</option></select></span></label>
+                    <label class="field"><span class="field-label">稳态保持时间</span><span class="field-input"><input id="fanCalibHoldInput" type="number" min="2" max="10" value="4"><em>s</em></span></label>
+                    <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="fanCalibMaxCurrentInput" type="number" min="5" max="20" value="18"><em>A</em></span></label>
+                  </div>
+                  <div class="fan-calib-actions">
+                    <button class="action-button" type="button" id="startFanCalibButton">启动自动阶梯扫频</button>
+                    <button class="danger-button" type="button" id="abortFanCalibButton" disabled>安全中止标定</button>
+                    <button class="outline-button" type="button" id="exportFanCalibCsv">导出 CSV 记录</button>
+                    <button class="outline-button" type="button" id="exportFanCalibJson">导出 JSON 记录</button>
+                  </div>
+                  <div class="fan-calib-table-wrap">
+                    <table class="data-table fan-calib-table" id="fanCalibTable">
+                      <thead>
+                        <tr>
+                          <th>步骤</th>
+                          <th>PWM1</th>
+                          <th>PWM2</th>
+                          <th>RPM1 / 2 / 3</th>
+                          <th>总线电压</th>
+                          <th>总线电流</th>
+                          <th>总线功率</th>
+                          <th>ΔI (A)</th>
+                          <th>ΔP (W)</th>
+                        </tr>
+                      </thead>
+                      <tbody id="fanCalibTableBody">
+                        <tr><td colspan="9" class="empty-state">尚未运行标定。</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </article>
             </div>
 
             <div class="fan-control-column">
@@ -722,6 +789,9 @@
                     <div class="fan-policy-subhead">
                       <h4>自动温控曲线</h4>
                       <span id="fanCurveReport" class="policy-reported-tag">当前值未读取</span>
+                    </div>
+                    <div class="field-grid" style="grid-template-columns: 1fr; margin-bottom: 8px;">
+                      <label class="field"><span class="field-label">设置目标回路</span><span class="field-input"><select id="fanCurveTargetSelect"><option value="1">回路 1 (PWM1 · 电机水套)</option><option value="2">回路 2 (PWM2 · 逆变器/IGBT)</option></select></span></label>
                     </div>
                     <div class="field-grid five-col">
                       <label class="field"><span class="field-label">关闭温度</span><span class="field-input"><input id="fanTempOffInput" type="number" min="0" max="150" placeholder="35"><em>°C</em></span></label>

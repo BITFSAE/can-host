@@ -2606,6 +2606,101 @@ body.is-tool-page .quick-bar {
 .fan-ack-list .event-item p.ok { color: var(--ok); }
 .fan-ack-list .event-item p.bad { color: var(--fault); }
 
+/* Power Arbitration Block */
+.fan-power-arbitration-block {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.fan-power-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.fan-power-head h5 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.fan-power-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fan-power-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.fan-power-val {
+  font: 13px/1.2 var(--mono);
+  color: var(--text-1);
+}
+
+/* Fan Calibration Panel */
+.fan-calib-panel {
+  margin-top: 12px;
+}
+
+.fan-calib-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.fan-calib-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fan-calib-actions button {
+  min-width: 100px;
+}
+
+.fan-calib-table-wrap {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+.fan-calib-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.fan-calib-table th, .fan-calib-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.fan-calib-table th {
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 @media (max-width: 1180px) {
   .fan-workspace-grid { grid-template-columns: 1fr; }
   .fan-fault-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

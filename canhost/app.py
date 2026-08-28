@@ -185,6 +185,20 @@ class Api:
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self._vehicle_service.send_fan_command(name, values, acknowledged)
 
+    def start_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        opts = options or {}
+        channel = int(opts.get("channel", 1))
+        steps = opts.get("steps")
+        hold_s = float(opts.get("hold_s", 4.0))
+        max_current_a = float(opts.get("max_current_a", 18.0))
+        return self._vehicle_service.start_fan_calibration(channel, steps, hold_s, max_current_a)
+
+    def stop_fan_calibration(self) -> dict[str, Any]:
+        return self._vehicle_service.stop_fan_calibration()
+
+    def export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        return self._vehicle_service.export_fan_calibration(format_type)
+
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()
 

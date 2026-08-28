@@ -20,14 +20,16 @@ from typing import Any
 from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_name,
                         decode_ecu_sop_ack, decode_ecu_status, decode_ecu_wheels_i16,
                         decode_fan_ack, decode_fan_curve, decode_fan_diagnostic,
-                        decode_fan_failsafe, decode_fan_status, decode_fault_fields,
+                        decode_fan_failsafe, decode_fan_status, decode_fan_power_status,
+                        decode_fan_calib_status, decode_fault_fields,
                         decode_ivt_result, decode_meter_result, decode_pack_status,
                         decode_pdm_side, decode_sop_limits, decode_sop_status,
                         decode_tire_temp_frame, format_raw_frame,
                         IVT_RESULT_KEYS, IVT_RESULT_SCALES,
                         FAN_COMMAND_ACK_ID, FAN_CURVE_STATUS_ID, FAN_DIAGNOSTIC_ID,
-                        FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID,
-                        PDM_BATTERY_ID, PDM_BUS_ID, ALARM_LEVEL_NAMES, STATE_NAMES, TIRE_TEMP_IDS)
+                        FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID, FAN_POWER_STATUS_ID,
+                        FAN_CALIB_STATUS_ID, PDM_BATTERY_ID, PDM_BUS_ID,
+                        ALARM_LEVEL_NAMES, STATE_NAMES, TIRE_TEMP_IDS)
 
 
 # Frames arriving slower than this are treated as timed out by the UI layer;
@@ -66,13 +68,18 @@ class VehicleProtocol:
             "battery": {"voltage_v": None, "current_a": None, "power_w": None,
                         "energy_wh": None, "offline": True}}
         self.pdm_seen: dict[str, float | None] = {"bus": None, "battery": None}
-        self.fan: dict[str, Any] = {"status": {}, "diagnostic": {}, "curve": {}, "failsafe": {}}
+        self.fan: dict[str, Any] = {
+            "status": {}, "diagnostic": {}, "curve": {}, "failsafe": {},
+            "power_status": {}, "calib_status": {},
+        }
         self.fan_acks: dict[int, dict[str, Any]] = {}
         self.fan_ack_history: deque[dict[str, Any]] = deque(maxlen=40)
         self.last_fan_status_monotonic: float | None = None
         self.last_fan_diagnostic_monotonic: float | None = None
         self.last_fan_curve_monotonic: float | None = None
         self.last_fan_failsafe_monotonic: float | None = None
+        self.last_fan_power_monotonic: float | None = None
+        self.last_fan_calib_monotonic: float | None = None
         self.ecu: dict[str, Any] = {
             "torque_pct": [None] * 4, "velocity_rpm": [None] * 4,
             "motor_temp_c": [None] * 4, "inverter_temp_c": [None] * 4,
@@ -160,6 +167,12 @@ class VehicleProtocol:
         elif can_id == FAN_FAILSAFE_STATUS_ID and len(data) >= 7:
             self.fan["failsafe"] = decode_fan_failsafe(data)
             self.last_fan_failsafe_monotonic = now_mono
+        elif can_id == FAN_POWER_STATUS_ID and len(data) >= 8:
+            self.fan["power_status"] = decode_fan_power_status(data)
+            self.last_fan_power_monotonic = now_mono
+        elif can_id == FAN_CALIB_STATUS_ID and len(data) >= 6:
+            self.fan["calib_status"] = decode_fan_calib_status(data)
+            self.last_fan_calib_monotonic = now_mono
         elif can_id == 0x502 and len(data) >= 8:
             self.ecu["torque_pct"] = decode_ecu_wheels_i16(data, 0.1)
             self.last_ecu_monotonic["torque"] = now_mono
@@ -232,6 +245,8 @@ class VehicleProtocol:
         fan["diagnostic_age"] = age(now, self.last_fan_diagnostic_monotonic)
         fan["curve_age"] = age(now, self.last_fan_curve_monotonic)
         fan["failsafe_age"] = age(now, self.last_fan_failsafe_monotonic)
+        fan["power_status_age"] = age(now, self.last_fan_power_monotonic)
+        fan["calib_status_age"] = age(now, self.last_fan_calib_monotonic)
         ecu = {key: (list(value) if isinstance(value, list) else dict(value))
                for key, value in self.ecu.items()}
         ecu["age"] = {key: age(now, seen) for key, seen in self.last_ecu_monotonic.items()}

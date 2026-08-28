@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import unittest
 
-from canhost.decoders import CanFrame, build_fan_command, fan_ack_matches
+from canhost.decoders import (CanFrame, build_fan_command, fan_ack_matches,
+                              decode_fan_power_status, decode_fan_calib_status)
 from canhost.transport import CanService
 from canhost.vehicle.protocol import VehicleProtocol
+from canhost.vehicle.calibration import FanCalibrationSession
 
 
 class FanControllerToolTest(unittest.TestCase):
@@ -28,6 +30,12 @@ class FanControllerToolTest(unittest.TestCase):
              bytes.fromhex("04 06 A5 00 00 00 00 D7")),
             (build_fan_command("fan_query", {"_sequence": 7}),
              bytes.fromhex("05 07 00 00 00 00 00 F1")),
+            (build_fan_command("fan_curve_ch2", {"_sequence": 8, "temp_off_c": 35, "temp_on_c": 40, "temp_full_c": 60,
+                                                 "min_duty_pct": 30, "ramp_up_pct_per_s": 20}),
+             bytes.fromhex("06 08 23 28 3C 1E 14 BA")),
+            (build_fan_command("fan_calib", {"_sequence": 9, "action": 1, "step": 0, "duty1_pct": 0,
+                                             "duty2_pct": 0, "lease_s": 15}),
+             bytes.fromhex("08 09 01 00 00 00 0F 45")),
         ]
         for frame, expected in frames:
             self.assertEqual(frame.arbitration_id, 0x5A4)
@@ -52,6 +60,9 @@ class FanControllerToolTest(unittest.TestCase):
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 101, "fallback2_duty_pct": 50, "stale_hold_s": 5, "ramp_down_pct_per_s": 50}),
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 50, "fallback2_duty_pct": 50, "stale_hold_s": 31, "ramp_down_pct_per_s": 50}),
             ("fan_failsafe", {"strategy": 1, "fallback1_duty_pct": 50, "fallback2_duty_pct": 50, "stale_hold_s": 5, "ramp_down_pct_per_s": 101}),
+            ("fan_calib", {"action": 4, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 15}),
+            ("fan_calib", {"action": 1, "step": 1, "duty1_pct": 101, "duty2_pct": 50, "lease_s": 15}),
+            ("fan_calib", {"action": 1, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 65}),
         ]
         for name, values in cases:
             with self.assertRaises(ValueError, msg=f"{name} {values}"):
@@ -100,23 +111,55 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(rejected["result_name"], "参数错误")
         self.assertEqual(protocol.fan_ack_history[0]["sequence"], 10)
         self.assertEqual(protocol.fan_ack_history[1]["result_name"], "成功")
-        protocol.ingest(CanFrame(0x5A6, bytes([35, 40, 60, 30, 20, 0, 0, 0]), False))
-        self.assertEqual(protocol.fan["curve"], {"temp_off_c": 35, "temp_on_c": 40, "temp_full_c": 60,
-                                                 "min_duty_pct": 30, "ramp_up_pct_per_s": 20})
-        protocol.ingest(CanFrame(0x5A7, bytes([1, 50, 50, 5, 50, 2, 7, 0]), False))
+        protocol.ingest(CanFrame(0x5A6, bytes([35, 40, 60, 30, 20, 75, 30, 1]), False))
+        self.assertEqual(protocol.fan["curve"], {
+            "temp_off_c": 35, "temp_on_c": 40, "temp_full_c": 60,
+            "min_duty_pct": 30, "ramp_up_pct_per_s": 20,
+            "critical_temp_c": 75, "start_duty_pct": 30, "channel": 1,
+        })
+        protocol.ingest(CanFrame(0x5A7, bytes([1, 50, 50, 5, 50, 2, 7, 2]), False))
         self.assertEqual(protocol.fan["failsafe"]["failsafe_name"], "固定保底")
         self.assertEqual(protocol.fan["failsafe"]["fallback1_duty_pct"], 50)
         self.assertEqual(protocol.fan["failsafe"]["stale_hold_s"], 5)
         self.assertEqual(protocol.fan["failsafe"]["mode"], 2)
         self.assertEqual(protocol.fan["failsafe"]["lease_remaining_s"], 7)
+        self.assertEqual(protocol.fan["failsafe"]["protocol_version"], 2)
+
+    def test_power_status_and_calib_status_decode(self) -> None:
+        protocol = VehicleProtocol()
+        # 0x5A8: DCDC_READY (state=3, limit=0), req 50/60, tgt 50/60, budget 18.0A (180), pred 12.5A (125 -> 0x007D little endian)
+        protocol.ingest(CanFrame(0x5A8, bytes([0x03, 50, 60, 50, 60, 180, 0x7D, 0x00]), False))
+        pwr = protocol.fan["power_status"]
+        self.assertEqual(pwr["power_supply_state"], 3)
+        self.assertEqual(pwr["power_supply_name"], "DCDC就绪")
+        self.assertEqual(pwr["power_limit_reason"], 0)
+        self.assertEqual(pwr["power_limit_name"], "无限制")
+        self.assertEqual(pwr["thermal_req_pct"], [50, 60])
+        self.assertEqual(pwr["power_limited_target_pct"], [50, 60])
+        self.assertEqual(pwr["current_budget_a"], 18.0)
+        self.assertEqual(pwr["predicted_current_a"], 12.5)
+
+        # 0x5A9: Calib Running (state=1, abort=0), step 2, tgt 40/0, lease 12, ver 1, flags 0
+        protocol.ingest(CanFrame(0x5A9, bytes([0x01, 2, 40, 0, 12, 1, 0, 0]), False))
+        calib = protocol.fan["calib_status"]
+        self.assertEqual(calib["calib_state"], 1)
+        self.assertEqual(calib["calib_state_name"], "标定中")
+        self.assertEqual(calib["step"], 2)
+        self.assertEqual(calib["calib_target_pct"], [40, 0])
+        self.assertEqual(calib["lease_remaining_s"], 12)
+        self.assertEqual(calib["param_version"], 1)
 
     def test_extended_frames_do_not_update_fan_state(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x5A2, bytes(8), True))
         protocol.ingest(CanFrame(0x5A3, bytes(8), True))
         protocol.ingest(CanFrame(0x5A5, bytes(8), True))
+        protocol.ingest(CanFrame(0x5A8, bytes(8), True))
+        protocol.ingest(CanFrame(0x5A9, bytes(8), True))
         self.assertEqual(protocol.fan["status"], {})
         self.assertEqual(protocol.fan["diagnostic"], {})
+        self.assertEqual(protocol.fan["power_status"], {})
+        self.assertEqual(protocol.fan["calib_status"], {})
         self.assertEqual(protocol.fan_acks, {})
         self.assertIsNone(protocol.last_fan_status_monotonic)
 
@@ -153,6 +196,54 @@ class FanControllerToolTest(unittest.TestCase):
         finally:
             service.disconnect()
 
+    def test_fan_calibration_session_preconditions_and_export(self) -> None:
+        sent_commands = []
+        def fake_send(name, vals, ack):
+            sent_commands.append((name, vals))
+            return {"ok": True}
+
+        fake_snap = {
+            "connection": {"mode": "pcan", "connected": True},
+            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0, "age": 0.1, "offline": False}},
+            "fan": {
+                "status": {"rpm": [3000, 3000, 0]},
+                "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
+                "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+            }
+        }
+        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        self.assertTrue(session.check_preconditions()["ok"])
+
+        # Fail when PDM is offline
+        fake_snap["pdm"]["bus"]["offline"] = True
+        self.assertFalse(session.check_preconditions()["ok"])
+        fake_snap["pdm"]["bus"]["offline"] = False
+
+        # Fail when battery mode
+        fake_snap["fan"]["power_status"]["power_supply_state"] = 1
+        self.assertFalse(session.check_preconditions()["ok"])
+        fake_snap["fan"]["power_status"]["power_supply_state"] = 3
+
+        # Fail when over-temperature
+        fake_snap["fan"]["diagnostic"]["motor_temp_c"] = 71.0
+        self.assertFalse(session.check_preconditions()["ok"])
+        fake_snap["fan"]["diagnostic"]["motor_temp_c"] = 45.0
+
+        # Export test
+        session.records = [{
+            "step": 1, "channel": 1, "duty1_pct": 30, "duty2_pct": 0,
+            "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+            "voltage_v": 24.0, "current_a": 4.5, "power_w": 108.0,
+            "delta_current_a": 2.5, "delta_power_w": 60.0,
+            "motor_temp_c": 45.0, "controller_temp_c": 40.0, "timestamp": 123456.789
+        }]
+        csv_data = session.export_csv()
+        self.assertIn("Delta_Current_A", csv_data)
+        self.assertIn("2.5", csv_data)
+        json_data = session.export_json()
+        self.assertIn("delta_power_w", json_data)
+
 
 if __name__ == "__main__":
     unittest.main()
+

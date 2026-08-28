@@ -19,6 +19,7 @@ from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, C
                            BmsProtocol, build_command, command_ack_matches)
 from .decoders import CanFrame, build_fan_command, fan_ack_matches
 from .vehicle.protocol import VehicleProtocol
+from .vehicle.calibration import FanCalibrationSession
 
 
 class CanService:
@@ -70,6 +71,10 @@ class CanService:
         self.bench_last_tx_error = ""
         self.bench_last_tx_error_time = 0.0
         self.protocol = self._new_protocol()
+        self.fan_calib_session = FanCalibrationSession(
+            send_fn=self.send_fan_command,
+            snapshot_fn=self.vehicle_snapshot
+        ) if self.protocol_kind == "vehicle" else None
 
     def _new_protocol(self, clock=None) -> BmsProtocol | VehicleProtocol:
         protocol_class = VehicleProtocol if self.protocol_kind == "vehicle" else BmsProtocol
@@ -378,7 +383,28 @@ class CanService:
     def vehicle_snapshot(self) -> dict[str, Any]:
         """Return the full vehicle-page state for the dedicated CANB connection."""
         with self.lock:
-            return self.protocol.snapshot(dict(self.connection))
+            snap = self.protocol.snapshot(dict(self.connection))
+            if self.fan_calib_session:
+                snap["fan"]["calib_session"] = self.fan_calib_session.get_snapshot()
+            return snap
+
+    def start_fan_calibration(self, channel: int = 1, steps: list[int] | None = None,
+                              hold_s: float = 4.0, max_current_a: float = 18.0) -> dict[str, Any]:
+        if not self.fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持风扇标定"}
+        return self.fan_calib_session.start_sweep(channel, steps, hold_s, max_current_a)
+
+    def stop_fan_calibration(self) -> dict[str, Any]:
+        if not self.fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持风扇标定"}
+        return self.fan_calib_session.abort("用户手动停止")
+
+    def export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        if not self.fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持风扇标定"}
+        if format_type.lower() == "json":
+            return {"ok": True, "data": self.fan_calib_session.export_json(), "format": "json"}
+        return {"ok": True, "data": self.fan_calib_session.export_csv(), "format": "csv"}
 
     def quick_snapshot(self) -> dict[str, Any]:
         """Small state polled by the always-visible quick-value strip."""

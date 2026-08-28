@@ -275,7 +275,7 @@ PDM_BATTERY_ID = 0x5A1
 
 
 # ---------------------------------------------------------------------------
-# FanController 0x5A2..0x5A7 (status big-endian; command carries CRC-8)
+# FanController 0x5A2..0x5A9 (status big-endian; power/calib/command little-endian)
 # ---------------------------------------------------------------------------
 
 FAN_STATUS_ID = 0x5A2
@@ -284,23 +284,43 @@ FAN_COMMAND_ID = 0x5A4
 FAN_COMMAND_ACK_ID = 0x5A5
 FAN_CURVE_STATUS_ID = 0x5A6
 FAN_FAILSAFE_STATUS_ID = 0x5A7
+FAN_POWER_STATUS_ID = 0x5A8
+FAN_CALIB_STATUS_ID = 0x5A9
 
 FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
 FAN_FAILSAFE_NAMES = {0: "保持最后目标", 1: "固定保底", 2: "全速"}
 FAN_RESULT_NAMES = {
     0: "成功", 1: "CRC 错误", 2: "长度错误", 3: "参数错误",
     4: "操作码不支持", 5: "模式超时，已回到自动",
+    6: "安全门控拦截（非DCDC就绪或超温）",
 }
 FAN_FAULT_NAMES = [
     "风扇 1 无转速", "风扇 2 无转速", "风扇 3 无转速", "电机温度超时",
     "控制器温度超时", "PWM1 启动失败", "PWM2 启动失败", "测速启动失败",
 ]
+FAN_POWER_SUPPLY_NAMES = {
+    0: "未知", 1: "低压电池", 2: "DCDC接管中", 3: "DCDC就绪",
+    4: "功率受限", 5: "数据故障",
+}
+FAN_POWER_LIMIT_NAMES = {
+    0: "无限制", 1: "总线电流限制", 2: "电池电流限制", 3: "PDM超时",
+    4: "DCDC切换保持", 5: "停转保护",
+}
+FAN_CALIB_STATE_NAMES = {
+    0: "未激活", 1: "标定中", 2: "已中止", 3: "已完成",
+}
+FAN_CALIB_ABORT_NAMES = {
+    0: "无", 1: "DCDC供电丢失", 2: "PDM遥测超时", 3: "总线功率受限",
+    4: "温度超限", 5: "风扇停转", 6: "租约超时", 7: "用户停止",
+}
 FAN_COMMAND_CODES = {
     "fan_control": 0x01,
     "fan_curve": 0x02,
     "fan_failsafe": 0x03,
     "fan_restore_defaults": 0x04,
     "fan_query": 0x05,
+    "fan_curve_ch2": 0x06,
+    "fan_calib": 0x08,
 }
 
 
@@ -360,13 +380,19 @@ def decode_fan_ack(data: bytes) -> dict[str, Any]:
 
 
 def decode_fan_curve(data: bytes) -> dict[str, Any]:
+    critical_c = data[5] if len(data) > 5 else 75
+    start_duty = data[6] if len(data) > 6 else 30
+    channel = data[7] if len(data) > 7 else 1
     return {
         "temp_off_c": data[0], "temp_on_c": data[1], "temp_full_c": data[2],
         "min_duty_pct": data[3], "ramp_up_pct_per_s": data[4],
+        "critical_temp_c": critical_c, "start_duty_pct": start_duty,
+        "channel": channel,
     }
 
 
 def decode_fan_failsafe(data: bytes) -> dict[str, Any]:
+    version = data[7] if len(data) > 7 else 1
     return {
         "failsafe": data[0],
         "failsafe_name": FAN_FAILSAFE_NAMES.get(data[0], f"未知 {data[0]}"),
@@ -374,6 +400,40 @@ def decode_fan_failsafe(data: bytes) -> dict[str, Any]:
         "stale_hold_s": data[3], "ramp_down_pct_per_s": data[4],
         "mode": data[5], "mode_name": FAN_MODE_NAMES.get(data[5], "未知"),
         "lease_remaining_s": data[6],
+        "protocol_version": version,
+    }
+
+
+def decode_fan_power_status(data: bytes) -> dict[str, Any]:
+    supply_state = data[0] & 0x0F
+    limit_reason = (data[0] >> 4) & 0x0F
+    budget_a = data[5] * 0.1
+    predicted_a = u16le(data, 6) * 0.1
+    return {
+        "power_supply_state": supply_state,
+        "power_supply_name": FAN_POWER_SUPPLY_NAMES.get(supply_state, f"未知 ({supply_state})"),
+        "power_limit_reason": limit_reason,
+        "power_limit_name": FAN_POWER_LIMIT_NAMES.get(limit_reason, f"未知 ({limit_reason})"),
+        "thermal_req_pct": [data[1], data[2]],
+        "power_limited_target_pct": [data[3], data[4]],
+        "current_budget_a": round(budget_a, 1),
+        "predicted_current_a": round(predicted_a, 1),
+    }
+
+
+def decode_fan_calib_status(data: bytes) -> dict[str, Any]:
+    calib_state = data[0] & 0x0F
+    abort_reason = (data[0] >> 4) & 0x0F
+    return {
+        "calib_state": calib_state,
+        "calib_state_name": FAN_CALIB_STATE_NAMES.get(calib_state, f"未知 ({calib_state})"),
+        "calib_abort_reason": abort_reason,
+        "calib_abort_name": FAN_CALIB_ABORT_NAMES.get(abort_reason, f"未知 ({abort_reason})"),
+        "step": data[1],
+        "calib_target_pct": [data[2], data[3]],
+        "lease_remaining_s": data[4],
+        "param_version": data[5],
+        "flags": u16le(data, 6) if len(data) >= 8 else 0,
     }
 
 
@@ -407,7 +467,8 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         if mode == 0:
             duty1 = duty2 = lease_s = 0
         return command_frame(0x01, bytes([mode, duty1, duty2, lease_s, 0]))
-    if name == "fan_curve":
+    if name in ("fan_curve", "fan_curve_ch2"):
+        opcode = 0x02 if name == "fan_curve" else 0x06
         temp_off, temp_on, temp_full = int(values["temp_off_c"]), int(values["temp_on_c"]), int(values["temp_full_c"])
         min_duty = int(values["min_duty_pct"])
         ramp_up = int(values["ramp_up_pct_per_s"])
@@ -418,7 +479,7 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
             raise ValueError("最低运行占空比必须在 10..100 %")
         if not 10 <= ramp_up <= 100:
             raise ValueError("占空比上升速度必须在 10..100 %/s")
-        return command_frame(0x02, bytes([temp_off, temp_on, temp_full, min_duty, ramp_up]))
+        return command_frame(opcode, bytes([temp_off, temp_on, temp_full, min_duty, ramp_up]))
     if name == "fan_failsafe":
         strategy = int(values["strategy"])
         fallback1 = int(values["fallback1_duty_pct"])
@@ -434,6 +495,21 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         if not 10 <= ramp_down <= 100:
             raise ValueError("占空比下降速度必须在 10..100 %/s")
         return command_frame(0x03, bytes([strategy, fallback1, fallback2, hold_s, ramp_down]))
+    if name == "fan_calib":
+        action = int(values.get("action", 1)) # 1=Start, 2=Lease/Update, 3=Stop
+        step = int(values.get("step", 0)) & 0xFF
+        duty1 = int(values.get("duty1_pct", 0))
+        duty2 = int(values.get("duty2_pct", 0))
+        lease_s = int(values.get("lease_s", 10))
+        if action not in (1, 2, 3):
+            raise ValueError("标定动作必须是 1=启动、2=续约 或 3=停止")
+        if not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
+            raise ValueError("占空比必须在 0..100 %")
+        if action != 3 and not 1 <= lease_s <= 60:
+            raise ValueError("标定租约必须在 1..60 秒")
+        if action == 3:
+            duty1 = duty2 = lease_s = 0
+        return command_frame(0x08, bytes([action, step, duty1, duty2, lease_s]))
     if name == "fan_restore_defaults":
         return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
     if name == "fan_query":
