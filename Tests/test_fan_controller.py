@@ -325,6 +325,38 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(sent[1][0], "fan_control")
         self.assertEqual(sent[1][1]["mode"], 0)
 
+    def test_calibration_requires_explicit_dcdc_confirmation(self) -> None:
+        state = {"value": 1}
+        sent = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            if name == "fan_calib" and vals.get("action") == 4:
+                state["value"] = 3
+            return {"ok": True}
+        def snapshot():
+            return {
+                "connection": {"mode": "pcan", "connected": True},
+                "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
+                                "age": 0.1, "offline": False}},
+                "fan": {
+                    "status": {"rpm": [3000, 3000, 0]},
+                    "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
+                    "power_status": {"power_supply_state": state["value"], "power_supply_name": "待确认"},
+                    "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+                },
+            }
+        session = FanCalibrationSession(fake_send, snapshot)
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=0.2,
+                                      max_current_a=18.0, confirm_dcdc=False)
+        self.assertFalse(rejected["ok"])
+        self.assertIn("确认 DCDC", rejected["error"])
+        # 明确确认后才允许启动，并会在后台发送 Action=4。
+        accepted = session.start_sweep(channel=1, steps=[0], hold_s=0.2,
+                                       max_current_a=18.0, confirm_dcdc=True)
+        self.assertTrue(accepted["ok"], accepted)
+        self.assertTrue(any(vals.get("action") == 4 for name, vals, _ in sent))
+        session._stop_event.set()
+
 
 class FanCalibrationWatchdogTest(unittest.TestCase):
     def test_watchdog_stops_on_pdm_loss_and_dcdc_loss(self) -> None:
@@ -341,6 +373,7 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
                     "status": {"rpm": [3000, 3000, 0]},
                     "diagnostic": {"faults": faults, "motor_temp_c": motor, "controller_temp_c": ctrl},
                     "power_status": {"power_supply_state": state, "power_supply_name": "DCDC就绪"},
+                    "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
                 },
             }
         session = FanCalibrationSession(fake_send, snapshot)

@@ -40,6 +40,8 @@ class FanCalibrationSession:
         self.current_duty: list[int] = [0, 0]
         self.baseline: dict[str, float] = {}
         self.records: list[dict[str, Any]] = []
+        self.run_params: dict[str, Any] = {}
+        self.raw_samples: list[dict[str, Any]] = []
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -92,7 +94,8 @@ class FanCalibrationSession:
 
     def start_sweep(self, channel: int = 1, steps: list[int] | None = None,
                     hold_s: float = DEFAULT_HOLD_S,
-                    max_current_a: float = 18.0) -> dict[str, Any]:
+                    max_current_a: float = 18.0,
+                    confirm_dcdc: bool = False) -> dict[str, Any]:
         """Start a background automated calibration sweep."""
         if channel not in (1, 2):
             return {"ok": False, "error": "计划要求先分别标定回路 1/2，暂不开放双回路联合扫频"}
@@ -102,6 +105,16 @@ class FanCalibrationSession:
         pre_check = self.check_preconditions()
         if not pre_check["ok"]:
             return pre_check
+
+        current_state = self.snapshot_fn().get("fan", {}).get("power_status", {}).get("power_supply_state")
+        if current_state != 3 and not confirm_dcdc:
+            state_name = self.snapshot_fn().get("fan", {}).get("power_status", {}).get(
+                "power_supply_name", str(current_state))
+            return {
+                "ok": False,
+                "error": f"当前供电为 {state_name}，不是 DCDC_READY；"
+                         "请先确认实物 DCDC 正常供电并点击“确认 DCDC 就绪”。",
+            }
 
         if steps is None:
             steps = list(self.DEFAULT_STEPS)
@@ -120,11 +133,19 @@ class FanCalibrationSession:
             self.current_duty = [0, 0]
             self.baseline.clear()
             self.records.clear()
+            self.run_params = {
+                "channel": channel,
+                "steps": list(steps),
+                "hold_s": hold_s,
+                "max_current_a": max_current_a,
+                "confirm_dcdc": confirm_dcdc,
+            }
+            self.raw_samples.clear()
             self._stop_event.clear()
 
             self._thread = threading.Thread(
                 target=self._run_sweep,
-                args=(channel, steps, hold_s, max_current_a),
+                args=(channel, steps, hold_s, max_current_a, confirm_dcdc),
                 name="fan-calib-runner",
                 daemon=True,
             )
@@ -179,6 +200,8 @@ class FanCalibrationSession:
                 "current_duty": list(self.current_duty),
                 "baseline": dict(self.baseline),
                 "records": list(self.records),
+                "run_params": dict(self.run_params),
+                "raw_samples": list(self.raw_samples),
             }
 
     def export_csv(self) -> str:
@@ -190,6 +213,7 @@ class FanCalibrationSession:
                 "Fan1_RPM", "Fan2_RPM", "Fan3_RPM",
                 "Bus_Voltage_V", "Bus_Current_A", "Bus_Power_W",
                 "Delta_Current_A", "Delta_Power_W",
+                "Baseline_Current_A", "Baseline_Power_W",
                 "Motor_Temp_C", "Controller_Temp_C", "Timestamp"
             ])
             for r in self.records:
@@ -199,6 +223,7 @@ class FanCalibrationSession:
                     r.get("rpm1"), r.get("rpm2"), r.get("rpm3"),
                     r.get("voltage_v"), r.get("current_a"), r.get("power_w"),
                     r.get("delta_current_a"), r.get("delta_power_w"),
+                    r.get("baseline_current_a"), r.get("baseline_power_w"),
                     r.get("motor_temp_c"), r.get("controller_temp_c"),
                     r.get("timestamp"),
                 ])
@@ -210,12 +235,10 @@ class FanCalibrationSession:
                 "channel": self.channel,
                 "status": self.status,
                 "abort_reason": self.abort_reason,
-                "steps": list(self.DEFAULT_STEPS),
-                "hold_s": self.DEFAULT_HOLD_S,
-                "settle_s": self.SETTLE_S,
-                "sample_s": self.SAMPLE_S,
+                "run_params": dict(self.run_params),
                 "baseline": self.baseline,
                 "records": self.records,
+                "raw_samples": list(self.raw_samples),
                 "exported_at": time.time(),
             }
             return json.dumps(data, ensure_ascii=False, indent=2)
@@ -229,7 +252,19 @@ class FanCalibrationSession:
                 return samples
             snap = self.snapshot_fn()
             bus = snap.get("pdm", {}).get("bus", {})
-            if not bus.get("offline", True) and bus.get("current_a") is not None:
+            fan = snap.get("fan", {})
+            fan_status_age = fan.get("status_age")
+            fan_diag_age = fan.get("diagnostic_age")
+            power_status_age = fan.get("power_status_age")
+            fresh = (
+                not bus.get("offline", True)
+                and bus.get("age") is not None
+                and bus.get("age") <= 1.0
+                and fan_status_age is not None and fan_status_age <= 1.0
+                and fan_diag_age is not None and fan_diag_age <= 1.0
+                and power_status_age is not None and power_status_age <= 1.0
+            )
+            if fresh and bus.get("current_a") is not None:
                 samples.append({
                     "v": bus.get("voltage_v") or 24.0,
                     "i": bus.get("current_a") or 0.0,
@@ -302,6 +337,15 @@ class FanCalibrationSession:
             return "连接模式已变化，触发安全中止"
         if bus.get("offline", True) or (bus.get("age") is not None and bus.get("age") > 1.0):
             return "PDM 遥测超时 (>1.0s)，触发安全中止"
+        fan_status_age = fan.get("status_age")
+        fan_diag_age = fan.get("diagnostic_age")
+        power_status_age = fan.get("power_status_age")
+        if fan_status_age is None or fan_status_age > 1.0:
+            return "FanController 0x5A2 状态超时 (>1.0s)，触发安全中止"
+        if fan_diag_age is None or fan_diag_age > 1.0:
+            return "FanController 0x5A3 诊断超时 (>1.0s)，触发安全中止"
+        if power_status_age is None or power_status_age > 1.0:
+            return "FanController 0x5A8 功率状态超时 (>1.0s)，触发安全中止"
         if fan_power.get("power_supply_state") not in (None, 3):
             state_name = fan_power.get("power_supply_name", str(fan_power.get("power_supply_state")))
             return f"供电脱离 DCDC_READY 状态（当前：{state_name}），触发安全中止"
@@ -321,8 +365,19 @@ class FanCalibrationSession:
 
     def _apply_step(self, step: int, duty1: int, duty2: int,
                     hold_s: float, max_current_a: float,
-                    baseline: dict[str, float]) -> dict[str, Any] | None:
+                    baseline: dict[str, float],
+                    confirm_dcdc: bool = False) -> dict[str, Any] | None:
         """下发一个目标点，等待稳定并采集后 3s 中位数，返回记录或 None。"""
+        if confirm_dcdc:
+            # 独立确认的 Action=4 只有 60s 租约；每个步骤开始时续一次，
+            # 避免 170s 双向扫描中途因租约到期被固件降回 BATTERY。
+            renew = self.send_fn("fan_calib", {
+                "action": 4, "step": 0, "duty1_pct": 0, "duty2_pct": 0,
+                "lease_s": 60,
+            }, True)
+            if not renew.get("ok"):
+                self._abort_and_return(f"续订 DCDC 就绪确认失败：{renew.get('error', '未知错误')}")
+                return None
         cmd_res = self.send_fn("fan_calib", {
             "action": 2, "step": step, "duty1_pct": duty1, "duty2_pct": duty2, "lease_s": 15,
         }, True)
@@ -370,6 +425,16 @@ class FanCalibrationSession:
                     "mt": fan_diag.get("motor_temp_c"),
                     "ct": fan_diag.get("controller_temp_c"),
                 })
+                with self.lock:
+                    self.raw_samples.append({
+                        "step": step,
+                        "duty1_pct": duty1,
+                        "duty2_pct": duty2,
+                        **samples[-1],
+                        "baseline_current_a": baseline.get("current_a"),
+                        "baseline_power_w": baseline.get("power_w"),
+                        "timestamp": round(time.time(), 3),
+                    })
             time.sleep(0.1)
 
         summary, stable = self._stable_summary(samples)
@@ -380,10 +445,29 @@ class FanCalibrationSession:
             while time.monotonic() < extra_end:
                 if self._stop_event.is_set():
                     return None
-                reason = self._watchdog(self.snapshot_fn(), max_current_a)
+                extra_snap = self.snapshot_fn()
+                reason = self._watchdog(extra_snap, max_current_a)
                 if reason:
                     self._abort_and_return(reason)
                     return None
+                extra_bus = extra_snap.get("pdm", {}).get("bus", {})
+                extra_status = extra_snap.get("fan", {}).get("status", {})
+                extra_diag = extra_snap.get("fan", {}).get("diagnostic", {})
+                if (not extra_bus.get("offline", True)
+                        and extra_bus.get("age") is not None
+                        and extra_bus.get("age") <= 1.0
+                        and extra_bus.get("current_a") is not None):
+                    extra_rpm = extra_status.get("rpm", [0, 0, 0]) or [0, 0, 0]
+                    extra.append({
+                        "v": extra_bus.get("voltage_v") or 24.0,
+                        "i": extra_bus.get("current_a") or 0.0,
+                        "p": extra_bus.get("power_w") or 0.0,
+                        "rpm1": extra_rpm[0] if len(extra_rpm) > 0 else 0,
+                        "rpm2": extra_rpm[1] if len(extra_rpm) > 1 else 0,
+                        "rpm3": extra_rpm[2] if len(extra_rpm) > 2 else 0,
+                        "mt": extra_diag.get("motor_temp_c"),
+                        "ct": extra_diag.get("controller_temp_c"),
+                    })
                 time.sleep(0.1)
             samples.extend(extra)
             summary, stable = self._stable_summary(samples)
@@ -407,21 +491,25 @@ class FanCalibrationSession:
             "delta_power_w": round(max(0.0, summary["median_p"] - baseline.get("power_w", 0.0)), 2),
             "std_current_a": round(summary["std_i"], 3),
             "std_power_w": round(summary["std_p"], 3),
+            "baseline_voltage_v": baseline.get("voltage_v"),
+            "baseline_current_a": baseline.get("current_a"),
+            "baseline_power_w": baseline.get("power_w"),
             "motor_temp_c": last.get("mt"),
             "controller_temp_c": last.get("ct"),
             "timestamp": round(time.time(), 3),
         }
 
     def _run_sweep(self, channel: int, steps: list[int],
-                   hold_s: float, max_current_a: float) -> None:
+                   hold_s: float, max_current_a: float,
+                   confirm_dcdc: bool = False) -> None:
         """执行计划中的上升+下降双向阶梯扫频。"""
         try:
             current_state = self.snapshot_fn().get("fan", {}).get("power_status", {}).get("power_supply_state")
-            if current_state != 3:
-                # 当前不是自动识别出的 DCDC_READY：由操作者通过 Action=4 显式确认。
+            if confirm_dcdc and current_state != 3:
+                # 仅当操作者通过独立按钮确认过，才允许 Action=4 覆盖。绝不自动提升预算。
                 confirm = self.send_fn("fan_calib", {
                     "action": 4, "step": 0, "duty1_pct": 0, "duty2_pct": 0,
-                    "lease_s": 60,
+                    "lease_s": 120,
                 }, True)
                 if not confirm.get("ok"):
                     self._abort_and_return(
@@ -431,6 +519,9 @@ class FanCalibrationSession:
                 if not self._wait_for_dcdc_confirm():
                     self._abort_and_return("确认后未在 3s 内进入 DCDC_READY，中止标定")
                     return
+            elif current_state != 3:
+                self._abort_and_return("启动后供电已离开 DCDC_READY，中止标定")
+                return
 
             baseline = self._measure_baseline(0)
             if baseline is None:
@@ -465,7 +556,10 @@ class FanCalibrationSession:
 
                     d1 = target_duty if channel == 1 else 0
                     d2 = target_duty if channel == 2 else 0
-                    record = self._apply_step(record_index + 1, d1, d2, hold_s, max_current_a, self.baseline)
+                    record = self._apply_step(
+                        record_index + 1, d1, d2, hold_s, max_current_a,
+                        self.baseline, confirm_dcdc,
+                    )
                     if record is None:
                         return
                     record_index += 1

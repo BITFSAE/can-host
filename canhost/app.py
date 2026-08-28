@@ -189,9 +189,22 @@ class Api:
         opts = options or {}
         channel = int(opts.get("channel", 1))
         steps = opts.get("steps")
-        hold_s = float(opts.get("hold_s", 4.0))
+        hold_s = float(opts.get("hold_s", 6.0))
         max_current_a = float(opts.get("max_current_a", 18.0))
-        return self._vehicle_service.start_fan_calibration(channel, steps, hold_s, max_current_a)
+        confirm_dcdc = bool(opts.get("confirm_dcdc", False))
+        return self._vehicle_service.start_fan_calibration(
+            channel, steps, hold_s, max_current_a, confirm_dcdc)
+
+    def confirm_dcdc_ready(self) -> dict[str, Any]:
+        """操作者独立确认 DCDC 已实际供电，供标定使用短租约覆盖。"""
+        confirmed = self._vehicle_service.send_fan_command(
+            "fan_calib",
+            {"action": 4, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 60},
+            True,
+        )
+        if not confirmed.get("ok"):
+            return {"ok": False, "error": f"DCDC 就绪确认失败：{confirmed.get('error', '未知错误')}"}
+        return {"ok": True, "message": "DCDC 就绪已确认，可在 60 秒内启动标定"}
 
     def stop_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.stop_fan_calibration()
