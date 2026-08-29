@@ -1,6 +1,6 @@
 # BITFSAE CAN HOST
 
-BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度、故障与记录、参数与命令）+ 整车 CANB 总览（SOP、自有 IVT-S、赛会能量计、PDM 低压、ECU 四轮、胎温、整车风扇）。主要面向 Windows + PCAN-USB。使用者操作、页面分工、连接关系和总线安全边界统一见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；进度、风险、验证和历史变更统一记录在 [`todo.md`](todo.md)。
+BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度、故障与记录、参数与命令）+ 整车 CANB 总览（SOP、自有 IVT-S、赛会能量计、PDM 低压、ECU 四轮、胎温、整车风扇）+ MQTT 遥测故障订阅。主要面向 Windows + PCAN-USB。使用者操作、页面分工、连接关系和总线安全边界统一见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；进度、风险、验证和历史变更统一记录在 [`todo.md`](todo.md)。
 
 接口权威：BMS 帧以 [BMS-MASTER-F405](https://github.com/BITFSAE/BMS-MASTER-F405) 固件与 `DOC/CAN通信协议.md` 为准；整车风扇以 [FanController](https://github.com/BITFSAE/FanController)、PDM 以 [PDM](https://github.com/BITFSAE/PDM) 固件仓库为准；整车 DBC 中央登记在 [vehicle-interfaces](https://github.com/BITFSAE/vehicle-interfaces)。
 
@@ -9,6 +9,7 @@ BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度
 - Windows：PEAK PCAN 驱动、PCAN-Basic、Microsoft Edge WebView2 Runtime。
 - Python 源码运行：Python 3.11 或更新版本、`requirements.txt` 中的依赖。
 - 实体 CAN：PCAN-USB 和正确的总线位率；源码中保留 BMS 与整车两套内置模拟数据供开发测试，Windows 发布版不打包模拟器。
+- 遥测订阅：可访问 MQTT Broker 的网络和只读 `fsae/telemetry` 账号；密码不保存在上位机页面设置中。
 
 ## Windows 源码运行
 
@@ -88,14 +89,15 @@ git push origin v0.3.0
 
 | 文件 | 作用 |
 |---|---|
-| `canhost/app.py` | PyWebView 窗口和 JavaScript API（主/整车/台架/IVT 四类连接） |
+| `canhost/app.py` | PyWebView 窗口和 JavaScript API（主/整车/台架/IVT/MQTT 五类独立连接） |
 | `canhost/transport.py` | 线程化 python-can 传输层：连接、记录、回放、命令发送 |
 | `canhost/decoders.py` | 全部 CAN 帧格式的唯一定义（SOP、包状态、IVT、赛会能量计、PDM、风扇、ECU、胎温） |
 | `canhost/bms/` | BMS 协议状态机、工具命令编码、BMS 模拟器 |
 | `canhost/vehicle/` | 整车协议状态机（含风扇命令应答）与整车模拟器 |
 | `canhost/ivt.py` | IVT 请求、响应解析和 BMS CANB 目标比较 |
 | `canhost/updater.py` | GitHub Release 检查、SHA256 校验、安全解压与 Windows 退出安装 |
+| `canhost/telemetry/` | MQTT 只读订阅、TelemetryFrame Protobuf 解码和故障变化记录 |
 | `canhost/web/` | 无网络依赖的 HTML/CSS/JavaScript 界面（`js/` 按页面模块拆分） |
 | `cli/` | 独立命令行工具 `pcan_bms_bench.py`、`pcan_ivt_tool.py` |
-| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / updater） |
+| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / telemetry / updater） |
 | `todo.md` | 上位机待办、风险、验证和变更摘要 |

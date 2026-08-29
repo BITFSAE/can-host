@@ -17,8 +17,9 @@
 - 整车连接（独立 CANB 通道）已接入：整车总览页显示 SOP 限功率（0x4A0/0x4A3/0x4A4 含配对 CRC 与 ECU 确认）、BMS 整车镜像（0x4B0/0x4B1）、自有 IVT-S 八通道（0x512–0x519 小端）、赛会能量计（0x521/0x522/0x526/0x528 大端，功率/能量帧可能不发送）、PDM 低压两侧（0x5A0/0x5A1，四字段全无效值判离线）、ECU 四轮调试帧（0x502/0x505–0x509）和胎温（0x071–0x074，轮位映射待实物确认）；整车风扇页并入整车连接。
 - 底部常看值快捷栏在所有非工具页常驻：低压 V/I/P、高压 V/I、SOC、SOP 放电/充电功率限值、风扇最高转速；高压和 SOC 优先 BMS 主连接、无数据时回退整车连接 0x4B0。
 - CAN 监视器支持主连接/整车连接数据源切换。
+- MQTT 遥测故障页已接入：第五条独立只读连接直接订阅 `fsae/telemetry`，按权威 `TelemetryFrame` 解码 BMS 32 位故障字、状态、告警等级和 `alarms`，记录本次会话的故障进入/清除；空帧、损坏或无已知字段的 Payload 单独计数，3 秒断流后当前值恢复“等待数据”；BMS presence 缺失时零故障字保持未知，不会把上游失联记成正常或故障清除。
 - 内置整车模拟器（源码运行）发出全部代表帧，macOS 可开发整车页面；Windows 发布版不打包。
-- 代码按模块拆分：后端 `canhost/decoders.py`（帧格式唯一定义）+ `bms/` + `vehicle/` 子包 + `transport.py`；前端 `web/js/` 七个模块（core/bms/vehicle/fan/bench/ivt/updater）。
+- 代码按模块拆分：后端 `canhost/decoders.py`（CAN 帧格式唯一定义）+ `bms/` + `vehicle/` + `telemetry/` 子包 + `transport.py`；前端 `web/js/` 八个模块（core/bms/vehicle/fan/bench/ivt/telemetry/updater）。
 - GitHub 软件内更新已接入：Windows 发布版启动后自动检查 BITFSAE/can-host 的正式 Release，左下角版本信息打开更新窗口，支持预发布、私有仓库只读 PAT、ZIP+SHA256 下载校验、安全解压、退出备份替换失败回滚和自动启动新版本；源码运行只检查不安装。
 - 界面 UI 与连接交互重构完成：左上角标题单行化（`CAN HOST`）；整车总览与整车风扇移除顶部冗余连接栏；底部状态栏对齐 BMS 主连接与整车连接两个独立入口并配备专属连接弹窗。
 - 整车模拟器 SOP 发送周期已同步为 10ms，与 F405/BMS 新协议一致。
@@ -39,6 +40,7 @@
 - [ ] 确认赛会能量计 0x526/0x528 在实车上是否发送（DBC 标注可能不发送）。
 - [ ] 胎温帧与轮位的实际对应关系（vehicle-interfaces 标注待实物确认）确认后更新页面标签和 vehicle-interfaces。
 - [ ] 双 PCAN 同机运行验证：主连接 CAN1 调参数同时整车连接 CANB 看快捷栏，确认 PCAN 驱动允许双通道并发。
+- [ ] 用现网只读 MQTT 账号连接 `bitfsae.com:1883`，由 G473 或 `local_sim2.py` 发送正常/故障进入/切换/清除帧，验证订阅重连、故障名称、变化记录、3 秒断流和损坏 Payload 计数。
 - [ ] 完成Windows发布目录检查，确认无需网络字体、开发目录或未打包模块。
 - [x] 推送 `host-v*` 标签走一遍 CI：确认版本核对、单测、PyInstaller 产物和 Release 附件 zip 完整可用，手动触发一次构建验证产物下载。（2026-08-17 在原仓库已验证全流程；迁移到本仓库后标签规则改为 `v*`，需在新仓库重新验证一次手动构建。）
 
@@ -78,11 +80,13 @@
 | 1120×720只完成浏览器渲染检查 | PyWebView缩放和Windows显示缩放可能改变实际可用区域 | 在100%、125%、150%显示缩放下检查 |
 | 软件内更新未做真实 GitHub 与 Windows 端到端验证 | 真实 Release API、权限、下载速度、UAC/安装目录写权限、PowerShell 助手和新进程回滚未实机覆盖 | 发布 v0.3.0-rc 后用旧版实测完整安装与回滚；确认安装目录权限和日志位置 |
 | 私有仓库访问令牌保存在本机明文 settings.json | 使用共用电脑或电脑失窃时令牌可能被读取 | 只给发布版用户创建 `contents:read` 最小权限；丢失令牌后立即撤销并清除；公开仓库保持不配置令牌 |
+| 现网 MQTT 1883 仍为明文且当前只读账号复用 telegraf | 网络路径可观察认证与 Payload；桌面用户共享服务账号不利于轮换和审计 | Broker 部署 TLS，并为上位机创建只读 `fsae/telemetry` 的独立账号；TLS 实连验证后默认切换安全端口 |
 
 ## 最近验证
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
+| 2026-08-29 | MQTT 遥测订阅与故障解析接入：权威 Proto/生成文件哈希核对一致；121 项单测、全部 JS `node --check`、Python 编译、HTML 重复 ID 和 `git diff --check` 通过 | 真实 Broker 认证/重连、现网 G473 Payload、Windows PyInstaller 对 paho-mqtt/protobuf 的实际收集和 PyWebView 页面操作仍待验证 |
 | 2026-08-27 | GitHub 软件内更新实现：后端检查/下载/SHA256/安全解压/备份替换回滚，前端更新窗口；CI Release 同时上传 ZIP 与 .sha256；102 项单测、全部 JS `node --check`、Python 编译和 `git diff --check` 通过 | 真实 GitHub Release 请求、Windows PyInstaller/WebView2 下的更新按钮与安装助手端到端、安装目录权限/UAC 回滚 |
 | 2026-08-26 | Bringup 从控监视超时改为 1.5s；`unittest discover Tests/test_*.py` 87 项通过 | 实体 PCAN 与 F405 Bringup 联调仍待验证 |
 | 2026-08-24 | 仓库迁移与整车扩展：filter-repo 保留 29 条 host 提交历史迁入本仓库并推送 GitHub（私有，Electrical-core 团队写权限）；后端拆分 decoders/bms/vehicle/transport，前端拆分六个 JS 模块；新增整车总览页、快捷栏、监视器数据源切换；86 项单测全绿、全部 JS `node --check` 通过、模拟模式 Api 冒烟通过 | 实车 CANB 各节点、双 PCAN 并发、Windows 打包（新仓库 CI 待手动触发验证） |
@@ -105,6 +109,13 @@
 | 2026-08-02 | 16 项主机协议测试、PyWebView API 不公开检查、JavaScript 语法、HTML ID 引用、`node --check` 和 `git diff --check` 通过；Chromium 模拟快照（五页导航、确认/工程弹窗、CAN 列表滚动）无脚本错误，1460×920 与 1120×720 无水平溢出；总览信息、同页 138 串/48 温度、只读故障页、独立命令页、异常筛选、充电计时、预计时间、趋势曲线和统一字号通过 | 修正后的 PyWebView 原生窗口复测、实体 PCAN、F405 台架、Windows 打包和长时间记录 |
 
 ## 已完成变更
+
+### 2026-08-29
+
+- 新增独立 MQTT 遥测订阅服务 `canhost/telemetry/service.py`：Paho MQTT v2 回调、异步连接/自动重连、只允许明确 Topic、无发布接口、密码不进入快照；统计接收量、解析错误和最新数据年龄，并保留 120 条会话内故障变化。
+- 同步遥测仓库生成的 `fsae_telemetry_pb2.py`（权威 Proto 与 `vehicle-interfaces/telemetry/fsae_telemetry.proto` SHA256 一致），`protocol.py` 优先解析 `battery_fault_code`、兼容旧 `fault_code`、按 F405 同一 32 位名称表展开，并独立解析 BMS 状态/告警等级和 `TelemetryFrame.alarms`。
+- 新增“遥测故障”页面及连接弹窗：显示连接、接收/失败计数、当前故障、活动位、遥测 Alarm 和变化记录；数据超过 3 秒明确显示“等待数据”，BMS presence 缺失时不把零值显示成正常。Broker/Topic/用户名可本机记忆，密码不保存；MQTT 与四类 CAN 连接互不影响。
+- `requirements.txt`、PyInstaller hidden import、API、使用说明、文档索引和测试同步接入；版本日期更新为 2026-08-29。
 
 ### 2026-08-27
 

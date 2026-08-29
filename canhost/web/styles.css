@@ -2952,3 +2952,119 @@ body.is-tool-page .quick-bar {
 .veh-tire-point small { font-size: 9.5px; color: var(--text-3); }
 .veh-tire-point b { font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--text); }
 .veh-tire-point em { font-style: normal; font-size: 9px; color: var(--text-3); }
+
+/* ---------- MQTT telemetry fault monitor ---------- */
+
+#page-telemetry { display: none; gap: 10px; }
+#page-telemetry.active { display: grid; }
+
+.telemetry-status-strip {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  min-height: 60px;
+  padding: 10px 12px 10px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+}
+.telemetry-status-main { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.telemetry-status-main .status-dot {
+  width: 9px; height: 9px; flex: none;
+  border-radius: 50%;
+  background: var(--idle);
+}
+.telemetry-status-main .status-dot.connected { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-dim); }
+.telemetry-status-main .status-dot.fault { background: var(--fault); box-shadow: 0 0 0 4px var(--fault-dim); }
+.telemetry-status-main > span:last-child { display: grid; min-width: 0; }
+.telemetry-status-main b { font-size: 13px; font-weight: 600; }
+.telemetry-status-main small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.telemetry-counters { display: grid; grid-template-columns: repeat(3, auto); gap: 0; }
+.telemetry-counters > div { min-width: 84px; padding: 0 14px; border-left: 1px solid var(--line-soft); }
+.telemetry-counters dt { color: var(--text-3); font-size: 10px; }
+.telemetry-counters dd { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.telemetry-counters dd.bad { color: var(--fault); }
+
+.telemetry-fault-hero {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+}
+.telemetry-fault-hero > div { display: grid; align-content: center; gap: 2px; padding: 13px 16px; }
+.telemetry-fault-hero > div > span { color: var(--text-3); font-size: 11px; font-weight: 600; }
+.telemetry-fault-hero strong { font-family: var(--mono); font-size: 25px; line-height: 1.15; }
+.telemetry-fault-hero strong.bad { color: var(--fault); }
+.telemetry-fault-hero small { color: var(--text-3); font-size: 10.5px; }
+.telemetry-fault-hero small.bad { color: var(--fault); }
+.telemetry-fault-hero dl { display: grid; grid-template-columns: repeat(4, minmax(92px, auto)); }
+.telemetry-fault-hero dl > div {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 12px 15px;
+  border-left: 1px solid var(--line-soft);
+}
+.telemetry-fault-hero dt { color: var(--text-3); font-size: 10.5px; }
+.telemetry-fault-hero dd { overflow: hidden; font-family: var(--mono); font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+
+.telemetry-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 10px; }
+.telemetry-grid .panel-body { min-height: 220px; max-height: 330px; overflow: auto; }
+.telemetry-grid .panel-head > span { color: var(--text-3); font-size: 11px; }
+.telemetry-grid .panel-head > span.bad { color: var(--fault); }
+#telemetryActiveFaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 7px; }
+.telemetry-fault-item {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid rgba(242, 85, 77, .52);
+  border-radius: var(--r-md);
+  background: var(--fault-dim);
+}
+.telemetry-fault-item span { font-family: var(--mono); font-size: 10px; color: var(--fault); }
+.telemetry-fault-item b { font-size: 12px; font-weight: 600; }
+.telemetry-normal-state { display: grid; align-content: center; justify-items: center; grid-column: 1 / -1; min-height: 180px; }
+.telemetry-normal-state b { color: var(--ok); font-size: 13px; }
+.telemetry-normal-state span { color: var(--text-3); font-size: 11px; }
+.telemetry-normal-state.neutral b { color: var(--text-2); }
+.telemetry-alarm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.telemetry-alarm-item:last-child { border-bottom: 0; }
+.telemetry-alarm-item > span { display: grid; min-width: 0; }
+.telemetry-alarm-item b { font-family: var(--mono); font-size: 11px; }
+.telemetry-alarm-item small { overflow: hidden; color: var(--text-2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.telemetry-alarm-item em { flex: none; color: var(--text-3); font-size: 10.5px; font-style: normal; }
+.telemetry-alarm-item.severity-2 em { color: var(--warn); }
+.telemetry-alarm-item.severity-3 em,
+.telemetry-alarm-item.severity-4 em { color: var(--fault); }
+.telemetry-history-panel .panel-body { padding: 0; }
+.telemetry-history-panel .event-list { max-height: 260px; }
+
+.telemetry-endpoint-fields { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 10px; }
+.telemetry-tls-switch { justify-self: start; }
+
+@media (max-width: 1260px) {
+  .telemetry-status-strip { grid-template-columns: minmax(220px, 1fr) auto; }
+  .telemetry-counters { display: none; }
+  .telemetry-fault-hero { grid-template-columns: minmax(250px, 1fr) auto; }
+  .telemetry-fault-hero dl { grid-template-columns: repeat(2, minmax(92px, auto)); }
+  .telemetry-grid { grid-template-columns: 1fr; }
+}

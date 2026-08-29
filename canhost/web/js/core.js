@@ -12,6 +12,7 @@ var state = {
   snapshot: null,
   toolSnapshots: { bench: null, ivt: null },
   vehicleSnapshot: null,
+  telemetrySnapshot: null,
   quickSnapshot: null,
   page: "overview",
   cellMode: "voltage",
@@ -24,6 +25,7 @@ var state = {
   pendingCommand: null,
   pendingIvtAction: null,
   pendingFanCommand: null,
+  pendingFanAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false, chargerType: false, fan: false },
   recording: false,
@@ -40,7 +42,7 @@ window.state = state;
 const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
 
-const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt"];
+const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "telemetry"];
 const TOOL_PAGES = ["bench", "ivt"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
@@ -132,6 +134,7 @@ async function init() {
   bindFanControls();
   bindBenchControls();
   bindIvtControls();
+  bindTelemetryControls();
   buildAlarmMatrix();
   buildVehicleStatics();
   try {
@@ -352,6 +355,12 @@ async function poll() {
         && state.api.get_vehicle_snapshot) {
       await optionalSnapshot(state.api.get_vehicle_snapshot, value => { state.vehicleSnapshot = value; });
     }
+    const telemetryState = state.telemetrySnapshot?.connection?.state;
+    const telemetryActive = !!telemetryState && telemetryState !== "disconnected";
+    if ((page === "telemetry" || (!TOOL_PAGES.includes(page) && telemetryActive))
+        && state.api.get_telemetry_snapshot) {
+      await optionalSnapshot(state.api.get_telemetry_snapshot, value => { state.telemetrySnapshot = value; });
+    }
     if (!TOOL_PAGES.includes(page) && state.api.get_quick_snapshot) {
       await optionalSnapshot(state.api.get_quick_snapshot, value => { state.quickSnapshot = value; });
     }
@@ -371,6 +380,7 @@ async function poll() {
 function render() {
   const snap = state.snapshot; if (!snap) return;
   renderConnection(snap.connection);
+  renderTelemetryBadge();
   renderCellBadge();
   renderAlarmSummary();
   if (state.page === "overview") {
@@ -392,6 +402,8 @@ function render() {
   } else if (state.page === "frames") {
     renderReplay();
     if (!state.framePaused) renderFrames();
+  } else if (state.page === "telemetry") {
+    renderTelemetry();
   }
 }
 
@@ -576,6 +588,21 @@ async function sendPendingCommand() {
       await poll();
     } else {
       toast(result.error || "IVT 操作失败", true);
+      $("#doConfirm").disabled = false;
+    }
+    return;
+  }
+  if (state.pendingFanAction) {
+    // 通用确认动作（例如启动风扇自动扫频）：必须勾选确认后才会执行。
+    const pending = state.pendingFanAction;
+    $("#doConfirm").disabled = true;
+    try {
+      await pending.run();
+      $("#confirmDialog").close();
+      state.pendingFanAction = null;
+      await poll();
+    } catch (e) {
+      toast(`操作失败：${e}`, true);
       $("#doConfirm").disabled = false;
     }
     return;

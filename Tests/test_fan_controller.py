@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from canhost.decoders import (CanFrame, build_fan_command, fan_ack_matches,
@@ -206,16 +207,7 @@ class FanControllerToolTest(unittest.TestCase):
             sent_commands.append((name, vals))
             return {"ok": True}
 
-        fake_snap = {
-            "connection": {"mode": "pcan", "connected": True},
-            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0, "age": 0.1, "offline": False}},
-            "fan": {
-                "status": {"rpm": [3000, 3000, 0]},
-                "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
-                "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
-                "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
-            }
-        }
+        fake_snap = _calib_snap()
         session = FanCalibrationSession(fake_send, lambda: fake_snap)
         self.assertTrue(session.check_preconditions()["ok"])
 
@@ -234,19 +226,50 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertFalse(session.check_preconditions()["ok"])
         fake_snap["fan"]["diagnostic"]["motor_temp_c"] = 45.0
 
+        # 温度失联时必须拒绝：固件看门狗只在温度“新鲜且超温”时中止，
+        # 失联时标定会在没有温度保护的情况下运行。
+        fake_snap["fan"]["diagnostic"]["faults"] = 0x18
+        result = session.check_preconditions()
+        self.assertFalse(result["ok"])
+        self.assertIn("温度输入失联", result["error"])
+        fake_snap["fan"]["diagnostic"]["faults"] = 0
+
+        # 温度为 None（0x5A3 上报 0x7FFF）时同样必须拒绝
+        fake_snap["fan"]["diagnostic"]["motor_temp_c"] = None
+        fake_snap["fan"]["diagnostic"]["controller_temp_c"] = None
+        result = session.check_preconditions()
+        self.assertFalse(result["ok"])
+        self.assertIn("温度无效", result["error"])
+        fake_snap["fan"]["diagnostic"]["motor_temp_c"] = 45.0
+        fake_snap["fan"]["diagnostic"]["controller_temp_c"] = 40.0
+
         # Export test
         session.records = [{
-            "step": 1, "channel": 1, "duty1_pct": 30, "duty2_pct": 0,
+            "step": 1, "channel": 1, "direction": "up", "baseline_id": 2,
+            "duty1_pct": 30, "duty2_pct": 0,
             "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
             "voltage_v": 24.0, "current_a": 4.5, "power_w": 108.0,
             "delta_current_a": 2.5, "delta_power_w": 60.0,
             "motor_temp_c": 45.0, "controller_temp_c": 40.0, "timestamp": 123456.789
         }]
+        session.baseline_history = [{"baseline_id": 2, "step": 0, "direction": "initial",
+                                     "current_a": 2.0, "power_w": 48.0,
+                                     "sample_count": 30, "captured_at": 123456.0}]
+        session.baseline_raw_samples = [
+            {"baseline_id": 1, "step": 0, "direction": "initial",
+             "duty1_pct": 0, "duty2_pct": 0, "t": 123456.0, "v": 24.0, "i": 2.0, "p": 48.0},
+            {"baseline_id": 2, "step": 0, "direction": "initial",
+             "duty1_pct": 0, "duty2_pct": 0, "t": 123456.1, "v": 24.0, "i": 2.0, "p": 48.0},
+        ]
         csv_data = session.export_csv()
         self.assertIn("Delta_Current_A", csv_data)
         self.assertIn("2.5", csv_data)
+        self.assertIn("Baseline_ID", csv_data)
         json_data = session.export_json()
         self.assertIn("delta_power_w", json_data)
+        # 基线原始数据必须进入 JSON 导出，否则无法复核每条记录关联的基线。
+        self.assertIn("baseline_raw_samples", json_data)
+        self.assertIn("baseline_history", json_data)
 
     def test_calibration_preconditions_require_real_pcan_and_fresh_fan_frames(self) -> None:
         sent_commands = []
@@ -282,18 +305,10 @@ class FanControllerToolTest(unittest.TestCase):
         def fake_send(name, vals, ack):
             sent.append((name, vals, ack))
             return {"ok": True}
-        fake_snap = {
-            "connection": {"mode": "pcan", "connected": True},
-            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
-                            "age": 0.1, "offline": False}},
-            "fan": {
-                "status": {"rpm": [3000, 3000, 0]},
-                "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
-                "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
-                "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
-            },
-        }
+        fake_snap = _calib_snap()
         session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        # 把 3 秒稳定验证缩短，避免单元测试真的等待 3 秒。
+        session.DCDC_STABLE_REQUIRED_S = 0.2
         try:
             result = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
             self.assertTrue(result["ok"], result)
@@ -325,46 +340,119 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(sent[1][0], "fan_control")
         self.assertEqual(sent[1][1]["mode"], 0)
 
-    def test_calibration_requires_explicit_dcdc_confirmation(self) -> None:
-        state = {"value": 1}
-        sent = []
+    def test_calibration_requires_measured_dcdc_ready(self) -> None:
+        """自动扫频必须由 PDM 实测判据证明 DCDC 已接管，不能只看固件状态。"""
+        sent: list[tuple[str, dict, bool]] = []
         def fake_send(name, vals, ack):
             sent.append((name, vals, ack))
-            if name == "fan_calib" and vals.get("action") == 4:
-                state["value"] = 3
             return {"ok": True}
-        def snapshot():
-            return {
-                "connection": {"mode": "pcan", "connected": True},
-                "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
-                                "age": 0.1, "offline": False}},
-                "fan": {
-                    "status": {"rpm": [3000, 3000, 0]},
-                    "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
-                    "power_status": {"power_supply_state": state["value"], "power_supply_name": "待确认"},
-                    "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
-                },
-            }
-        session = FanCalibrationSession(fake_send, snapshot)
-        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
-                                      max_current_a=18.0, confirm_dcdc=False)
+
+        # 固件上报 DCDC_READY（可能是 Action=4 手动覆盖），但电池仍在放电：必须拒绝。
+        snap = _calib_snap(state=3, bat_current=3.0)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
+        self.assertFalse(rejected["ok"], "电池仍在放电时不得开始扫频")
+        self.assertIn("电池支路仍在放电", rejected["error"])
+
+        # 电压差不足：同样拒绝。
+        snap = _calib_snap(state=3, bus_v=23.6, bat_v=23.5)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
         self.assertFalse(rejected["ok"])
-        self.assertIn("自动识别", rejected["error"])
-        # 即使勾选确认，后台也不会自动把电池模式提升为 DCDC。
-        rejected_confirm = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
-                                               max_current_a=18.0, confirm_dcdc=True)
-        self.assertFalse(rejected_confirm["ok"])
-        self.assertIn("自动识别", rejected_confirm["error"])
-        # 固件已是自动 DCDC_READY 时才允许。
-        state["value"] = 3
-        accepted = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
-                                       max_current_a=18.0)
+        self.assertIn("电压差", rejected["error"])
+
+        # 电池支路离线：无法证明 DCDC 接管，拒绝。
+        snap = _calib_snap(state=3, bat_offline=True)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
+        self.assertFalse(rejected["ok"])
+        self.assertIn("PDM", rejected["error"])
+
+        # 实测判据满足，但固件状态与实测不一致：拒绝。
+        snap = _calib_snap(state=1)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
+        self.assertFalse(rejected["ok"])
+        self.assertIn("不一致", rejected["error"])
+
+        # 整车基础负载过高：拒绝，否则扫到高占空比必然触发电流保护。
+        snap = _calib_snap(state=3, bus_current=12.0)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        rejected = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
+        self.assertFalse(rejected["ok"])
+        self.assertIn("开始标定门槛", rejected["error"])
+
+        # 全部条件满足才允许开始。
+        snap = _calib_snap(state=3)
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.2
+        accepted = session.start_sweep(channel=1, steps=[0], hold_s=3.0, max_current_a=18.0)
         self.assertTrue(accepted["ok"], accepted)
         self.assertFalse(any(
             name == "fan_calib" and vals.get("action") == 4
             for name, vals, _ in sent
         ), "自动阶梯扫频不得自动发送 Action=4")
         session._stop_event.set()
+
+    def test_baseline_samples_append_and_are_exported(self) -> None:
+        """每 4 个点重新测量基线时必须追加保存，而不是覆盖上一组。"""
+        sent: list[tuple[str, dict, bool]] = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+        snap = _calib_snap()
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        # 直接构造两组样本，验证追加与 baseline_id 递增。
+        session.baseline_raw_samples = []
+        session.baseline_history = []
+        session.baseline_id = 0
+        for _ in range(2):
+            with session.lock:
+                session.baseline_id += 1
+                session.baseline_raw_samples.extend([
+                    {"baseline_id": session.baseline_id, "step": 0, "direction": "up",
+                     "duty1_pct": 0, "duty2_pct": 0, "t": 1.0, "v": 24.0, "i": 2.0, "p": 48.0},
+                    {"baseline_id": session.baseline_id, "step": 0, "direction": "up",
+                     "duty1_pct": 0, "duty2_pct": 0, "t": 1.1, "v": 24.0, "i": 2.0, "p": 48.0},
+                ])
+                session.baseline_history.append({"baseline_id": session.baseline_id,
+                                                 "step": 0, "direction": "up",
+                                                 "current_a": 2.0, "power_w": 48.0})
+        self.assertEqual(len(session.baseline_raw_samples), 4)
+        self.assertEqual([s["baseline_id"] for s in session.baseline_raw_samples], [1, 1, 2, 2])
+        exported = json.loads(session.export_json())
+        self.assertEqual(len(exported["baseline_raw_samples"]), 4)
+        self.assertEqual(len(exported["baseline_history"]), 2)
+
+
+def _calib_snap(*, bus_current: float = 2.0, bus_offline: bool = False,
+                bat_current: float = 0.1, bat_offline: bool = False,
+                bus_v: float = 24.0, bat_v: float = 23.5,
+                state: int = 3, faults: int = 0,
+                motor_temp: float | None = 45.0,
+                ctrl_temp: float | None = 40.0) -> dict:
+    """构造标定测试用的整车快照；PDM 双路都给出，满足 DCDC 实测判据。"""
+    return {
+        "connection": {"mode": "pcan", "connected": True},
+        "pdm": {
+            "bus": {"voltage_v": bus_v, "current_a": bus_current, "power_w": 48.0,
+                    "age": 0.1, "offline": bus_offline},
+            "battery": {"voltage_v": bat_v, "current_a": bat_current, "power_w": 2.0,
+                        "age": 0.1, "offline": bat_offline},
+        },
+        "fan": {
+            "status": {"rpm": [3000, 3000, 0]},
+            "diagnostic": {"faults": faults, "motor_temp_c": motor_temp,
+                           "controller_temp_c": ctrl_temp},
+            "power_status": {"power_supply_state": state, "power_supply_name": "DCDC就绪"},
+            "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+        },
+    }
 
 
 class FanCalibrationWatchdogTest(unittest.TestCase):
@@ -392,6 +480,9 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
         self.assertIn("总线电流", session._watchdog(snapshot(current=18.1), 18.0))
         self.assertIn("电机温度", session._watchdog(snapshot(motor=72.0), 18.0))
         self.assertIn("停转", session._watchdog(snapshot(faults=0x01), 18.0))
+        # 温度失联或温度无效时必须中止，否则标定在没有温度保护的情况下继续。
+        self.assertIn("温度输入失联", session._watchdog(snapshot(faults=0x18), 18.0))
+        self.assertIn("温度无效", session._watchdog(snapshot(motor=None, ctrl=None), 18.0))
 
 
 if __name__ == "__main__":

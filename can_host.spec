@@ -9,7 +9,12 @@ a = Analysis(
     pathex=[str(root)],
     binaries=[],
     datas=[(str(package / "web"), "canhost/web")],
-    hiddenimports=["can.interfaces.pcan", "cli.pcan_bms_bench"],
+    hiddenimports=[
+        "can.interfaces.pcan",
+        "cli.pcan_bms_bench",
+        "paho.mqtt.client",
+        "canhost.telemetry.fsae_telemetry_pb2",
+    ],
     hookspath=[],
     runtime_hooks=[],
     # The field release is connected to real PCAN hardware.  Keep the

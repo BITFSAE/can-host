@@ -54,23 +54,27 @@ function bindFanControls() {
   });
 
   // Calibration controls
-  $("#startFanCalibButton")?.addEventListener("click", async () => {
+  $("#startFanCalibButton")?.addEventListener("click", () => {
     if (!fanConnectionAvailable()) return toast("请先连接 CANB", true);
     const channel = +$("#fanCalibChannelSelect").value || 1;
     const hold_s = +$("#fanCalibHoldInput").value || 6;
     const max_current_a = +$("#fanCalibMaxCurrentInput").value || 18;
-    try {
-      const res = await pywebview.api.start_fan_calibration({
-        channel, hold_s, max_current_a,
+    const chName = channel === 2 ? "回路 2 (PWM2 · 单 2H6P)" : "回路 1 (PWM1 · 双 2H4PU)";
+    // 计划 11.1：开始标定前必须由操作者逐次确认现场安全条件。
+    confirmFanAction(
+      "启动风扇自动扫频标定",
+      `标定通道 ${chName}\n稳态保持 ${hold_s} s · 总线电流保护 ${max_current_a} A\n\n`
+      + "标定期间该回路会按阶梯从 0% 扫到 100% 再扫回，三台风扇会高速运转。\n"
+      + "任一安全条件（温度、PDM、供电、停转、电流）触发都会自动中止并恢复自动温控。",
+      "我已确认车辆静止、车轮安全、风道无遮挡，且人员远离旋转部件。",
+      async () => {
+        const res = await pywebview.api.start_fan_calibration({ channel, hold_s, max_current_a });
+        if (res && res.ok) {
+          toast("风扇自动扫频标定已启动");
+        } else {
+          toast(`启动标定失败：${res?.error || "未知原因"}`, true);
+        }
       });
-      if (res && res.ok) {
-        toast("风扇自动扫频标定已启动");
-      } else {
-        toast(`启动标定失败：${res?.error || "未知原因"}`, true);
-      }
-    } catch (e) {
-      toast(`调用标定接口异常：${e}`, true);
-    }
   });
 
   $("#abortFanCalibButton")?.addEventListener("click", async () => {
@@ -130,6 +134,7 @@ function confirmFanCommand(name, values, title, message, destructive = false) {
   if (!fanConnectionAvailable()) return toast("请先在整车页连接 CANB（真实 PCAN）", true);
   state.pendingCommand = null;
   state.pendingIvtAction = null;
+  state.pendingFanAction = null;
   state.pendingFanCommand = { name, values };
   const conn = state.vehicleSnapshot.connection;
   text("#confirmTitle", title);
@@ -137,6 +142,29 @@ function confirmFanCommand(name, values, title, message, destructive = false) {
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s\n`
     + `命令：${name}`);
+  $("#confirmCheck").checked = false;
+  $("#doConfirm").disabled = true;
+  $("#doConfirm").className = destructive ? "danger-button" : "action-button";
+  $("#confirmDialog").showModal();
+}
+
+/**
+ * 复用同一个确认对话框执行一个自定义动作（例如启动自动扫频标定）。
+ * 必须勾选 checkLabel 指定的确认项后才会调用 run，避免直接触发高风险流程。
+ */
+function confirmFanAction(title, message, checkLabel, run, destructive = false) {
+  if (!fanConnectionAvailable()) return toast("请先在整车页连接 CANB（真实 PCAN）", true);
+  state.pendingCommand = null;
+  state.pendingIvtAction = null;
+  state.pendingFanCommand = null;
+  state.pendingFanAction = { run };
+  const conn = state.vehicleSnapshot.connection;
+  text("#confirmTitle", title);
+  text("#confirmMessage", message);
+  text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
+    + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s\n`
+    + `操作：${title}`);
+  text("#confirmCheckLabel", checkLabel);
   $("#confirmCheck").checked = false;
   $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";

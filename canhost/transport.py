@@ -389,12 +389,11 @@ class CanService:
             return snap
 
     def start_fan_calibration(self, channel: int = 1, steps: list[int] | None = None,
-                              hold_s: float = 4.0, max_current_a: float = 18.0,
-                              confirm_dcdc: bool = False) -> dict[str, Any]:
+                              hold_s: float = 4.0, max_current_a: float = 18.0) -> dict[str, Any]:
         if not self.fan_calib_session:
             return {"ok": False, "error": "当前连接不支持风扇标定"}
         return self.fan_calib_session.start_sweep(
-            channel, steps, hold_s, max_current_a, confirm_dcdc)
+            channel, steps, hold_s, max_current_a)
 
     def stop_fan_calibration(self) -> dict[str, Any]:
         if not self.fan_calib_session:

@@ -48,6 +48,11 @@
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12h4l3-7.5 4.4 15 3.1-7.5h4.5"/></svg>
           <span>CAN 监视器</span>
         </button>
+        <button class="nav-item" type="button" data-page="telemetry" title="遥测故障">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5h16M6.5 14.5a7 7 0 0 1 11 0M9.2 11.5a3.8 3.8 0 0 1 5.6 0"/><circle cx="12" cy="17.5" r="1.3"/></svg>
+          <span>遥测故障</span>
+          <b id="telemetryNavBadge" class="badge alert hidden">0</b>
+        </button>
         <details class="nav-tools">
           <summary>
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 4.5 1 2.1a6.2 6.2 0 0 1 3 0l1-2.1 2.1 1.2-.9 2.2a6.2 6.2 0 0 1 2.1 2.1l2.2-.9 1.2 2.1-2.1 1a6.2 6.2 0 0 1 0 3l2.1 1-1.2 2.1-2.2-.9a6.2 6.2 0 0 1-2.1 2.1l.9 2.2-2.1 1.2-1-2.1a6.2 6.2 0 0 1-3 0l-1 2.1-2.1-1.2.9-2.2a6.2 6.2 0 0 1-2.1-2.1l-2.2.9-1.2-2.1 2.1-1a6.2 6.2 0 0 1 0-3l-2.1-1 1.2-2.1 2.2.9a6.2 6.2 0 0 1 2.1-2.1l-.9-2.2 2.1-1.2Z"/><circle cx="12" cy="12" r="2.4"/></svg>
@@ -884,6 +889,57 @@
             <div id="frameEmpty" class="empty-state large">连接设备后，这里显示最近 320 帧。</div>
           </div>
         </section>
+
+        <section class="page" id="page-telemetry" aria-label="遥测故障">
+          <div class="telemetry-status-strip">
+            <div class="telemetry-status-main">
+              <span class="status-dot" id="telemetryStatusDot" aria-hidden="true"></span>
+              <span><b id="telemetryConnectionName">遥测未连接</b><small id="telemetryConnectionDetail">配置 MQTT 订阅</small></span>
+            </div>
+            <dl class="telemetry-counters">
+              <div><dt>接收</dt><dd id="telemetryRxCount">0</dd></div>
+              <div><dt>解析失败</dt><dd id="telemetryParseErrors">0</dd></div>
+              <div><dt>最新数据</dt><dd id="telemetryLastAge">等待数据</dd></div>
+            </dl>
+            <button class="outline-button" type="button" id="telemetryConnectButton">配置订阅</button>
+          </div>
+
+          <div class="telemetry-fault-hero">
+            <div>
+              <span>当前 BMS 故障码</span>
+              <strong id="telemetryFaultCode">等待数据</strong>
+              <small id="telemetryFaultSource">等待 TelemetryFrame</small>
+            </div>
+            <dl>
+              <div><dt>活动项</dt><dd id="telemetryActiveCount">等待数据</dd></div>
+              <div><dt>告警等级</dt><dd id="telemetryAlarmLevel">等待数据</dd></div>
+              <div><dt>BMS 状态</dt><dd id="telemetryBmsState">等待数据</dd></div>
+              <div><dt>网关序列</dt><dd id="telemetrySequence">等待数据</dd></div>
+            </dl>
+          </div>
+
+          <div class="telemetry-grid">
+            <article class="panel telemetry-active-panel">
+              <header class="panel-head"><h3>故障位解析</h3><span id="telemetryFaultState">等待数据</span></header>
+              <div class="panel-body" id="telemetryActiveFaults">
+                <div class="empty-state">收到遥测数据后显示当前置位的 BMS 故障项。</div>
+              </div>
+            </article>
+            <article class="panel telemetry-alarm-panel">
+              <header class="panel-head"><h3>遥测告警</h3><span id="telemetryAlarmCount">等待数据</span></header>
+              <div class="panel-body" id="telemetryAlarmList">
+                <div class="empty-state">等待 TelemetryFrame.alarms。</div>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel telemetry-history-panel">
+            <header class="panel-head"><h3>故障码变化记录</h3><span>当前 MQTT 会话</span></header>
+            <div class="panel-body event-list" id="telemetryFaultHistory">
+              <div class="empty-state">本次订阅发生故障进入或清除后在这里显示。</div>
+            </div>
+          </article>
+        </section>
       </main>
 
       <div class="quick-bar" id="quickBar" aria-label="常看值">
@@ -976,6 +1032,47 @@
     </form>
   </dialog>
 
+  <dialog id="telemetryConnectDialog" class="modal telemetry-modal">
+    <form method="dialog">
+      <header><h2>MQTT 遥测订阅</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <div class="telemetry-endpoint-fields">
+          <label class="field telemetry-host-field">
+            <span class="field-label">Broker</span>
+            <input id="telemetryHost" autocomplete="off" value="bitfsae.com" required>
+          </label>
+          <label class="field telemetry-port-field">
+            <span class="field-label">端口</span>
+            <input id="telemetryPort" type="number" min="1" max="65535" value="1883" required>
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Topic</span>
+          <input id="telemetryTopic" autocomplete="off" value="fsae/telemetry" required>
+        </label>
+        <label class="field">
+          <span class="field-label">只读账号</span>
+          <input id="telemetryUsername" autocomplete="username" value="telegraf">
+        </label>
+        <label class="field">
+          <span class="field-label">密码</span>
+          <input id="telemetryPassword" type="password" autocomplete="off" placeholder="仅用于本次连接，不保存">
+        </label>
+        <label class="switch telemetry-tls-switch">
+          <input id="telemetryTls" type="checkbox">
+          <i class="switch-track" aria-hidden="true"></i>
+          <span>启用 TLS</span>
+        </label>
+        <div id="telemetryConnectError" class="modal-error hidden"></div>
+      </div>
+      <footer>
+        <button type="button" class="danger-outline hidden" id="disconnectTelemetryButton">断开订阅</button>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="doConnectTelemetry">订阅</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
       <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
@@ -984,7 +1081,7 @@
         <pre id="confirmPayload" class="payload"></pre>
         <label class="checkbox">
           <input id="confirmCheck" type="checkbox">
-          <span>我已核对总线、主控状态和参数，本次操作由我确认。</span>
+          <span id="confirmCheckLabel">我已核对总线、主控状态和参数，本次操作由我确认。</span>
         </label>
       </div>
       <footer>
@@ -1055,6 +1152,7 @@
   <script src="js/fan.js"></script>
   <script src="js/bench.js"></script>
   <script src="js/ivt.js"></script>
+  <script src="js/telemetry.js"></script>
   <script src="js/updater.js"></script>
 </body>
 </html>

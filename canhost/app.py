@@ -11,6 +11,7 @@ from typing import Any
 from . import __version__, __version_date__
 from .transport import CanService
 from .bms.protocol import switch_catalog
+from .telemetry import TelemetryService
 from .updater import DEFAULT_REPO, HostUpdater, install_ready
 from .updater import _read_settings, settings_path
 
@@ -36,6 +37,9 @@ class Api:
         # BMS connection stays on CAN1 for parameter work.
         self._vehicle_service = CanService(protocol_kind="vehicle",
                                            allow_simulation=not getattr(sys, "frozen", False))
+        # MQTT telemetry is a fifth independent receive-only connection.  It
+        # never changes a CAN mode and has no publish/command API.
+        self._telemetry_service = TelemetryService()
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token)
         self._updater_auto_checked = False
         self._window: Any = None
@@ -67,6 +71,7 @@ class Api:
             "ivt_enabled": True,
             "vehicle_enabled": True,
             "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
+            "telemetry_enabled": True,
             "updater_enabled": install_ready(),
             "updater_repo": DEFAULT_REPO,
             "updater_has_token": self._updater.has_token(),
@@ -182,6 +187,15 @@ class Api:
     def get_quick_snapshot(self) -> dict[str, Any]:
         return {"vehicle": self._vehicle_service.quick_snapshot()}
 
+    def connect_telemetry(self, config: dict[str, Any]) -> dict[str, Any]:
+        return self._telemetry_service.connect(config)
+
+    def disconnect_telemetry(self) -> dict[str, Any]:
+        return self._telemetry_service.disconnect()
+
+    def get_telemetry_snapshot(self) -> dict[str, Any]:
+        return self._telemetry_service.snapshot()
+
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self._vehicle_service.send_fan_command(name, values, acknowledged)
 
@@ -195,7 +209,11 @@ class Api:
             channel, steps, hold_s, max_current_a)
 
     def confirm_dcdc_ready(self) -> dict[str, Any]:
-        """操作者独立确认 DCDC 已实际供电，供标定使用短租约覆盖。"""
+        """操作者独立确认 DCDC 已实际供电。
+
+        只用于手动逐点调试时的短租约覆盖；自动阶梯扫频不依赖也不接受该覆盖，
+        它要求 PDM 实测判据连续稳定 3 秒。
+        """
         confirmed = self._vehicle_service.send_fan_command(
             "fan_calib",
             {"action": 4, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 60},
@@ -203,7 +221,7 @@ class Api:
         )
         if not confirmed.get("ok"):
             return {"ok": False, "error": f"DCDC 就绪确认失败：{confirmed.get('error', '未知错误')}"}
-        return {"ok": True, "message": "DCDC 就绪已确认，可在 60 秒内启动标定"}
+        return {"ok": True, "message": "DCDC 就绪已确认，可在 60 秒内进行手动标定；自动扫频仍需 PDM 实测判据"}
 
     def stop_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.stop_fan_calibration()
@@ -276,6 +294,7 @@ class Api:
         self._bench_service.disconnect()
         self._ivt_service.disconnect()
         self._vehicle_service.disconnect()
+        self._telemetry_service.disconnect()
 
 
 def main() -> None:
