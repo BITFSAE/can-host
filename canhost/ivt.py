@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
 DEFAULT_CMD_ID = 0x411
@@ -56,7 +56,10 @@ class ResultChannel:
     get_mux: int
     rsp_mux: int
     default_can_id: int
+    # Keep the factory period separate from the BMS CANB target.  Readback
+    # classification needs the former even when the vehicle target changes.
     default_period_ms: int
+    bms_canb_period_ms: int
     scale: float
     unit: str
     default_mode: str
@@ -66,14 +69,14 @@ class ResultChannel:
 
 
 CHANNELS = (
-    ResultChannel(0, "I", 0x20, 0x60, 0xA0, 0x521, 20, 0.001, "A", "cyclic", 0x10, 0x50, 0x90),
-    ResultChannel(1, "U1", 0x21, 0x61, 0xA1, 0x522, 60, 0.001, "V", "cyclic", 0x11, 0x51, 0x91),
-    ResultChannel(2, "U2", 0x22, 0x62, 0xA2, 0x523, 60, 0.001, "V", "cyclic", 0x12, 0x52, 0x92),
-    ResultChannel(3, "U3", 0x23, 0x63, 0xA3, 0x524, 60, 0.001, "V", "cyclic", 0x13, 0x53, 0x93),
-    ResultChannel(4, "T", 0x24, 0x64, 0xA4, 0x525, 100, 0.1, "degC", "disabled", 0x14, 0x54, 0x94),
-    ResultChannel(5, "W", 0x25, 0x65, 0xA5, 0x526, 30, 1.0, "W", "disabled", 0x15, 0x55, 0x95),
-    ResultChannel(6, "As", 0x26, 0x66, 0xA6, 0x527, 30, 1.0, "As", "disabled", 0x16, 0x56, 0x96),
-    ResultChannel(7, "Wh", 0x27, 0x67, 0xA7, 0x528, 30, 1.0, "Wh", "disabled", 0x17, 0x57, 0x97),
+    ResultChannel(0, "I", 0x20, 0x60, 0xA0, 0x521, 20, 20, 0.001, "A", "cyclic", 0x10, 0x50, 0x90),
+    ResultChannel(1, "U1", 0x21, 0x61, 0xA1, 0x522, 60, 100, 0.001, "V", "cyclic", 0x11, 0x51, 0x91),
+    ResultChannel(2, "U2", 0x22, 0x62, 0xA2, 0x523, 60, 100, 0.001, "V", "cyclic", 0x12, 0x52, 0x92),
+    ResultChannel(3, "U3", 0x23, 0x63, 0xA3, 0x524, 60, 100, 0.001, "V", "cyclic", 0x13, 0x53, 0x93),
+    ResultChannel(4, "T", 0x24, 0x64, 0xA4, 0x525, 100, 100, 0.1, "degC", "disabled", 0x14, 0x54, 0x94),
+    ResultChannel(5, "W", 0x25, 0x65, 0xA5, 0x526, 30, 100, 1.0, "W", "disabled", 0x15, 0x55, 0x95),
+    ResultChannel(6, "As", 0x26, 0x66, 0xA6, 0x527, 30, 100, 1.0, "As", "disabled", 0x16, 0x56, 0x96),
+    ResultChannel(7, "Wh", 0x27, 0x67, 0xA7, 0x528, 30, 100, 1.0, "Wh", "disabled", 0x17, 0x57, 0x97),
 )
 CHANNEL_BY_NAME = {channel.name.lower(): channel for channel in CHANNELS}
 CHANNEL_BY_INDEX = {channel.index: channel for channel in CHANNELS}
@@ -256,13 +259,33 @@ def build_db1(
     return db1
 
 
-def _channel_expected(channel: ResultChannel, db1: int, period_ms: int | None = None) -> dict[str, Any]:
+def _channel_expected(channel: ResultChannel, db1: int, period_ms: int) -> dict[str, Any]:
     mode = db1 & 0x0F
     return {
         "db1": db1, "mode": mode, "mode_name": MODE_NAME.get(mode, f"unknown({mode})"),
         "byte_order": "little" if db1 & 0x40 else "big", "report_errors": bool(db1 & 0x20),
-        "invert_sign": bool(db1 & 0x80), "period_ms": channel.default_period_ms if period_ms is None else period_ms,
+        "invert_sign": bool(db1 & 0x80), "period_ms": period_ms,
     }
+
+
+def resolve_bms_canb_periods(periods_ms: Mapping[str, Any] | None = None) -> dict[str, int]:
+    periods = {channel.name: channel.bms_canb_period_ms for channel in CHANNELS}
+    if periods_ms is not None and not isinstance(periods_ms, Mapping):
+        raise ValueError("IVT 通道周期必须按通道名提供")
+    for raw_name, raw_value in (periods_ms or {}).items():
+        channel = CHANNEL_BY_NAME.get(str(raw_name).lower())
+        if channel is None:
+            raise ValueError(f"未知 IVT 周期通道：{raw_name}")
+        if isinstance(raw_value, bool) or (isinstance(raw_value, float) and not raw_value.is_integer()):
+            raise ValueError(f"IVT 通道 {channel.name} 周期必须是 1..65535 ms 的整数")
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"IVT 通道 {channel.name} 周期必须是 1..65535 ms 的整数") from exc
+        if not 1 <= value <= 0xFFFF:
+            raise ValueError(f"IVT 通道 {channel.name} 周期必须是 1..65535 ms 的整数")
+        periods[channel.name] = value
+    return periods
 
 
 def expected_bms_canb_config(
@@ -272,10 +295,15 @@ def expected_bms_canb_config(
     positive_reset_threshold_a: int = 0,
     negative_threshold_a: int = 0,
     negative_reset_threshold_a: int = 0,
+    channel_periods_ms: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if startup not in {"stop", "run"}:
         raise ValueError("IVT 上电模式必须是 stop 或 run")
-    channels = {channel.name: _channel_expected(channel, INTEL_SETUP_DB1) for channel in CHANNELS}
+    periods = resolve_bms_canb_periods(channel_periods_ms)
+    channels = {
+        channel.name: _channel_expected(channel, INTEL_SETUP_DB1, periods[channel.name])
+        for channel in CHANNELS
+    }
     can_ids = {channel.name: can_id for channel, can_id in zip(CHANNELS, BMS_CANB_RESULT_IDS)}
     can_ids.update({"command": BMS_CANB_CMD_ID, "response": BMS_CANB_RSP_ID})
     return {
@@ -289,7 +317,10 @@ def expected_bms_canb_config(
 
 
 def factory_config() -> dict[str, Any]:
-    channels = {channel.name: _channel_expected(channel, MODE_TO_VALUE[channel.default_mode]) for channel in CHANNELS}
+    channels = {
+        channel.name: _channel_expected(channel, MODE_TO_VALUE[channel.default_mode], channel.default_period_ms)
+        for channel in CHANNELS
+    }
     can_ids = {channel.name: channel.default_can_id for channel in CHANNELS}
     can_ids.update({"command": DEFAULT_CMD_ID, "response": DEFAULT_RSP_ID})
     return {
@@ -565,16 +596,18 @@ class IvtClient:
     def setup_bms_canb(self, startup: str = "run", serial_number: int | None = None,
                        reopen: Callable[[int], None] | None = None,
                        bitrate: int = DEFAULT_BITRATE,
-                       thresholds: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
+                       thresholds: dict[str, dict[str, int]] | None = None,
+                       channel_periods_ms: Mapping[str, Any] | None = None) -> dict[str, Any]:
         serial = self.read_serial_number() if serial_number is None else int(serial_number)
+        periods = resolve_bms_canb_periods(channel_periods_ms)
         self.set_mode("stop", startup)
         time.sleep(0.01)
         for channel in CHANNELS:
-            self.set_channel_config(channel, INTEL_SETUP_DB1, channel.default_period_ms)
+            self.set_channel_config(channel, INTEL_SETUP_DB1, periods[channel.name])
             time.sleep(0.01)
         for channel in CHANNELS:
             parsed = parse_config_response(self.get_channel_config(channel))
-            expected = _channel_expected(channel, INTEL_SETUP_DB1)
+            expected = _channel_expected(channel, INTEL_SETUP_DB1, periods[channel.name])
             if any(parsed[key] != expected[key] for key in ("db1", "period_ms")):
                 raise IvtProtocolError(f"IVT 通道 {channel.name} 配置读回不一致")
             time.sleep(0.01)
@@ -617,6 +650,7 @@ __all__ = [
     "ALIVE_MUX", "BMS_CANB_CMD_ID", "BMS_CANB_RESULT_IDS", "BMS_CANB_RSP_ID", "BITRATE_PRESETS",
     "CHANNELS", "DEFAULT_BITRATE", "DEFAULT_CMD_ID", "DEFAULT_RSP_ID", "IvtClient", "IvtFrame",
     "IvtProtocolError", "IVT_RESPONSE_MUXES", "ResultChannel", "BMS_CANB_CHANNEL_BY_CAN_ID",
+    "resolve_bms_canb_periods",
     "DEFAULT_CHANNEL_BY_CAN_ID", "ARTICLE_NUMBER_RSP_MUX", "MODE_NAME", "MODE_TO_VALUE",
     "build_db1", "compare_readback", "expected_bms_canb_config", "factory_config",
     "parse_can_id_response", "parse_can_target", "parse_channel_selector", "parse_config_response",

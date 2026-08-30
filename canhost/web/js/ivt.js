@@ -1,5 +1,7 @@
 /* IVT 能量计配置页面模块：独立 CANB 配置连接，与整车监视连接互不影响。 */
 
+const IVT_PERIOD_CHANNELS = ["I", "U1", "U2", "U3", "T", "W", "As", "Wh"];
+
 function bindIvtControls() {
   $("#connectIvtButton").addEventListener("click", connectIvt);
   $("#disconnectIvtButton").addEventListener("click", disconnectIvt);
@@ -12,6 +14,14 @@ function bindIvtControls() {
   });
   $("#switchIvt250").addEventListener("click", () => confirmIvtBitrate(250000));
   $("#switchIvt500").addEventListener("click", () => confirmIvtBitrate(500000));
+  $("#loadIvtReadbackPeriods").addEventListener("click", loadIvtReadbackPeriods);
+  document.querySelectorAll("[data-ivt-period]").forEach(input => {
+    input.addEventListener("input", () => {
+      renderIvtPeriodRate();
+      renderIvtConfigureButton();
+    });
+  });
+  renderIvtPeriodRate();
 }
 
 async function connectIvt() {
@@ -60,7 +70,8 @@ function readIvtOptions() {
   const positiveReset = parseIvtNumber("#ivtPositiveResetThreshold", "正向复位阈值");
   const negative = parseIvtNumber("#ivtNegativeThreshold", "负向过流阈值");
   const negativeReset = parseIvtNumber("#ivtNegativeResetThreshold", "负向复位阈值");
-  if ([positive, positiveReset, negative, negativeReset].some(value => value == null)) return null;
+  const periods = readIvtPeriods();
+  if ([positive, positiveReset, negative, negativeReset, periods].some(value => value == null)) return null;
   return {
     ...(cmdId == null ? {} : { cmd_id: cmdId }),
     ...(rspId == null ? {} : { rsp_id: rspId }),
@@ -69,7 +80,71 @@ function readIvtOptions() {
     positive_reset_threshold_a: positiveReset,
     negative_threshold_a: negative,
     negative_reset_threshold_a: negativeReset,
+    channel_periods_ms: periods,
   };
+}
+
+function readIvtPeriods(showError = true) {
+  const periods = {};
+  for (const name of IVT_PERIOD_CHANNELS) {
+    const input = document.querySelector(`[data-ivt-period="${name}"]`);
+    const value = Number(input?.value);
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+      if (showError) toast(`通道 ${name} 周期必须是 1..65535 ms 的整数`, true);
+      return null;
+    }
+    periods[name] = value;
+  }
+  return periods;
+}
+
+function renderIvtPeriodRate() {
+  const periods = readIvtPeriods(false);
+  const node = $("#ivtPeriodRate");
+  if (!node) return;
+  if (!periods) {
+    node.textContent = "周期输入有误";
+    return;
+  }
+  const framesPerSecond = Object.values(periods).reduce((sum, period) => sum + 1000 / period, 0);
+  node.textContent = `约 ${framesPerSecond.toFixed(framesPerSecond >= 100 ? 0 : 1)} 帧/s`;
+}
+
+function ivtPeriodsMatchReadback(readback) {
+  const periods = readIvtPeriods(false);
+  if (!periods || !Array.isArray(readback?.channels) || readback.channels.length !== IVT_PERIOD_CHANNELS.length) {
+    return false;
+  }
+  return readback.channels.every(channel => periods[channel.name] === Number(channel.period_ms));
+}
+
+function ivtEffectiveDifferences(readback) {
+  const differences = (readback?.comparison?.differences || [])
+    .filter(item => !item.field.endsWith(".period_ms"));
+  const periods = readIvtPeriods(false);
+  if (!periods) return differences;
+  for (const channel of readback?.channels || []) {
+    const actual = Number(channel.period_ms);
+    const expected = periods[channel.name];
+    if (expected != null && actual !== expected) {
+      differences.push({
+        field: `channel.${channel.name}.period_ms`,
+        actual, expected, actual_text: String(actual), expected_text: String(expected),
+      });
+    }
+  }
+  return differences;
+}
+
+function loadIvtReadbackPeriods() {
+  const channels = state.toolSnapshots.ivt?.ivt_config?.channels || [];
+  if (channels.length !== IVT_PERIOD_CHANNELS.length) return toast("请先读取完整 IVT 配置", true);
+  for (const channel of channels) {
+    const input = document.querySelector(`[data-ivt-period="${channel.name}"]`);
+    if (input) input.value = String(channel.period_ms);
+  }
+  renderIvtConfig();
+  toast("已载入当前 IVT 通道周期");
 }
 
 async function readIvtConfig() {
@@ -102,11 +177,14 @@ function confirmIvtAction(kind, options, title, message, destructive = false) {
   text("#confirmMessage", message);
   const operation = kind === "configure" ? "完整配置并重启 IVT"
     : "切换到 " + (options.target_bitrate / 1000) + " kbit/s";
+  const periodText = kind === "configure"
+    ? "\n周期：" + IVT_PERIOD_CHANNELS.map(name => `${name} ${options.channel_periods_ms[name]} ms`).join(" · ")
+    : "";
   text("#confirmPayload", "通道：" + (conn.channel || "PCAN") + "\n"
     + "总线：CANB · " + ((conn.bitrate || 500000) / 1000) + " kbit/s\n"
     + "Command：0x" + cmdId.toString(16).toUpperCase() + "\n"
     + "Response：0x" + rspId.toString(16).toUpperCase() + "\n"
-    + "操作：" + operation);
+    + "操作：" + operation + periodText);
   $("#confirmCheck").checked = false;
   $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";
@@ -134,32 +212,33 @@ function renderIvtConfig() {
   $("#connectIvtButton").classList.toggle("hidden", available);
   $("#disconnectIvtButton").classList.toggle("hidden", !available);
   if ($("#readIvtConfig")) $("#readIvtConfig").disabled = !available;
-  const configureButton = $("#configureIvt");
-  if (configureButton) {
-    const alreadyConfigured = comparison?.status === "configured";
-    configureButton.disabled = !available || !readback || alreadyConfigured;
-    configureButton.title = !available
-      ? "请先连接真实 IVT-S"
-      : !readback
-        ? "请先读取并核对当前配置"
-        : alreadyConfigured
-          ? "当前配置已与 BMS CANB 对齐，无需重复配置"
-          : "写入 BMS CANB 目标配置并重启 IVT";
-  }
+  if ($("#loadIvtReadbackPeriods")) $("#loadIvtReadbackPeriods").disabled = !readback;
   if ($("#switchIvt250")) $("#switchIvt250").disabled = !available || currentBitrate === 250000;
   if ($("#switchIvt500")) $("#switchIvt500").disabled = !available || currentBitrate === 500000;
+  renderIvtConfigureButton();
+  renderIvtPeriodRate();
 
   const statusNode = $("#ivtConfigStatus");
   if (!statusNode) return;
-  const statusClasses = { configured: "ok", unconfigured: "warn", mismatch: "bad" };
-  statusNode.className = "tag " + (statusClasses[comparison?.status] || "neutral");
-  statusNode.textContent = comparison?.status_name || "未读取";
   const readbackNode = $("#ivtReadback");
   if (!readback) {
+    statusNode.className = "tag neutral";
+    statusNode.textContent = "未读取";
     text("#ivtCheckSummary", available ? "点击读取，自动尝试出厂地址和 BMS 目标地址。" : "连接后读取设备信息、通道和 CAN ID。");
     readbackNode?.classList.add("hidden");
     return;
   }
+  const effectiveDifferences = ivtEffectiveDifferences(readback);
+  const periodTargetChanged = Boolean(readback) && !ivtPeriodsMatchReadback(readback);
+  const hasNonPeriodDifference = effectiveDifferences.some(item => !item.field.endsWith(".period_ms"));
+  const periodOnlyChange = periodTargetChanged && !hasNonPeriodDifference;
+  const effectiveStatus = !effectiveDifferences.length
+    ? "configured"
+    : comparison?.status === "unconfigured" ? "unconfigured" : "mismatch";
+  const statusClasses = { configured: "ok", unconfigured: "warn", mismatch: "bad" };
+  const effectiveStatusName = { configured: "已配置且一致", unconfigured: "未配置", mismatch: "配置不符" };
+  statusNode.className = "tag " + (periodOnlyChange ? "warn" : statusClasses[effectiveStatus] || "neutral");
+  statusNode.textContent = periodOnlyChange ? "周期待写入" : effectiveStatusName[effectiveStatus] || "未读取";
   readbackNode?.classList.remove("hidden");
   const device = readback.device_id || {};
   const mode = readback.mode || {};
@@ -171,10 +250,12 @@ function renderIvtConfig() {
     ? `0x${Math.min(...resultIds).toString(16).toUpperCase()}–0x${Math.max(...resultIds).toString(16).toUpperCase()}` : "—";
   const format = readback.channels?.[0]
     ? `${readback.channels[0].byte_order === "little" ? "小端" : "大端"} · ${readback.channels[0].mode_name || "—"}` : "—";
-  const statusText = comparison?.status_name || "已读取";
-  const summaryText = comparison?.status === "configured"
+  const statusText = periodOnlyChange ? "周期目标已修改" : effectiveStatusName[effectiveStatus] || "已读取";
+  const summaryText = periodOnlyChange
+    ? "确认各通道周期后执行 BMS CANB 配置，写入后会自动重启并读回核对。"
+    : effectiveStatus === "configured"
     ? "目标已对齐，可以断开配置通道并接入 F405。"
-    : comparison?.status === "unconfigured"
+    : effectiveStatus === "unconfigured"
       ? "读到出厂配置；首次接入 F405 前请执行一次 BMS CANB 配置。"
       : "发现配置差异；展开逐通道核对后决定是否重新配置。";
   text("#ivtCheckSummary", statusText + " · " + summaryText);
@@ -199,22 +280,43 @@ function renderIvtConfig() {
   if (detectedResponse != null && document.activeElement !== $("#ivtResponseId")) $("#ivtResponseId").value = "0x" + Number(detectedResponse).toString(16).toUpperCase();
 
   const expectedChannels = readback.expected?.channels || {};
-  const diffFields = new Set((comparison?.differences || []).map(item => item.field));
+  const targetPeriods = readIvtPeriods(false) || {};
+  const diffFields = new Set(effectiveDifferences.map(item => item.field));
   const channelRows = (readback.channels || []).map(channel => {
     const expected = expectedChannels[channel.name] || {};
+    const expectedPeriod = targetPeriods[channel.name] ?? expected.period_ms;
     const id = readback.can_ids?.[channel.name];
     const mismatch = ["db1", "period_ms", "mode_name", "byte_order", "report_errors", "invert_sign"]
       .some(key => diffFields.has("channel." + channel.name + "." + key))
       || diffFields.has("can_id." + channel.name);
     return "<tr class=\"" + (mismatch ? "mismatch" : "") + "\">"
-      + "<td>" + escapeHtml(channel.name) + "</td><td>" + (channel.period_ms ?? "—") + " / " + (expected.period_ms ?? "—") + " ms</td>"
+      + "<td>" + escapeHtml(channel.name) + "</td><td>" + (channel.period_ms ?? "—") + " / " + (expectedPeriod ?? "—") + " ms</td>"
       + "<td>" + escapeHtml(channel.mode_name || "—") + "</td><td>" + escapeHtml(channel.byte_order || "—") + "</td>"
       + "<td>" + (channel.invert_sign ? "反转" : "正常") + "</td><td>" + (channel.report_errors ? "启用" : "关闭") + "</td>"
       + "<td>0x" + (id ?? 0).toString(16).toUpperCase() + "</td></tr>";
   }).join("");
   $("#ivtConfigTable").innerHTML = "<table><thead><tr><th>通道</th><th>周期 / 目标</th><th>模式</th><th>字节序</th><th>符号</th><th>报错位</th><th>CAN ID</th></tr></thead><tbody>" + channelRows + "</tbody></table>";
-  const differences = comparison?.differences || [];
-  $("#ivtConfigDifferences").innerHTML = differences.length
-    ? "<b>差异 " + differences.length + " 项</b><ul>" + differences.map(item => "<li>" + escapeHtml(item.field) + "：实际 " + escapeHtml(item.actual_text) + "，期望 " + escapeHtml(item.expected_text) + "</li>").join("") + "</ul>"
+  $("#ivtConfigDifferences").innerHTML = effectiveDifferences.length
+    ? "<b>差异 " + effectiveDifferences.length + " 项</b><ul>" + effectiveDifferences.map(item => "<li>" + escapeHtml(item.field) + "：实际 " + escapeHtml(item.actual_text) + "，期望 " + escapeHtml(item.expected_text) + "</li>").join("") + "</ul>"
     : "<span class=\"ok-text\">所有目标字段与期望值一致。</span>";
+}
+
+function renderIvtConfigureButton() {
+  const snapshot = state.toolSnapshots.ivt || {};
+  const readback = snapshot.ivt_config;
+  const available = ivtConnectionAvailable();
+  const configureButton = $("#configureIvt");
+  if (!configureButton) return;
+  const invalidPeriods = readIvtPeriods(false) == null;
+  const alreadyConfigured = Boolean(readback) && ivtEffectiveDifferences(readback).length === 0;
+  configureButton.disabled = !available || !readback || alreadyConfigured || invalidPeriods;
+  configureButton.title = !available
+    ? "请先连接真实 IVT-S"
+    : !readback
+      ? "请先读取并核对当前配置"
+      : invalidPeriods
+        ? "请修正通道周期"
+        : alreadyConfigured
+          ? "当前配置已与输入目标一致，无需重复配置"
+          : "写入当前周期和 BMS CANB 目标配置并重启 IVT";
 }

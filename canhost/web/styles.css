@@ -2003,6 +2003,12 @@ body.is-tool-page .quick-bar {
 }
 .ivt-core-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ivt-threshold-options { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 10px; }
+.ivt-period-panel { margin-top: 10px; }
+.ivt-period-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.ivt-period-grid .field-input input { min-width: 0; font-family: var(--mono); font-weight: 650; }
+.ivt-period-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; }
+.ivt-period-note { margin: 0; color: var(--text-3); font-size: 10.5px; line-height: 1.5; }
+.ivt-period-footer .outline-button { flex: none; min-height: 30px; padding: 0 10px; }
 .ivt-core-options .field-input input, .ivt-core-options .field-input select,
 .ivt-threshold-options .field-input input { min-width: 0; }
 .ivt-advanced {
@@ -2039,6 +2045,7 @@ body.is-tool-page .quick-bar {
 
 @media (max-width: 1180px) {
   .ivt-identity { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ivt-period-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .ivt-threshold-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

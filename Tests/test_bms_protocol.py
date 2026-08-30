@@ -624,6 +624,9 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="page-vehicle"', html)
         self.assertIn("台架模拟从控", html)
         self.assertIn("IVT 能量计配置", html)
+        for channel in ("I", "U1", "U2", "U3", "T", "W", "As", "Wh"):
+            self.assertIn(f'data-ivt-period="{channel}"', html)
+        self.assertIn('id="loadIvtReadbackPeriods"', html)
         self.assertIn("整车风扇", html)
         self.assertIn("整车总览", html)
         self.assertIn('class="brand-title">CAN HOST</span>', html)

@@ -552,9 +552,9 @@
 
             <div class="ivt-action-stack">
               <article class="panel ivt-action-panel">
-                <header class="panel-head"><h3>一次性配置为 BMS CANB</h3><span class="tag neutral">写入并复核</span></header>
+                <header class="panel-head"><h3>配置为 BMS CANB</h3><span class="tag neutral">完整写入并复核</span></header>
                 <div class="panel-body">
-                  <div class="ivt-action-fact"><b>配置目标</b><span>通道格式 · 0x410 / 0x51A · 结果 0x512–0x519</span><small>车辆链路使用 500 kbit/s</small></div>
+                  <div class="ivt-action-fact"><b>配置目标</b><span>通道周期与格式 · 0x410 / 0x51A · 结果 0x512–0x519</span><small>保存到 IVT 非易失存储并重启读回</small></div>
                   <button class="action-button" type="button" id="configureIvt">配置为 BMS CANB</button>
                 </div>
               </article>
@@ -567,6 +567,29 @@
               </article>
             </div>
           </div>
+
+          <article class="panel ivt-period-panel">
+            <header class="panel-head">
+              <h3>结果通道周期</h3>
+              <span id="ivtPeriodRate" class="panel-context">约 120 帧/s</span>
+            </header>
+            <div class="panel-body">
+              <div class="ivt-period-grid">
+                <label class="field"><span class="field-label">I · 0x512</span><span class="field-input"><input id="ivtPeriodI" data-ivt-period="I" type="number" min="1" max="65535" step="1" value="20"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">U1 · 0x513</span><span class="field-input"><input id="ivtPeriodU1" data-ivt-period="U1" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">U2 · 0x514</span><span class="field-input"><input id="ivtPeriodU2" data-ivt-period="U2" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">U3 · 0x515</span><span class="field-input"><input id="ivtPeriodU3" data-ivt-period="U3" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">T · 0x516</span><span class="field-input"><input id="ivtPeriodT" data-ivt-period="T" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">W · 0x517</span><span class="field-input"><input id="ivtPeriodW" data-ivt-period="W" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">As · 0x518</span><span class="field-input"><input id="ivtPeriodAs" data-ivt-period="As" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <label class="field"><span class="field-label">Wh · 0x519</span><span class="field-input"><input id="ivtPeriodWh" data-ivt-period="Wh" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+              </div>
+              <div class="ivt-period-footer">
+                <p class="ivt-period-note">这些值随“配置为 BMS CANB”写入并读回核对。F405 当前约 360 ms 判通道超时，调整周期时同时核对固件新鲜度窗口。</p>
+                <button class="outline-button" type="button" id="loadIvtReadbackPeriods" disabled>载入读回周期</button>
+              </div>
+            </div>
+          </article>
 
           <details class="panel ivt-advanced">
             <summary>高级：当前设备地址和过流核对值</summary>

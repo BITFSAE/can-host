@@ -14,7 +14,7 @@ from typing import Any
 
 from .ivt import (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
-                  compare_readback, expected_bms_canb_config)
+                  compare_readback, expected_bms_canb_config, resolve_bms_canb_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                            BmsProtocol, build_command, command_ack_matches)
 from .decoders import CanFrame, build_fan_command, fan_ack_matches
@@ -611,6 +611,7 @@ class CanService:
             positive_reset_threshold_a=self._parse_threshold(options.get("positive_reset_threshold_a")),
             negative_threshold_a=self._parse_threshold(options.get("negative_threshold_a")),
             negative_reset_threshold_a=self._parse_threshold(options.get("negative_reset_threshold_a")),
+            channel_periods_ms=resolve_bms_canb_periods(options.get("channel_periods_ms")),
         )
 
     def _ivt_id_candidates(self, options: dict[str, Any]) -> list[tuple[int, int]]:
@@ -688,7 +689,10 @@ class CanService:
                 }
                 readback = client.setup_bms_canb(startup=startup, serial_number=serial,
                                                   reopen=self._reopen_pcan, bitrate=int(connection["bitrate"]),
-                                                  thresholds=thresholds)
+                                                  thresholds=thresholds,
+                                                  channel_periods_ms=resolve_bms_canb_periods(
+                                                      options.get("channel_periods_ms")
+                                                  ))
                 expected = self._ivt_expected(options, int(connection["bitrate"]))
                 readback["comparison"] = compare_readback(readback, expected)
                 readback["expected"] = expected
