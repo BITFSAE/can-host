@@ -66,19 +66,46 @@ def format_raw_frame(frame: CanFrame, name: str) -> dict[str, Any]:
 # CANB frame names (monitor page + CSV recording)
 # ---------------------------------------------------------------------------
 
+# Chroma IDs follow one panel node base. Keep this equal to the firmware's
+# BMS_CHROMA_NODE_BASE_STD_ID and the team CANB DBC.
+CHROMA_NODE_BASE_STD_ID = 0x200
+CHROMA_VOLT_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x01
+CHROMA_CURR_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x02
+CHROMA_PROTECT_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x04
+CHROMA_OUTPUT_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x05
+CHROMA_CMD_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x90
+CHROMA_ACK_STD_ID = CHROMA_NODE_BASE_STD_ID + 0x91
+CHROMA_DERIVED_STD_IDS = {
+    CHROMA_VOLT_STD_ID, CHROMA_CURR_STD_ID, CHROMA_PROTECT_STD_ID,
+    CHROMA_OUTPUT_STD_ID, CHROMA_CMD_STD_ID, CHROMA_ACK_STD_ID,
+}
+CANB_OCCUPIED_WITHOUT_CHROMA = {
+    0x050, *range(0x060, 0x06B), *range(0x071, 0x075),
+    0x300, 0x301, 0x305, 0x310, 0x430,
+    0x4A0, 0x4A3, 0x4A4, 0x4B0, 0x4B1, 0x4B2,
+    *range(0x502, 0x50A), *range(0x512, 0x51A),
+    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5AA), 0x700, 0x784,
+}
+if CHROMA_ACK_STD_ID > 0x7FF or len(CHROMA_DERIVED_STD_IDS) != 6:
+    raise RuntimeError("Chroma 节点基准派生出的 ID 超出 11 位范围或发生内部重复")
+if CHROMA_DERIVED_STD_IDS & CANB_OCCUPIED_WITHOUT_CHROMA:
+    occupied = ", ".join(f"0x{value:03X}" for value in sorted(
+        CHROMA_DERIVED_STD_IDS & CANB_OCCUPIED_WITHOUT_CHROMA))
+    raise RuntimeError(f"Chroma 节点基准与现有 CANB ID 冲突：{occupied}")
+
 CANB_IDS = {
     0x071: "胎温测点 1-4（轮位待确认）",
     0x072: "胎温测点 5-8（轮位待确认）",
     0x073: "胎温测点 9-12（轮位待确认）",
     0x074: "胎温测点 13-16（轮位待确认）",
     0x305: "ECU 数据记录（转向/踏板/油压）",
-    0x401: "Chroma 电压测量",
-    0x402: "Chroma 电流测量",
-    0x404: "Chroma 保护状态",
-    0x405: "Chroma 输出状态",
+    CHROMA_VOLT_STD_ID: "Chroma 电压测量",
+    CHROMA_CURR_STD_ID: "Chroma 电流测量",
+    CHROMA_PROTECT_STD_ID: "Chroma 保护状态",
+    CHROMA_OUTPUT_STD_ID: "Chroma 输出状态",
     0x430: "赛会数据记录器状态",
-    0x490: "Chroma 命令",
-    0x491: "Chroma 应答",
+    CHROMA_CMD_STD_ID: "Chroma 命令",
+    CHROMA_ACK_STD_ID: "Chroma 应答",
     0x4A0: "SOP 限值",
     0x4A3: "SOP 状态",
     0x4A4: "ECU SOP 确认",
@@ -118,7 +145,6 @@ CANB_IDS = {
     0x1806E5F4: "Legacy 充电请求",
     0x18FF50E5: "Legacy 充电反馈",
 }
-
 
 def canb_frame_name(can_id: int) -> str:
     return CANB_IDS.get(can_id, "未定义帧")

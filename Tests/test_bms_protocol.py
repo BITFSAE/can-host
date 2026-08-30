@@ -14,7 +14,7 @@ import unittest
 from canhost.transport import CanService
 from canhost.app import Api
 from canhost.bms.protocol import BmsProtocol, build_command, command_ack_matches, switch_catalog
-from canhost.decoders import CanFrame
+from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID
 from canhost.bms.simulator import BmsSimulator
 
 
@@ -36,12 +36,12 @@ class BmsProtocolTest(unittest.TestCase):
     def test_summary_fault_alarm_and_config_decode(self) -> None:
         protocol = BmsProtocol()
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 0A 4E 1F 72"), True))
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("72 80 00 00 01 C6 21 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("72 80 00 00 01 C6 21 04"), True))
         alarm_bytes = bytearray(8)
         alarm_bytes[0] = 0b00001001  # index 0=1, index 1=2
         protocol.ingest(CanFrame(0x187850F4, bytes(alarm_bytes), True))
         protocol.ingest(CanFrame(0x187750F4, bytes.fromhex("10 5E 0C 1C 5A 1E"), True))
-        protocol.ingest(CanFrame(0x187F50F4, bytes.fromhex("F3 3F E0 04"), True))
+        protocol.ingest(CanFrame(0x187F50F4, bytes.fromhex("F3 3F F8 04"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["overview"]["voltage_v"], 570.0)
         self.assertEqual(snapshot["overview"]["current_a"], 1.0)
@@ -58,13 +58,15 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["config"]["thresholds"]["ot_c"], 60)
         self.assertEqual(snapshot["config"]["switch_version"], 4)
         self.assertTrue(snapshot["config"]["switches"]["ivt_voltage_loss"])
+        self.assertTrue(snapshot["config"]["switches"]["bsu_not_ready_hv"])
+        self.assertTrue(snapshot["config"]["switches"]["bsu_offline_hv"])
 
     def test_fault_frames_do_not_keep_electrical_summary_fresh(self) -> None:
         clock = [0.0]
         protocol = BmsProtocol(clock=lambda: clock[0])
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 0A 4E 1F 32"), True))
         clock[0] = 2.0
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 00 00 00 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 00 00 00 04"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["fault"]["age"], 0.0)
         self.assertEqual(snapshot["connection"]["summary_age"], 2.0)
@@ -98,7 +100,7 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186050F4, status, True))
         trend_count = len(protocol.snapshot({"connected": True})["trends"])
         clock[0] = 2.1
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 04"), True))
         self.assertEqual(len(protocol.snapshot({"connected": True})["trends"]), trend_count)
 
     def test_configuration_reports_expire_independently(self) -> None:
@@ -121,24 +123,23 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["config"]["switches_age"], 2.5)
         self.assertEqual(snapshot["config"]["runtime_age"], 2.5)
 
-    def test_identity_selects_debug_bringup_slave_timeout(self) -> None:
+    def test_identity_keeps_debug_bringup_slave_timeout_at_350ms(self) -> None:
         clock = [0.0]
         protocol = BmsProtocol(clock=lambda: clock[0])
         cell_frame = CanFrame(0x180050F3, b"\x00\x00\x74\x0E\x75\x0E\x76\x0E", True)
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 01 00 00 00 00 00 00"), True))
         protocol.ingest(cell_frame)
+        clock[0] = 0.34
+        self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
         clock[0] = 0.4
         self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
 
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 02 00 00 00 00 00 00"), True))
         protocol.ingest(cell_frame)
         clock[0] = 0.5
-        self.assertEqual(protocol.slave_sample_timeout_s, 1.5)
+        self.assertEqual(protocol.slave_sample_timeout_s, 0.35)
         self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
-
-        clock[0] = 1.89
-        self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
-        clock[0] = 1.91
+        clock[0] = 0.76
         self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
 
     def test_canb_snapshot_does_not_invent_slave_data(self) -> None:
@@ -166,7 +167,7 @@ class BmsProtocolTest(unittest.TestCase):
         # python-can PCAN timestamps count from adapter/boot start when the
         # optional uptime library is missing; they must not become 1970 dates.
         message = SimpleNamespace(arbitration_id=0x187650F4,
-                                   data=bytes.fromhex("31 00 00 00 01 00 00 03"),
+                                   data=bytes.fromhex("31 00 00 00 01 00 00 04"),
                                    is_extended_id=True, timestamp=42.7)
         frame = CanService._frame_from_message(message)
         self.assertEqual(frame.direction, "rx")
@@ -224,7 +225,7 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_charge_mode_summary_uses_direct_current_without_offset(self) -> None:
         protocol = BmsProtocol()
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 04 00 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 04 00 04"), True))
         protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 1E 50 1F 30"), True))
         self.assertEqual(protocol.snapshot({"connected": True})["overview"]["current_a"], 3.0)
 
@@ -254,7 +255,7 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_chroma_ids_are_not_decoded_as_legacy_bms_status(self) -> None:
         protocol = BmsProtocol()
-        protocol.ingest(CanFrame(0x401, bytes.fromhex("16 44 27 10 50 00 30 3A"), False))
+        protocol.ingest(CanFrame(CHROMA_VOLT_STD_ID, bytes.fromhex("16 44 27 10 50 00 30 3A"), False))
         overview = protocol.snapshot({"connected": True})["overview"]
         self.assertIsNone(overview["voltage_v"])
         self.assertIsNone(overview["current_a"])
@@ -262,17 +263,31 @@ class BmsProtocolTest(unittest.TestCase):
     def test_hv_request_external_event_and_bms_fault_signal_are_separate(self) -> None:
         protocol = BmsProtocol()
         # HV_ACC request released, charge button released, Q0/Q1/Q2 off.
-        protocol.ingest(CanFrame(0x186950F4, bytes.fromhex("00 00 00 00 00"), True))
-        # fault_code bit22 is the external safety-circuit interruption event;
-        # Byte5 bit6 is the independent BMS fault signal Q3 state.
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 40 00 00 40 00 03"), True))
+        # Byte0 bit4 records the external event without making it a BMS alarm.
+        protocol.ingest(CanFrame(0x186950F4, bytes.fromhex("10 00 00 00 00"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 04"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertFalse(snapshot["hv"]["hv_acc"])
+        self.assertTrue(snapshot["hv"]["external_safety_event"])
         self.assertTrue(snapshot["fault"]["received"])
-        self.assertTrue(snapshot["fault"]["flags"]["bms_output_latched"])
-        self.assertTrue(snapshot["alarms"][22]["in_fault_code"])
-        self.assertEqual(snapshot["alarms"][22]["name"], "外部安全回路中断事件")
+        self.assertFalse(snapshot["fault"]["flags"]["bms_output_latched"])
+        self.assertFalse(snapshot["alarms"][22]["in_fault_code"])
+        self.assertEqual(snapshot["alarms"][22]["name"], "保留")
         self.assertIsNotNone(snapshot["hv"]["age"])
+
+    def test_fault_version_three_keeps_legacy_bit22_name(self) -> None:
+        protocol = BmsProtocol()
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("51 00 40 00 00 00 00 03"), True))
+        snapshot = protocol.snapshot({"connected": True})
+        self.assertEqual(snapshot["alarms"][22]["name"], "外部安全回路中断事件（旧版）")
+        self.assertTrue(snapshot["alarms"][22]["in_fault_code"])
+
+    def test_identity_reserved_variant_is_unknown(self) -> None:
+        protocol = BmsProtocol()
+        protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 03 12 34 56 78 9A BC"), True))
+        firmware = protocol.snapshot({"connected": True})["firmware"]
+        self.assertEqual(firmware["variant"], "未知 3")
+        self.assertEqual(protocol.slave_sample_timeout_s, 0.35)
 
     def test_imd_flags_gate_measurements_and_decode_digital_state(self) -> None:
         protocol = BmsProtocol()
@@ -372,8 +387,8 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_fault_code_change_history_is_decoded(self) -> None:
         protocol = BmsProtocol()
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("31 00 00 00 01 00 00 03"), True))
-        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 02 00 00 03"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("31 00 00 00 01 00 00 04"), True))
+        protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("32 00 00 00 02 00 00 04"), True))
         history = protocol.snapshot({"connected": True})["fault_history"]
         self.assertEqual(len(history), 2)
         self.assertEqual(history[0]["added"], ["单体欠压"])
@@ -418,6 +433,39 @@ class BmsProtocolTest(unittest.TestCase):
         ov = next(item for item in catalog if item["key"] == "cell_ov")
         self.assertEqual(ov["code"], "ov")
         self.assertEqual(ov["variable"], "ALM_CELL_OV_SWITCH")
+        not_ready = next(item for item in catalog if item["key"] == "bsu_not_ready_hv")
+        self.assertEqual(not_ready["code"], "bsunrdy")
+        self.assertEqual(not_ready["variable"], "ALM_BSU_NOT_READY_HV_SWITCH")
+
+    def test_alarm_switch_command_defaults_to_safe_required_bits(self) -> None:
+        frame = build_command("alarm_switches", {
+            "switches": {
+                "bsu_not_ready_hv": False,
+                "bsu_offline_hv": False,
+                "current_sensor": False,
+                "ivt_voltage_loss": False,
+            },
+        })
+        self.assertEqual(frame.data[2:5], bytes.fromhex("F3 2F 60"))
+        self.assertEqual(frame.data[5:8], b"\x00\x00\x00")
+
+    def test_simulator_accepts_four_hv_on_action_switches_off(self) -> None:
+        frames: list[CanFrame] = []
+        simulator = BmsSimulator(frames.append)
+        simulator.on_command(build_command("alarm_switches", {
+            "switches": {
+                "bsu_not_ready_hv": False,
+                "bsu_offline_hv": False,
+                "current_sensor": False,
+                "ivt_voltage_loss": False,
+            },
+        }))
+        ack = next(frame for frame in frames if frame.arbitration_id == 0x18A650F4)
+        self.assertEqual(ack.data[3], 1)
+        frames.clear()
+        simulator._emit_summary()
+        switches = next(frame for frame in frames if frame.arbitration_id == 0x187F50F4)
+        self.assertEqual(switches.data[:3], bytes.fromhex("F3 2F 60"))
 
     def test_simulator_reports_flash_save_pending_then_clear(self) -> None:
         frames: list[CanFrame] = []
@@ -441,7 +489,7 @@ class BmsProtocolTest(unittest.TestCase):
 
     def test_log_read_is_blocked_while_clear_is_pending(self) -> None:
         service = CanService()
-        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 08 00 03"), True))
+        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 08 00 04"), True))
         result = service.read_flash_fault_logs(50)
         self.assertFalse(result["ok"])
         self.assertIn("正在分阶段清除", result["error"])
@@ -449,7 +497,7 @@ class BmsProtocolTest(unittest.TestCase):
     def test_commands_are_blocked_when_total_status_is_stale(self) -> None:
         service = CanService()
         service.connection.update({"connected": True, "mode": "simulation", "bus_profile": "can1"})
-        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 03"), True))
+        service.protocol.ingest(CanFrame(0x187650F4, bytes.fromhex("30 00 00 00 00 00 00 04"), True))
         result = service.send_command("charge_config", {"voltage_v": 570.0, "current_a": 3.0}, True)
         self.assertFalse(result["ok"])
         self.assertIn("总状态帧", result["error"])
@@ -486,7 +534,7 @@ class BmsProtocolTest(unittest.TestCase):
                 writer.writerow([start.isoformat(timespec="milliseconds"), "rx", "0x186050F4", "扩展", 7,
                                  "16 44 00 0A 50 1F 30", "电池总状态"])
                 writer.writerow([(start + timedelta(milliseconds=40)).isoformat(timespec="milliseconds"), "rx",
-                                 "0x187650F4", "扩展", 8, "30 00 00 00 00 00 00 03", "统一故障状态"])
+                                 "0x187650F4", "扩展", 8, "30 00 00 00 00 00 00 04", "统一故障状态"])
             try:
                 result = service.load_replay(str(path))
                 self.assertTrue(result["ok"])

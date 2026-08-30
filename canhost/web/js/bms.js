@@ -25,7 +25,7 @@ const ALARM_RULE_TEXTS = [
   "任一从控数据未就绪 · 即时", "预充超时或失败 · 复位前锁存",
   "CAN/TIM启动失败 · 本次上电锁存", "单体累加与U1差 >100 V · 约1.5 s",
   "离线约360 ms / 状态异常270 ms", "HAL错误或Bus-off · 约3 s无新错误后清除",
-  "高压中HV_ACC请求消失 · 事件记录", "充电机反馈 >500 ms · 按在线源定级",
+  "保留位 · 当前固定为 0", "充电机反馈 >500 ms · 按在线源定级",
   "20 ms重试25次失败 · 复位前锁存",
   "BMU 1 通信离线", "BMU 2 通信离线", "BMU 3 通信离线",
   "BMU 4 通信离线", "BMU 5 通信离线", "BMU 6 通信离线",
@@ -55,7 +55,7 @@ function bindBmsControls() {
   $("#sendSwitches").addEventListener("click", () => {
     const switches = {};
     $$("#switchList input").forEach(input => switches[input.dataset.key] = input.checked);
-    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的 19 个开关作为一组写入主控。写入后以周期回报值为准。");
+    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的 21 个开关作为一组写入主控。写入后以周期回报值为准。");
   });
   $("#sendChargeConfig").addEventListener("click", () => confirmCommand(
     "charge_config", { voltage_v: +$("#chargeVoltage").value, current_a: +$("#chargeCurrent").value },
@@ -165,11 +165,11 @@ function renderOverview() {
   setClass("#hvOutput", "bad", hvOutputName === "故障保持");
   text("#hvAcc", !hvFresh ? "等待数据" : hv.hv_acc ? "请求" : "已释放");
   text("#chargeButton", !hvFresh ? "等待数据" : hv.charge_button ? "已按下" : "已释放");
-  const safetyAlarm = (state.snapshot.alarms || []).find(item => item.index === 22);
-  const safetyEventKnown = faultState.completeFresh;
-  const safetyEventActive = safetyEventKnown && !!(safetyAlarm?.level || safetyAlarm?.in_fault_code);
+  const safetyEventKnown = hvFresh;
+  const safetyEventActive = safetyEventKnown && !!hv.external_safety_event;
   text("#safetyEvent", !safetyEventKnown ? "等待数据" : safetyEventActive ? "已触发" : "未触发");
-  setClass("#safetyEvent", "bad", safetyEventKnown && safetyEventActive);
+  setClass("#safetyEvent", "bad", false);
+  setClass("#safetyEvent", "warn", safetyEventKnown && safetyEventActive);
   setClass("#safetyEvent", "ok", safetyEventKnown && !safetyEventActive);
   const bmsFaultOutput = state.snapshot.fault?.flags?.bms_output_latched;
   text("#bmsFaultSignal", !faultState.faultFresh ? "等待数据" : bmsFaultOutput ? "已输出" : "未输出");
@@ -519,8 +519,13 @@ function renderAlarms() {
     if (alarm.index === 14 || alarm.index === 15) classes.push("reserved");
     if (state.onlyActiveAlarms && !active) classes.push("hidden");
     node.className = classes.join(" ");
-    node.querySelector("b").textContent = alarm.name;
-    node.querySelector("small").textContent = alarmRuleText(alarm.index, thresholds);
+    const alarmTitle = node.querySelector("b");
+    const alarmRule = node.querySelector("small");
+    const ruleText = alarmRuleText(alarm.index, thresholds);
+    alarmTitle.textContent = alarm.name;
+    alarmTitle.title = alarm.name;
+    alarmRule.textContent = ruleText;
+    alarmRule.title = ruleText;
     node.querySelector("em").textContent = alarm.index === 22 && ((levelReceived && alarm.level) || faultCodeActive) ? "事件触发"
       : levelReceived && alarm.level === 1 ? "一级故障"
       : levelReceived && alarm.level === 2 ? "二级告警"
@@ -535,7 +540,7 @@ function renderAlarms() {
   $("#readFlashLog").disabled = logClearPending;
   $("#clearFaultLog").disabled = logClearPending;
   $("#flashFaultLog").innerHTML = flashRecords.length ? [...flashRecords].reverse().map(event =>
-    `<div class="event-item"><time>${event.timestamp}</time><b>${event.fault_code}</b><p>类型 ${event.event_type} · 详情 ${event.event_detail}</p></div>`
+    `<div class="event-item"><time>${event.timestamp}</time><b>${event.fault_code}</b><p>${event.event_type_name || `类型 ${event.event_type}`} · 详情 ${event.event_detail}</p></div>`
   ).join("") : `<div class="empty-state">尚未读取，或 Flash 中没有重要故障日志。</div>`;
   const logInfo = state.snapshot.flash_log_info || {};
   text("#flashLogInfo", logClearPending ? "正在分阶段清除"

@@ -22,7 +22,7 @@ class BmsSimulator:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.thresholds = [4190, 3100, 90, 30]
-        self.switch_bytes = [0xF3, 0x3F, 0xE0]
+        self.switch_bytes = [0xF3, 0x3F, 0xF8]
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = False
@@ -113,7 +113,11 @@ class BmsSimulator:
                 self.config_save_pending_cycles = 2
                 detail = ov
         elif operation == 3:
-            if data[4] & 0x1F or data[5:8] != b"\x00\x00\x00":
+            if ((data[2] & 0xF3) != 0xF3
+                    or (data[3] & 0x2D) != 0x2D
+                    or (data[4] & 0x60) != 0x60
+                    or data[4] & 0x07
+                    or data[5:8] != b"\x00\x00\x00"):
                 result = 5
             else:
                 self.switch_bytes = list(data[2:5])
@@ -215,7 +219,7 @@ class BmsSimulator:
         """Emit only the frames available on the selected CANB simulation."""
         self._send(0x4B0, status, False)
         log_flags = 0x04 if phase == 2 else 0
-        fault_data = bytes([(self._state() << 4), 0, 0, 0, 0, log_flags, 0, 2])
+        fault_data = bytes([(self._state() << 4), 0, 0, 0, 0, log_flags, 0, 4])
         self._send(0x4B1, fault_data, False)
         self._send(0x4B2, bytes(8), False)
         if self.bus_profile == "canb_legacy":
@@ -274,7 +278,7 @@ class BmsSimulator:
         self._send(0x186350F4, bytes([relay_byte0, 0x08]) + self.request_voltage.to_bytes(2, "big")
                    + self.request_current.to_bytes(2, "big") + max(0, precharge_01v).to_bytes(2, "big"))
         log_flags = (0x08 if self.log_clear_pending_cycles else 0) | (0x04 if phase == 2 else 0)
-        fault_data = bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 3])
+        fault_data = bytes([state_alarm, 0, 0, 0, 0, log_flags, 0, 4])
         self._send(0x187650F4, fault_data)
         self._send(0x187850F4, bytes(8))
         self._send(0x4B1, fault_data, False)

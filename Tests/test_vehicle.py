@@ -15,7 +15,7 @@ class VehicleProtocolTest(unittest.TestCase):
     def test_pack_and_fault_strip(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x4B0, bytes.fromhex("16 44 00 0A 4E 1F 50"), False))
-        protocol.ingest(CanFrame(0x4B1, bytes.fromhex("50 00 00 00 00 00 00 02"), False))
+        protocol.ingest(CanFrame(0x4B1, bytes.fromhex("50 00 00 00 00 00 00 04"), False))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["pack"]["voltage_v"], 570.0)
         self.assertEqual(snapshot["pack"]["current_a"], 1.0)

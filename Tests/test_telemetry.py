@@ -43,7 +43,7 @@ class TelemetryProtocolTest(unittest.TestCase):
             decoded["fault"]["active"],
             [
                 {"bit": 0, "name": "单体过压"},
-                {"bit": 22, "name": "外部安全回路中断事件"},
+                {"bit": 22, "name": "保留"},
                 {"bit": 31, "name": "IVT 包电压通道失联"},
             ],
         )

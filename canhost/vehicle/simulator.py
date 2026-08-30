@@ -78,7 +78,7 @@ class VehicleSimulator:
         status = (voltage_raw.to_bytes(2, "big") + current_raw.to_bytes(2, "big", signed=True)
                   + bytes([76, 0x1F, (5 << 4) | 0]))
         self._send(0x4B0, status)
-        self._send(0x4B1, bytes([(5 << 4) | 0, 0, 0, 0, 0, 0, 0, 2]))
+        self._send(0x4B1, bytes([(5 << 4) | 0, 0, 0, 0, 0, 0, 0, 4]))
 
     def _emit_sop(self) -> None:
         limits = (1800).to_bytes(2, "little") + (900).to_bytes(2, "little") \

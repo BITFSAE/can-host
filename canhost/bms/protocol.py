@@ -15,6 +15,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
+                        CHROMA_CURR_STD_ID, CHROMA_OUTPUT_STD_ID,
+                        CHROMA_PROTECT_STD_ID, CHROMA_VOLT_STD_ID,
                         decode_alarm_levels, decode_ecu_sop_ack, decode_fault_fields,
                         decode_ivt_result, decode_pack_status, decode_sop_limits,
                         decode_sop_status, format_raw_frame, u16be, u16le,
@@ -67,10 +69,12 @@ ALARM_NAMES = [
     "电池包总压过高", "电池包总压过低", "辅助外设异常", "SOC 过低",
     "充电持续过流", "放电持续过流", "充电瞬时过流（保留）", "放电瞬时过流（保留）",
     "从控数据未就绪", "预充失败", "关键控制外设异常", "总压测量异常",
-    "电流传感器异常", "CAN 运行异常", "外部安全回路中断事件", "Chroma 测量失联",
+    "电流传感器异常", "CAN 运行异常", "保留", "Chroma 测量失联",
     "Chroma 命令失败", "从控 1 离线", "从控 2 离线", "从控 3 离线",
     "从控 4 离线", "从控 5 离线", "从控 6 离线", "IVT 包电压通道失联",
 ]
+LEGACY_FAULT_V3_ALARM_NAMES = list(ALARM_NAMES)
+LEGACY_FAULT_V3_ALARM_NAMES[22] = "外部安全回路中断事件（旧版）"
 
 SWITCH_DEFS = [
     # key, Chinese label, DOC/CLI short name, firmware variable, byte, bit
@@ -93,6 +97,8 @@ SWITCH_DEFS = [
     ("ivt_voltage_loss", "IVT 包电压失联", "ivtloss", "ALM_IVT_VOLT_LOSS_SWITCH", 2, 7),
     ("lv1_blocked", "一级故障全部受阻", "lv1blk", "ALM_LV1_ALL_BLOCKED_SWITCH", 2, 6),
     ("lv2_blocked", "二级告警全部受阻", "lv2blk", "ALM_LV2_ALL_BLOCKED_SWITCH", 2, 5),
+    ("bsu_not_ready_hv", "从控未就绪（HV_ON动作）", "bsunrdy", "ALM_BSU_NOT_READY_HV_SWITCH", 2, 4),
+    ("bsu_offline_hv", "从控离线（HV_ON动作）", "bsuoff", "ALM_BSU_OFFLINE_HV_SWITCH", 2, 3),
 ]
 
 COMMAND_RESULT_NAMES = {
@@ -204,8 +210,8 @@ class BmsProtocol:
         self.last_runtime_diag_monotonic: float | None = None
         self.last_thresholds_monotonic: float | None = None
         self.last_switches_monotonic: float | None = None
-        # Production Debug/Release firmware uses 350 ms. The identity frame
-        # switches this to the 1500 ms Debug-Bringup window when received.
+        # All firmware variants use the same 350 ms raw-sample freshness window.
+        # Debug-Bringup changes only the allowed HV_ON protection actions.
         self.slave_sample_timeout_s = 0.35
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
@@ -315,7 +321,7 @@ class BmsProtocol:
             charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
             charger_variant_code = (data[1] >> 2) & 0x03
-            self.slave_sample_timeout_s = 1.5 if variant == 2 else 0.35
+            self.slave_sample_timeout_s = 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),
@@ -374,6 +380,7 @@ class BmsProtocol:
         elif can_id == 0x186950F4 and len(data) >= 5:
             results = {0: "未发生", 1: "成功", 2: "失败"}
             self.hv = {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
+                       "external_safety_event": bool(data[0] & 0x10),
                        "precharge_result": (data[0] >> 2) & 0x03,
                        "precharge_result_name": results.get((data[0] >> 2) & 0x03, "保留值"),
                        "success_ms": u16be(data, 1), "failure_ms": u16be(data, 3)}
@@ -427,11 +434,13 @@ class BmsProtocol:
                     ack = self.command_acks.get(sequence, {})
                     index = int(ack.get("detail", 0))
                     year = 2000 + raw[0] if raw[0] else None
+                    event_types = {0: "BMS 故障", 1: "IMD 事件", 2: "外部安回断开"}
                     self.flash_log_records[index] = {
                         "index": index, "timestamp": (f"{year:04d}-{raw[1]:02d}-{raw[2]:02d} "
                                                        f"{raw[3]:02d}:{raw[4]:02d}:{raw[5]:02d}") if year else "RTC 未校时",
                         "fault_code": f"0x{int.from_bytes(raw[6:10], 'big'):08X}",
-                        "event_type": raw[10], "event_detail": raw[11], "record_version": raw[12],
+                        "event_type": raw[10], "event_type_name": event_types.get(raw[10], f"未知 {raw[10]}"),
+                        "event_detail": raw[11], "record_version": raw[12],
                         "raw": raw.hex(" ").upper(),
                     }
                     self._flash_record_parts.pop(sequence, None)
@@ -441,18 +450,18 @@ class BmsProtocol:
             self.relay.update({"charger_feedback_voltage_v": u16be(data) / 10.0,
                                "charger_feedback_current_a": u16be(data, 2) / 10.0,
                                "charger_feedback_state": data[4]})
-        elif can_id in (0x401, 0x402) and not frame.is_extended_id and len(data) >= 7:
+        elif can_id in (CHROMA_VOLT_STD_ID, CHROMA_CURR_STD_ID) and not frame.is_extended_id and len(data) >= 7:
             charge_flags = self.fault.get("flags", {})
             if charge_flags.get("charge_mode") and charge_flags.get("charger_type") == "Chroma":
                 import struct
                 value = struct.unpack("<f", data[3:7])[0]
                 if value >= 0.0 and value < 10000.0:
-                    key = "charger_feedback_voltage_v" if can_id == 0x401 else "charger_feedback_current_a"
+                    key = "charger_feedback_voltage_v" if can_id == CHROMA_VOLT_STD_ID else "charger_feedback_current_a"
                     self.relay[key] = round(value, 3)
-        elif can_id == 0x404 and not frame.is_extended_id and len(data) >= 7:
+        elif can_id == CHROMA_PROTECT_STD_ID and not frame.is_extended_id and len(data) >= 7:
             protect = int.from_bytes(data[3:7], "little")
             self.relay.update({"chroma_protect_bits": protect, "charger_feedback_state": 1 if protect else 0})
-        elif can_id == 0x405 and not frame.is_extended_id and len(data) >= 4:
+        elif can_id == CHROMA_OUTPUT_STD_ID and not frame.is_extended_id and len(data) >= 4:
             self.relay["chroma_output_state"] = data[3]
 
         if now_mono - self._last_trend >= 0.45:
@@ -517,6 +526,7 @@ class BmsProtocol:
     def _decode_fault(self, data: bytes, timestamp: float) -> None:
         decoded = decode_fault_fields(data)
         code = decoded["code"]
+        alarm_names = LEGACY_FAULT_V3_ALARM_NAMES if decoded["version"] == 3 else ALARM_NAMES
         previous = int(self.fault.get("code", 0))
         if (self._fault_seen and code != previous) or (not self._fault_seen and code != 0):
             added_bits = code & ~previous
@@ -524,8 +534,8 @@ class BmsProtocol:
             self.fault_history.appendleft({
                 "time": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 "code": f"0x{code:08X}", "previous": f"0x{previous:08X}",
-                "added": [ALARM_NAMES[i] for i in range(32) if added_bits & (1 << i)],
-                "cleared": [ALARM_NAMES[i] for i in range(32) if cleared_bits & (1 << i)],
+                "added": [alarm_names[i] for i in range(32) if added_bits & (1 << i)],
+                "cleared": [alarm_names[i] for i in range(32) if cleared_bits & (1 << i)],
                 "state": STATE_NAMES.get(decoded["state"], f"未知 {decoded['state']}"),
             })
         self._fault_seen = True
@@ -576,7 +586,9 @@ class BmsProtocol:
                                 "voltage_frames": sum(a is not None and a <= self.slave_sample_timeout_s for a in ages),
                                 "temperature_frame": temp_age is not None and temp_age <= self.slave_sample_timeout_s,
                                 "age": max([a for a in ages if a is not None] + ([temp_age] if temp_age is not None else [0]))})
-        alarms = [{"index": i, "name": ALARM_NAMES[i], "level": self.alarm_levels[i],
+        alarm_names = (LEGACY_FAULT_V3_ALARM_NAMES
+                       if self.fault.get("version") == 3 else ALARM_NAMES)
+        alarms = [{"index": i, "name": alarm_names[i], "level": self.alarm_levels[i],
                    "level_name": ALARM_LEVEL_NAMES[self.alarm_levels[i]], "in_fault_code": bool(self.fault.get("code", 0) & (1 << i))}
                   for i in range(32)]
         for alarm in alarms:
@@ -666,10 +678,17 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
         return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(data), True, now, "tx")
     if name == "alarm_switches":
         switches = values.get("switches", values)
-        data = bytearray(3)
+        # The firmware requires ordinary safety bits to remain enabled. Start
+        # from the safe/default image so callers may update only the four
+        # Debug-Bringup HV_ON action switches without accidentally clearing
+        # mandatory bits that were not included in the partial dictionary.
+        data = bytearray([0xF3, 0x3F, 0xF8])
         for key, _, _, _, byte, bit in SWITCH_DEFS:
-            if bool(switches.get(key)):
-                data[byte] |= 1 << bit
+            if key in switches:
+                if bool(switches[key]):
+                    data[byte] |= 1 << bit
+                else:
+                    data[byte] &= ~(1 << bit)
         request = request_header(operation["alarm_switches"])
         request.extend(data)
         request.extend(b"\x00\x00\x00")

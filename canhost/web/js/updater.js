@@ -20,7 +20,7 @@ function bindUpdaterControls() {
   const versionFact = $("#appVersionFact");
   if (versionFact && !versionFact.dataset.bound) {
     versionFact.dataset.bound = "1";
-    versionFact.addEventListener("click", () => $("#updaterDialog")?.showModal());
+    versionFact.addEventListener("click", openUpdaterDialog);
   }
   const check = $("#updaterCheck");
   if (check && !check.dataset.bound) {
@@ -40,6 +40,8 @@ function bindUpdaterControls() {
       if (!result.ok) {
         toast(result.error || "无法开始下载", true);
         updaterRenderUpdaterStatus();
+      } else {
+        await pollUpdaterStatus();
       }
     });
   }
@@ -78,6 +80,17 @@ function bindUpdaterControls() {
   }
 }
 
+async function openUpdaterDialog() {
+  const dialog = $("#updaterDialog");
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+  updaterRenderUpdaterStatus();
+  await pollUpdaterStatus();
+  // Source runs are allowed to check but not install. Opening the entry point
+  // should still provide a useful result when startup auto-check is disabled.
+  if (updaterStatusIsIdle()) await refreshUpdater(false);
+}
+
 async function refreshUpdater(automatic) {
   if (!state.api?.check_for_updates) return;
   const include = !!$("#updaterPrerelease")?.checked;
@@ -91,7 +104,8 @@ async function refreshUpdater(automatic) {
 }
 
 function refreshUpdaterPending() {
-  if (updaterStatusIsIdle()) refreshUpdater(false);
+  const stateName = getUpdaterExtra()?.state || "idle";
+  if (["idle", "up_to_date", "update_available", "check_failed"].includes(stateName)) refreshUpdater(false);
   else updaterRenderUpdaterStatus();
 }
 
@@ -118,6 +132,16 @@ function updaterRenderUpdaterStatus() {
   const currentVersion = state.bootstrap?.version;
   const stateName = status.state || "idle";
 
+  const headline = $("#updaterHeadline");
+  if (headline) headline.textContent = updaterHeadline(status);
+  const badge = $("#updaterStateBadge");
+  if (badge) {
+    badge.textContent = updaterBadgeText(status);
+    badge.className = "updater-state-badge";
+    const badgeClass = updaterBadgeClass(stateName);
+    if (badgeClass) badge.classList.add(badgeClass);
+  }
+
   const messageNode = $("#updaterMessage");
   if (messageNode) {
     messageNode.textContent = updaterStatusText(status);
@@ -128,18 +152,27 @@ function updaterRenderUpdaterStatus() {
     if (["check_failed", "download_failed", "install_failed"].includes(stateName)) {
       messageNode.classList.add("bad");
     }
+    if (stateName === "up_to_date" || stateName === "ready") messageNode.classList.add("ok");
   }
 
   const current = $("#updaterCurrent");
   if (current) current.textContent = currentVersion ? "v" + currentVersion : "等待数据";
   const latestNode = $("#updaterLatest");
   if (latestNode) latestNode.textContent = latest?.tag_name ? "v" + String(latest.tag_name).replace(/^v/i, "") : "等待数据";
+  const latestCard = latestNode?.closest(".updater-version-card");
+  if (latestCard) latestCard.classList.toggle("available", stateName === "update_available");
+  const releaseKind = $("#updaterReleaseKind");
+  if (releaseKind) releaseKind.textContent = latest
+    ? (latest.prerelease ? "预发布版 · 需谨慎安装" : "正式版 · 可直接更新")
+    : "等待检查";
   const dateNode = $("#updaterPublished");
   if (dateNode) dateNode.textContent = latest?.published_at ? String(latest.published_at).slice(0, 10) : "—";
 
   const notes = $("#updaterNotes");
   if (notes) {
-    notes.textContent = latest?.body ? String(latest.body).trim().slice(0, 600) : "此次 Release 未填写说明。";
+    notes.textContent = latest?.body
+      ? String(latest.body).trim().slice(0, 600)
+      : latest ? "此次 Release 未填写说明。" : "检查完成后会在这里显示版本说明。";
   }
 
   const size = latest?.assets?.find(item => String(item.name).toLowerCase().endsWith(".zip"))?.size;
@@ -167,7 +200,10 @@ function updaterRenderUpdaterStatus() {
   }
 
   const fileNode = $("#updaterFile");
-  if (fileNode) fileNode.textContent = status.stage_dir ? "已暂存：退出后将自动安装" : "";
+  if (fileNode) {
+    fileNode.textContent = status.stage_dir ? "下载与校验已完成。点击“重启并安装”后，应用会自动替换并启动新版本。" : "";
+    fileNode.classList.toggle("hidden", !status.stage_dir);
+  }
 
   const tokenNode = $("#updaterTokenState");
   if (tokenNode) {
@@ -184,7 +220,7 @@ function updaterRenderUpdaterStatus() {
   const installBtn = $("#updaterInstall");
   if (installBtn) {
     installBtn.disabled = stateName !== "ready" || !installSupported || updaterClosing;
-    installBtn.textContent = stateName === "installing" ? "正在退出…" : "退出并安装";
+    installBtn.textContent = stateName === "installing" ? "正在退出…" : "重启并安装";
   }
   const prerelease = $("#updaterPrerelease");
   if (prerelease) prerelease.disabled = ["checking", "downloading", "installing"].includes(stateName);
@@ -196,6 +232,47 @@ function updaterRenderUpdaterStatus() {
   if (repoNode) repoNode.textContent = state.bootstrap?.updater_repo || "BITFSAE/can-host";
   const pathNode = $("#updaterSettingsPath");
   if (pathNode) pathNode.textContent = state.bootstrap?.updater_settings_path || "—";
+
+  const indicator = $("#appUpdateIndicator");
+  const versionFact = $("#appVersionFact");
+  const hasUpdate = stateName === "update_available";
+  if (indicator) indicator.classList.toggle("hidden", !hasUpdate);
+  if (versionFact) {
+    versionFact.classList.toggle("has-update", hasUpdate);
+    versionFact.title = hasUpdate
+      ? "发现新版本 " + (latest?.tag_name || "") + "，点击查看更新"
+      : "软件内更新";
+  }
+}
+
+function updaterHeadline(status) {
+  const stateName = status.state || "idle";
+  if (stateName === "update_available") return "有新版本可用";
+  if (stateName === "up_to_date") return "当前已是最新版本";
+  if (["checking", "downloading"].includes(stateName)) return "正在获取更新信息";
+  if (stateName === "ready") return "更新包已准备好";
+  if (stateName === "installing") return "正在交接安装任务";
+  if (["check_failed", "download_failed", "install_failed"].includes(stateName)) return "更新流程需要处理";
+  return "检查官方 Release";
+}
+
+function updaterBadgeText(status) {
+  const stateName = status.state || "idle";
+  if (stateName === "update_available") return "可更新";
+  if (stateName === "up_to_date") return "已是最新";
+  if (stateName === "checking") return "检查中";
+  if (stateName === "downloading") return "下载中";
+  if (stateName === "ready") return "待安装";
+  if (stateName === "installing") return "安装中";
+  if (["check_failed", "download_failed", "install_failed"].includes(stateName)) return "需处理";
+  return "未检查";
+}
+
+function updaterBadgeClass(stateName) {
+  if (stateName === "update_available" || stateName === "checking" || stateName === "downloading") return "active";
+  if (stateName === "up_to_date" || stateName === "ready") return "ok";
+  if (["check_failed", "download_failed", "install_failed"].includes(stateName)) return "bad";
+  return "";
 }
 
 function updaterStatusText(status) {
