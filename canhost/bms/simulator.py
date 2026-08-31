@@ -22,7 +22,7 @@ class BmsSimulator:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.thresholds = [4190, 3100, 90, 30]
-        self.switch_bytes = [0xF3, 0x3F, 0xF8]
+        self.switch_bytes = [0xFF, 0xFF, 0xF8]
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = False
@@ -113,11 +113,7 @@ class BmsSimulator:
                 self.config_save_pending_cycles = 2
                 detail = ov
         elif operation == 3:
-            if ((data[2] & 0xF3) != 0xF3
-                    or (data[3] & 0x2D) != 0x2D
-                    or (data[4] & 0x60) != 0x60
-                    or data[4] & 0x07
-                    or data[5:8] != b"\x00\x00\x00"):
+            if (data[4] & 0x07) or data[5:8] != b"\x00\x00\x00":
                 result = 5
             else:
                 self.switch_bytes = list(data[2:5])

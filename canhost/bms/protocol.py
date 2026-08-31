@@ -58,7 +58,7 @@ CAN1_IDS = {
 }
 
 CAN1_TOOL_IDS = {0x18A050F5}
-TOOL_PROTOCOL_VERSION = 4
+TOOL_PROTOCOL_VERSION = 5
 
 # Keep the names aligned with the firmware state constants and the DOC status
 # tables.  The short English names are easier to scan in the large overview
@@ -683,11 +683,9 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
         return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(data), True, now, "tx")
     if name == "alarm_switches":
         switches = values.get("switches", values)
-        # The firmware requires ordinary safety bits to remain enabled. Start
-        # from the safe/default image so callers may update only the four
-        # Debug-Bringup HV_ON action switches without accidentally clearing
-        # mandatory bits that were not included in the partial dictionary.
-        data = bytearray([0xF3, 0x3F, 0xF8])
+        # 默认整组全部开启。只写调用方给出的位，缺失位保持开启；
+        # 正式 Debug/Release 固件会拒绝关闭强制保护位并返回参数无效。
+        data = bytearray([0xFF, 0xFF, 0xF8])
         for key, _, _, _, byte, bit in SWITCH_DEFS:
             if key in switches:
                 if bool(switches[key]):
