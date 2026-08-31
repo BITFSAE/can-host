@@ -500,26 +500,31 @@ class BmsProtocol:
                 return True
             values = ([u16le(data, 2), u16le(data, 4), u16le(data, 6)] if frame_index == 0
                       else [u16le(data, offset) for offset in (0, 2, 4, 6)])
-            valid = all(500 <= value <= 5000 for value in values)
             for offset, raw_value in enumerate(values):
                 cell = start + offset
-                self.cells[cell] = raw_value if valid else 0xFFFF
+                self.cells[cell] = raw_value
                 self.cell_seen[cell] = now
-                self.cell_reason[cell] = None if valid else "范围错误"
-            self.volt_frame_seen[slave][frame_index] = now if valid else None
+                self.cell_reason[cell] = None
+            self.volt_frame_seen[slave][frame_index] = now
             return True
         delta = can_id - CAN1_CELL_TEMP_BASE
         if 0 <= delta <= (5 << 16) and delta & 0xFFFF == 0:
             slave = delta >> 16
-            valid_length = len(data) >= 8
-            valid_values = valid_length and all(value <= 129 for value in data[:8])
-            reason = None if valid_values else ("DLC不足" if not valid_length else "范围错误")
+            if len(data) < 8:
+                for offset in range(8):
+                    index = slave * 8 + offset
+                    self.temps[index] = 0xFF
+                    self.temp_seen[index] = now
+                    self.temp_reason[index] = "DLC不足"
+                self.temp_frame_seen[slave] = None
+                return True
             for offset in range(8):
                 index = slave * 8 + offset
-                self.temps[index] = data[offset] if valid_values else 0xFF
+                value = data[offset]
+                self.temps[index] = value
                 self.temp_seen[index] = now
-                self.temp_reason[index] = reason
-            self.temp_frame_seen[slave] = now if valid_values else None
+                self.temp_reason[index] = None if (value == 0xFF or value <= 129) else "范围错误"
+            self.temp_frame_seen[slave] = now
             return True
         return False
 
@@ -572,7 +577,7 @@ class BmsProtocol:
                                     "status": self.cell_reason[index] or ("断线" if value == 0xFFFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
             for index, value in enumerate(self.temps):
                 temp_age = age(now, self.temp_seen[index])
-                valid = (value is not None and value != 0xFF and temp_age is not None
+                valid = (value is not None and value != 0xFF and value <= 129 and temp_age is not None
                          and temp_age <= self.slave_sample_timeout_s)
                 temp_values.append({"no": index + 1, "module": index // 8 + 1, "local": index % 8 + 1,
                                     "value": value - 30 if valid else None, "raw": value, "age": temp_age,

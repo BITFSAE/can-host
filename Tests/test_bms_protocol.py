@@ -333,14 +333,57 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["sop"]["status"]["crc_valid"])
         self.assertTrue(snapshot["sop"]["status"]["ack_fresh"])
 
-    def test_out_of_range_slave_frame_invalidates_complete_frame(self) -> None:
+    def test_out_of_range_voltage_keeps_neighbour_cells(self) -> None:
         protocol = BmsProtocol()
         payload = b"\x00\x00" + (3700).to_bytes(2, "little") + (6000).to_bytes(2, "little") + (3702).to_bytes(2, "little")
         protocol.ingest(CanFrame(0x180050F3, payload, True))
         snapshot = protocol.snapshot({"connected": True})
-        self.assertEqual([item["value"] for item in snapshot["cells"][:3]], [None, None, None])
-        self.assertEqual([item["status"] for item in snapshot["cells"][:3]], ["范围错误"] * 3)
-        self.assertEqual(snapshot["modules"][0]["voltage_frames"], 0)
+        self.assertEqual([item["value"] for item in snapshot["cells"][:3]], [3700, 6000, 3702])
+        self.assertEqual([item["status"] for item in snapshot["cells"][:3]], ["正常"] * 3)
+        self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
+
+    def test_open_wire_is_per_channel_on_last_voltage_frame(self) -> None:
+        protocol = BmsProtocol()
+        payload = b"".join(value.to_bytes(2, "little") for value in (3100, 3101, 3102, 0xFFFF))
+        protocol.ingest(CanFrame(0x180550F3, payload, True))
+        snapshot = protocol.snapshot({"connected": True})
+        cells = snapshot["cells"][19:23]
+        self.assertEqual([item["value"] for item in cells], [3100, 3101, 3102, None])
+        self.assertEqual([item["status"] for item in cells[:3]], ["正常"] * 3)
+        self.assertEqual(cells[3]["status"], "断线")
+        self.assertEqual(cells[3]["raw"], 0xFFFF)
+        self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
+
+    def test_tap_fault_pair_keeps_all_four_cells(self) -> None:
+        protocol = BmsProtocol()
+        payload = b"".join(value.to_bytes(2, "little") for value in (1000, 6500, 3700, 3701))
+        protocol.ingest(CanFrame(0x180550F3, payload, True))
+        snapshot = protocol.snapshot({"connected": True})
+        cells = snapshot["cells"][19:23]
+        self.assertEqual([item["value"] for item in cells], [1000, 6500, 3700, 3701])
+        self.assertEqual([item["status"] for item in cells], ["正常"] * 4)
+        self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
+
+    def test_temp_open_code_is_per_channel(self) -> None:
+        protocol = BmsProtocol()
+        protocol.ingest(CanFrame(0x184050F3, bytes((55, 55, 0xFF, 55, 55, 55, 55, 55)), True))
+        snapshot = protocol.snapshot({"connected": True})
+        temps = snapshot["temps"][:8]
+        self.assertEqual(temps[0]["value"], 25)
+        self.assertEqual(temps[2]["value"], None)
+        self.assertEqual(temps[2]["status"], "断线")
+        self.assertEqual(temps[2]["raw"], 0xFF)
+        self.assertTrue(snapshot["modules"][0]["temperature_frame"])
+
+    def test_temp_out_of_range_is_per_channel(self) -> None:
+        protocol = BmsProtocol()
+        protocol.ingest(CanFrame(0x184050F3, bytes((55, 55, 55, 130, 55, 55, 55, 55)), True))
+        snapshot = protocol.snapshot({"connected": True})
+        temps = snapshot["temps"][:8]
+        self.assertEqual(temps[0]["value"], 25)
+        self.assertIsNone(temps[3]["value"])
+        self.assertEqual(temps[3]["status"], "范围错误")
+        self.assertTrue(snapshot["modules"][0]["temperature_frame"])
 
     def test_command_validation_and_encoding(self) -> None:
         frame = build_command("charge_config", {"voltage_v": 570.0, "current_a": 3.0})

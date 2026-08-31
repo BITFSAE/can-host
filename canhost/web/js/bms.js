@@ -26,7 +26,7 @@ const ALARM_RULE_TEXTS = [
   "CAN/TIM启动失败 · 本次上电锁存", "单体累加与U1差 >100 V · 约1.5 s",
   "离线约360 ms / 状态异常270 ms", "HAL错误或Bus-off · 约3 s无新错误后清除",
   "保留位 · 当前固定为 0", "充电机反馈 >500 ms · 按在线源定级",
-  "20 ms重试25次失败 · 复位前锁存",
+  "命令批次重试超时或应答错误 · 复位前锁存",
   "BMU 1 通信离线", "BMU 2 通信离线", "BMU 3 通信离线",
   "BMU 4 通信离线", "BMU 5 通信离线", "BMU 6 通信离线",
   "IVT U1失联约360 ms",
@@ -838,7 +838,13 @@ function makeCellItem(label, unit) {
   const root = document.createElement("div");
   root.className = "cell-item";
   root.innerHTML = `<small>${label}</small><b><span class="cell-value"></span><em>${unit}</em></b>`;
-  return { root, value: root.querySelector(".cell-value") };
+  return { root, value: root.querySelector(".cell-value"), unit: root.querySelector("em") };
+}
+
+function cellDisplayValue(item) {
+  if (item.status === "断线") return "断";
+  if (item.value == null) return "—";
+  return String(item.value);
 }
 
 /** Build the fixed 6-module / 23-cell / 8-temp grid once so later polls only patch
@@ -878,7 +884,8 @@ function updateCellItem(item, ref, voltage, onlyAbnormal, thresholds) {
   ref.root.className = `cell-item ${status}`;
   ref.root.classList.toggle("hidden", onlyAbnormal && !status);
   ref.root.title = `${item.status} · 最近数据 ${item.age ?? "—"} s`;
-  ref.value.textContent = item.value ?? "—";
+  ref.value.textContent = cellDisplayValue(item);
+  if (ref.unit) ref.unit.classList.toggle("hidden", item.value == null);
 }
 
 function renderCells() {
