@@ -12,9 +12,9 @@ import time
 from collections import deque
 from typing import Any
 
-from .ivt import (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
+from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
-                  compare_readback, expected_bms_canb_config, resolve_bms_canb_periods)
+                  compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                            BmsProtocol, build_command, command_ack_matches)
 from .decoders import CanFrame, build_fan_command, fan_ack_matches
@@ -87,7 +87,7 @@ class CanService:
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
         channel = str(config.get("channel") or "PCAN_USBBUS1")
         if mode == "bench" and profile != "can1":
-            return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；CANB 请使用真实 PCAN 和真实 IVT"}
+            return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；真实 IVT 也应接 CAN1"}
         if mode == "bench" and self.protocol_kind != "bms":
             return {"ok": False, "error": "台架注入只支持 BMS 协议连接"}
         if mode == "simulation" and self.protocol_kind == "vehicle" and profile == "can1":
@@ -442,7 +442,7 @@ class CanService:
             return {
                 "active": True,
                 "target": self.connection.get("bench_target") or "CAN1 从控帧",
-                "ivt_source": "CANB 真实 IVT-S",
+                "ivt_source": "CAN1 真实 IVT-S",
                 "slaves": [{"id": slave.slave_id, "online": bool(slave.online),
                             "base_cell_mv": slave.base_cell_mv, "base_temp_c": slave.base_temp_c}
                            for slave in model.slaves],
@@ -537,10 +537,10 @@ class CanService:
             raise RuntimeError("CAN 尚未连接")
         if connection.get("mode") != "pcan":
             raise RuntimeError("IVT 配置只允许使用真实 PCAN，模拟数据和历史回放为只读")
-        if connection.get("bus_profile") not in {"canb", "canb_legacy"}:
-            raise RuntimeError("IVT 命令只允许从 CANB 发送；CAN1 只发送 F405 工具命令")
+        if connection.get("bus_profile") != "can1":
+            raise RuntimeError("IVT 命令只允许从独立 CAN1 配置连接发送")
         if connection.get("bitrate") not in BITRATE_PRESETS:
-            raise RuntimeError("IVT 操作只支持 CANB 250 或 500 kbit/s 预设")
+            raise RuntimeError("IVT 操作只支持 250 或 500 kbit/s 预设；正式 CAN1 目标为 500 kbit/s")
         return connection
 
     def _clear_ivt_rx(self) -> None:
@@ -571,12 +571,12 @@ class CanService:
             self._record(frame)
 
     def _reopen_pcan(self, bitrate: int) -> None:
-        """Reopen CANB at a preset after IVT has restarted itself."""
+        """Reopen the isolated IVT configuration connection after restart."""
         if bitrate not in BITRATE_PRESETS:
-            raise ValueError("CANB 位率预设只支持 250 或 500 kbit/s")
+            raise ValueError("IVT 位率预设只支持 250 或 500 kbit/s")
         with self.lock:
             if self.bus is None or self.connection.get("mode") != "pcan":
-                raise RuntimeError("PCAN 已断开，无法重新打开 CANB")
+                raise RuntimeError("PCAN 已断开，无法重新打开 IVT 配置连接")
             old_bus = self.bus
             worker = self.worker
             channel = str(self.connection.get("channel") or "PCAN_USBBUS1")
@@ -596,7 +596,7 @@ class CanService:
         except Exception as exc:
             with self.lock:
                 self.connection.update({"status": "位率切换后无法重连", "error": str(exc), "bitrate": bitrate})
-            raise RuntimeError(f"CANB 已切换到 {bitrate // 1000} kbit/s，但 PCAN 重开失败：{exc}") from exc
+            raise RuntimeError(f"IVT 已切换到 {bitrate // 1000} kbit/s，但 PCAN 重开失败：{exc}") from exc
         with self.lock:
             self.bus = new_bus
             self.connection.update({"bitrate": bitrate, "status": "已连接", "error": None})
@@ -605,13 +605,13 @@ class CanService:
             self.worker.start()
 
     def _ivt_expected(self, options: dict[str, Any], bitrate: int) -> dict[str, Any]:
-        return expected_bms_canb_config(
-            startup=str(options.get("startup") or "run"), bitrate=bitrate,
+        return expected_bms_can1_config(
+            startup=str(options.get("startup") or "run"), bitrate=500000,
             positive_threshold_a=self._parse_threshold(options.get("positive_threshold_a")),
             positive_reset_threshold_a=self._parse_threshold(options.get("positive_reset_threshold_a")),
             negative_threshold_a=self._parse_threshold(options.get("negative_threshold_a")),
             negative_reset_threshold_a=self._parse_threshold(options.get("negative_reset_threshold_a")),
-            channel_periods_ms=resolve_bms_canb_periods(options.get("channel_periods_ms")),
+            channel_periods_ms=resolve_bms_can1_periods(options.get("channel_periods_ms")),
         )
 
     def _ivt_id_candidates(self, options: dict[str, Any]) -> list[tuple[int, int]]:
@@ -628,9 +628,9 @@ class CanService:
         # cover an interrupted ID update without making the user guess first.
         return [
             (DEFAULT_CMD_ID, DEFAULT_RSP_ID),
-            (BMS_CANB_CMD_ID, BMS_CANB_RSP_ID),
-            (DEFAULT_CMD_ID, BMS_CANB_RSP_ID),
-            (BMS_CANB_CMD_ID, DEFAULT_RSP_ID),
+            (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID),
+            (DEFAULT_CMD_ID, BMS_CAN1_RSP_ID),
+            (BMS_CAN1_CMD_ID, DEFAULT_RSP_ID),
         ]
 
     def _probe_ivt_client(self, options: dict[str, Any]) -> IvtClient:
@@ -665,10 +665,12 @@ class CanService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def configure_ivt_bms_canb(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    def configure_ivt_bms_can1(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         options = dict(options or {})
         try:
             connection = self._check_ivt_access()
+            if int(connection["bitrate"]) != 500000:
+                raise RuntimeError("配置为 BMS CAN1 前先把 IVT 切到 500 kbit/s")
             startup = str(options.get("startup") or "run")
             if startup not in {"stop", "run"}:
                 raise ValueError("IVT 上电模式必须是 stop 或 run")
@@ -687,10 +689,10 @@ class CanService:
                         "reset_threshold_a": self._parse_threshold(options.get("negative_reset_threshold_a")),
                     },
                 }
-                readback = client.setup_bms_canb(startup=startup, serial_number=serial,
+                readback = client.setup_bms_can1(startup=startup, serial_number=serial,
                                                   reopen=self._reopen_pcan, bitrate=int(connection["bitrate"]),
                                                   thresholds=thresholds,
-                                                  channel_periods_ms=resolve_bms_canb_periods(
+                                                  channel_periods_ms=resolve_bms_can1_periods(
                                                       options.get("channel_periods_ms")
                                                   ))
                 expected = self._ivt_expected(options, int(connection["bitrate"]))
@@ -698,7 +700,7 @@ class CanService:
                 readback["expected"] = expected
                 with self.lock:
                     self.ivt_config = readback
-                return {"ok": True, "readback": readback, "message": "IVT 已按 BMS CANB 配置并完成重启读回核对"}
+                return {"ok": True, "readback": readback, "message": "IVT 已按 BMS CAN1 配置并完成重启读回核对"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 

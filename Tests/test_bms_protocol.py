@@ -197,9 +197,17 @@ class BmsProtocolTest(unittest.TestCase):
         simulator._emit_summary()
         ids = {frame.arbitration_id for frame in frames}
         self.assertIn(0x4B0, ids)
-        self.assertIn(0x512, ids)
+        self.assertNotIn(0x512, ids)
         self.assertNotIn(0x186050F4, ids)
         self.assertFalse(any(frame.arbitration_id == 0x180050F3 for frame in frames))
+
+    def test_can1_simulator_emits_ivt_frames(self) -> None:
+        frames: list[CanFrame] = []
+        simulator = BmsSimulator(frames.append, bus_profile="can1")
+        simulator._emit_summary()
+        ids = {frame.arbitration_id for frame in frames}
+        self.assertIn(0x512, ids)
+        self.assertIn(0x519, ids)
 
     def test_bmslog_rejects_corrupt_frame_during_load(self) -> None:
         service = CanService()
@@ -340,6 +348,8 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(frame.data, bytes.fromhex("41 00 16 44 00 1E 00 00"))
         frame = build_command("alarm_thresholds", {"ov_mv": 4190, "uv_mv": 3100, "ot_c": 60, "ut_c": 0})
         self.assertEqual(frame.data, bytes.fromhex("42 00 10 5E 0C 1C 5A 1E"))
+        frame = build_command("alarm_thresholds", {"ov_mv": 4500, "uv_mv": 3100, "ot_c": 60, "ut_c": 0})
+        self.assertEqual(frame.data, bytes.fromhex("42 00 11 94 0C 1C 5A 1E"))
         frame = build_command("fault_reset")
         self.assertEqual(frame.data, bytes.fromhex("44 00 A5 5A 3C 00 00 00"))
         frame = build_command("log_clear", {"_sequence": 7})
@@ -351,6 +361,8 @@ class BmsProtocolTest(unittest.TestCase):
             build_command("charge_config", {"voltage_v": 600, "current_a": 3})
         with self.assertRaises(ValueError):
             build_command("alarm_thresholds", {"ov_mv": 3100, "uv_mv": 3200, "ot_c": 60, "ut_c": 0})
+        with self.assertRaises(ValueError):
+            build_command("alarm_thresholds", {"ov_mv": 4501, "uv_mv": 3100, "ot_c": 60, "ut_c": 0})
 
     def test_simulation_transport_produces_complete_pack(self) -> None:
         service = CanService()

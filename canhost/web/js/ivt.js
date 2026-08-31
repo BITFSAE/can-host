@@ -1,4 +1,4 @@
-/* IVT 能量计配置页面模块：独立 CANB 配置连接，与整车监视连接互不影响。 */
+/* IVT 能量计配置页面模块：独立 CAN1 配置连接，与主监视连接互不影响。 */
 
 const IVT_PERIOD_CHANNELS = ["I", "U1", "U2", "U3", "T", "W", "As", "Wh"];
 
@@ -9,8 +9,8 @@ function bindIvtControls() {
   $("#configureIvt").addEventListener("click", () => {
     const options = readIvtOptions();
     if (!options) return;
-    confirmIvtAction("configure", options, "配置 IVT 为 BMS CANB",
-      "将停止 IVT，写入 8 个通道和 10 个 CAN ID，保存到 IVT 非易失存储，重启后再逐项读回核对。执行前确认 CANB 上只有目标 IVT。", true);
+    confirmIvtAction("configure", options, "配置 IVT 为 BMS CAN1",
+      "将停止 IVT，写入 8 个通道和 10 个 CAN ID，保存到 IVT 非易失存储，重启后再逐项读回核对。执行前确认配置总线上只有目标 IVT。", true);
   });
   $("#switchIvt250").addEventListener("click", () => confirmIvtBitrate(250000));
   $("#switchIvt500").addEventListener("click", () => confirmIvtBitrate(500000));
@@ -32,7 +32,7 @@ async function connectIvt() {
   const result = await state.api.connect_ivt({
     channel: $("#ivtChannelSelect").value,
     bitrate,
-    bus_profile: bitrate === 250000 ? "canb_legacy" : "canb",
+    bus_profile: "can1",
   });
   button.disabled = false; button.textContent = "连接";
   if (!result.ok) return toast(result.error || "IVT 连接失败", true);
@@ -162,11 +162,11 @@ async function readIvtConfig() {
 function ivtConnectionAvailable() {
   const connection = state.toolSnapshots.ivt?.connection;
   return connection?.connected === true && connection.mode === "pcan"
-    && ["canb", "canb_legacy"].includes(connection.bus_profile);
+    && connection.bus_profile === "can1";
 }
 
 function confirmIvtAction(kind, options, title, message, destructive = false) {
-  if (!ivtConnectionAvailable()) return toast("请先连接真实 CANB PCAN", true);
+  if (!ivtConnectionAvailable()) return toast("请先连接真实 CAN1 配置 PCAN", true);
   state.pendingCommand = null;
   state.pendingFanCommand = null;
   state.pendingIvtAction = { kind, options };
@@ -181,7 +181,7 @@ function confirmIvtAction(kind, options, title, message, destructive = false) {
     ? "\n周期：" + IVT_PERIOD_CHANNELS.map(name => `${name} ${options.channel_periods_ms[name]} ms`).join(" · ")
     : "";
   text("#confirmPayload", "通道：" + (conn.channel || "PCAN") + "\n"
-    + "总线：CANB · " + ((conn.bitrate || 500000) / 1000) + " kbit/s\n"
+    + "目标：CAN1 · " + ((conn.bitrate || 500000) / 1000) + " kbit/s\n"
     + "Command：0x" + cmdId.toString(16).toUpperCase() + "\n"
     + "Response：0x" + rspId.toString(16).toUpperCase() + "\n"
     + "操作：" + operation + periodText);
@@ -196,7 +196,7 @@ function confirmIvtBitrate(targetBitrate) {
   if (!options) return;
   options.target_bitrate = targetBitrate;
   confirmIvtAction("bitrate", options, "切换 IVT 到 " + (targetBitrate / 1000) + " kbit/s",
-    "IVT 会停止并重启到目标位率。上位机会关闭当前 PCAN，再用目标位率重新打开并等待 Alive。执行前确认 CANB 上只有目标 IVT。", true);
+    "IVT 会停止并重启到目标位率。上位机会关闭当前 PCAN，再用目标位率重新打开并等待 Alive。执行前确认配置总线上只有目标 IVT。正式接入 CAN1 前必须切回 500 kbit/s。", true);
 }
 
 function renderIvtConfig() {
@@ -252,11 +252,11 @@ function renderIvtConfig() {
     ? `${readback.channels[0].byte_order === "little" ? "小端" : "大端"} · ${readback.channels[0].mode_name || "—"}` : "—";
   const statusText = periodOnlyChange ? "周期目标已修改" : effectiveStatusName[effectiveStatus] || "已读取";
   const summaryText = periodOnlyChange
-    ? "确认各通道周期后执行 BMS CANB 配置，写入后会自动重启并读回核对。"
+    ? "确认各通道周期后执行 BMS CAN1 配置，写入后会自动重启并读回核对。"
     : effectiveStatus === "configured"
     ? "目标已对齐，可以断开配置通道并接入 F405。"
     : effectiveStatus === "unconfigured"
-      ? "读到出厂配置；首次接入 F405 前请执行一次 BMS CANB 配置。"
+      ? "读到出厂配置；首次接入 F405 CAN1 前请执行一次 BMS CAN1 配置。"
       : "发现配置差异；展开逐通道核对后决定是否重新配置。";
   text("#ivtCheckSummary", statusText + " · " + summaryText);
   text("#ivtConfigResult",
@@ -318,5 +318,5 @@ function renderIvtConfigureButton() {
         ? "请修正通道周期"
         : alreadyConfigured
           ? "当前配置已与输入目标一致，无需重复配置"
-          : "写入当前周期和 BMS CANB 目标配置并重启 IVT";
+          : "写入当前周期和 BMS CAN1 目标配置并重启 IVT";
 }

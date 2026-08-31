@@ -34,21 +34,6 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["sop"]["status"]["crc_valid"])
         self.assertFalse(snapshot["sop"]["ecu_ack"]["crc_valid"])
 
-    def test_ivt_channels_track_freshness_independently(self) -> None:
-        clock = [0.0]
-        protocol = VehicleProtocol(clock=lambda: clock[0])
-        protocol.ingest(CanFrame(0x512, bytes([0x00, 0x01]) + (15000).to_bytes(4, "little", signed=True) + b"\x00\x00", False))
-        clock[0] = 3.0
-        snapshot = protocol.snapshot({"connected": True})
-        self.assertEqual(snapshot["ivt"]["current_a"]["value"], 15.0)
-        self.assertEqual(snapshot["ivt"]["current_a"]["age"], 3.0)
-        self.assertIsNone(snapshot["ivt"]["u1_v"]["age"])
-
-    def test_ivt_mux_mismatch_is_ignored(self) -> None:
-        protocol = VehicleProtocol()
-        protocol.ingest(CanFrame(0x513, bytes([0x02, 0x00]) + (40000).to_bytes(4, "little", signed=True) + b"\x00\x00", False))
-        self.assertIsNone(protocol.ivt["u1_v"]["value"])
-
     def test_meter_channels(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x521, bytes([0x00, 0x02]) + (12345).to_bytes(4, "big", signed=True) + b"\x00\x00", False))
@@ -118,14 +103,14 @@ class VehicleSimulatorTest(unittest.TestCase):
         simulator = VehicleSimulator(frames.append)
         simulator._emit_pack_and_fault()
         simulator._emit_sop()
-        simulator._emit_ivt_and_meter()
+        simulator._emit_meter()
         simulator._emit_pdm()
         simulator._emit_fan()
         simulator._emit_ecu()
         simulator._emit_tires()
         ids = {frame.arbitration_id for frame in frames}
-        for expected in (0x4B0, 0x4B1, 0x4A0, 0x4A3, 0x512, 0x513, 0x517,
-                         0x521, 0x522, 0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7,
+        for expected in (0x4B0, 0x4B1, 0x4A0, 0x4A3, 0x521, 0x522,
+                         0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7,
                          0x502, 0x505, 0x506, 0x507, 0x508, 0x509,
                          0x071, 0x072, 0x073, 0x074):
             self.assertIn(expected, ids)

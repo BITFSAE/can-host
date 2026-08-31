@@ -105,7 +105,7 @@ class BmsSimulator:
             ov = int.from_bytes(data[2:4], "big")
             uv = int.from_bytes(data[4:6], "big")
             ot, ut = data[6], data[7]
-            if not (3011 <= ov <= 4190 and 3010 <= uv <= 4189 and ov > uv
+            if not (3011 <= ov <= 4500 and 3010 <= uv <= 4189 and ov > uv
                     and 36 <= ot <= 95 and 5 <= ut <= 79 and ot > ut):
                 result = 5
             else:
@@ -215,7 +215,7 @@ class BmsSimulator:
             temps = bytes(self._temp_code(slave * 8 + i) for i in range(8))
             self._send(0x184050F3 + (slave << 16), temps)
 
-    def _emit_canb_summary(self, status: bytes, phase: int, voltage_01v: int, current_01a: int) -> None:
+    def _emit_canb_summary(self, status: bytes, phase: int) -> None:
         """Emit only the frames available on the selected CANB simulation."""
         self._send(0x4B0, status, False)
         log_flags = 0x04 if phase == 2 else 0
@@ -224,7 +224,9 @@ class BmsSimulator:
         self._send(0x4B2, bytes(8), False)
         if self.bus_profile == "canb_legacy":
             self._send(0x18FF50E5, bytes.fromhex("16 30 00 1C 01"), True)
-            return
+
+    def _emit_ivt(self, voltage_01v: int, current_01a: int) -> None:
+        """Emit the self-owned IVT frames available only on CAN1."""
 
         ivt_values = [
             current_01a * 100,
@@ -267,8 +269,9 @@ class BmsSimulator:
                   + current_01a.to_bytes(2, "big", signed=True)
                   + bytes([78, 0x1F, state_alarm]))
         if self.bus_profile != "can1":
-            self._emit_canb_summary(status, phase, voltage_01v, current_01a)
+            self._emit_canb_summary(status, phase)
             return
+        self._emit_ivt(voltage_01v, current_01a)
         self._send(0x186050F4, status)
         self._send(0x186750F4, voltage_01v.to_bytes(2, "big"))
         max_cell, min_cell = max(cells), min(cells)

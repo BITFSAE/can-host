@@ -16,9 +16,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 DEFAULT_CMD_ID = 0x411
 DEFAULT_RSP_ID = 0x511
 DEFAULT_BITRATE = 500000
-BMS_CANB_CMD_ID = 0x410
-BMS_CANB_RSP_ID = 0x51A
-BMS_CANB_RESULT_IDS = (0x512, 0x513, 0x514, 0x515, 0x516, 0x517, 0x518, 0x519)
+BMS_CAN1_CMD_ID = 0x410
+BMS_CAN1_RSP_ID = 0x51A
+BMS_CAN1_RESULT_IDS = (0x512, 0x513, 0x514, 0x515, 0x516, 0x517, 0x518, 0x519)
 
 SET_MODE_RSP_MUX = 0xB4
 STORE_RSP_MUX = 0xB2
@@ -56,10 +56,10 @@ class ResultChannel:
     get_mux: int
     rsp_mux: int
     default_can_id: int
-    # Keep the factory period separate from the BMS CANB target.  Readback
+    # Keep the factory period separate from the BMS CAN1 target.  Readback
     # classification needs the former even when the vehicle target changes.
     default_period_ms: int
-    bms_canb_period_ms: int
+    bms_can1_period_ms: int
     scale: float
     unit: str
     default_mode: str
@@ -81,7 +81,7 @@ CHANNELS = (
 CHANNEL_BY_NAME = {channel.name.lower(): channel for channel in CHANNELS}
 CHANNEL_BY_INDEX = {channel.index: channel for channel in CHANNELS}
 DEFAULT_CHANNEL_BY_CAN_ID = {channel.default_can_id: channel for channel in CHANNELS}
-BMS_CANB_CHANNEL_BY_CAN_ID = {can_id: CHANNEL_BY_INDEX[index] for index, can_id in enumerate(BMS_CANB_RESULT_IDS)}
+BMS_CAN1_CHANNEL_BY_CAN_ID = {can_id: CHANNEL_BY_INDEX[index] for index, can_id in enumerate(BMS_CAN1_RESULT_IDS)}
 
 SPECIAL_CAN_TARGETS = {
     "command": (0x1D, 0x5D, 0x9D),
@@ -268,8 +268,8 @@ def _channel_expected(channel: ResultChannel, db1: int, period_ms: int) -> dict[
     }
 
 
-def resolve_bms_canb_periods(periods_ms: Mapping[str, Any] | None = None) -> dict[str, int]:
-    periods = {channel.name: channel.bms_canb_period_ms for channel in CHANNELS}
+def resolve_bms_can1_periods(periods_ms: Mapping[str, Any] | None = None) -> dict[str, int]:
+    periods = {channel.name: channel.bms_can1_period_ms for channel in CHANNELS}
     if periods_ms is not None and not isinstance(periods_ms, Mapping):
         raise ValueError("IVT 通道周期必须按通道名提供")
     for raw_name, raw_value in (periods_ms or {}).items():
@@ -288,7 +288,7 @@ def resolve_bms_canb_periods(periods_ms: Mapping[str, Any] | None = None) -> dic
     return periods
 
 
-def expected_bms_canb_config(
+def expected_bms_can1_config(
     startup: str = "run",
     bitrate: int = DEFAULT_BITRATE,
     positive_threshold_a: int = 0,
@@ -299,13 +299,13 @@ def expected_bms_canb_config(
 ) -> dict[str, Any]:
     if startup not in {"stop", "run"}:
         raise ValueError("IVT 上电模式必须是 stop 或 run")
-    periods = resolve_bms_canb_periods(channel_periods_ms)
+    periods = resolve_bms_can1_periods(channel_periods_ms)
     channels = {
         channel.name: _channel_expected(channel, INTEL_SETUP_DB1, periods[channel.name])
         for channel in CHANNELS
     }
-    can_ids = {channel.name: can_id for channel, can_id in zip(CHANNELS, BMS_CANB_RESULT_IDS)}
-    can_ids.update({"command": BMS_CANB_CMD_ID, "response": BMS_CANB_RSP_ID})
+    can_ids = {channel.name: can_id for channel, can_id in zip(CHANNELS, BMS_CAN1_RESULT_IDS)}
+    can_ids.update({"command": BMS_CAN1_CMD_ID, "response": BMS_CAN1_RSP_ID})
     return {
         "bitrate": int(bitrate), "mode": {"current": startup, "startup": startup},
         "channels": channels, "can_ids": can_ids,
@@ -593,13 +593,13 @@ class IvtClient:
         }
         return result
 
-    def setup_bms_canb(self, startup: str = "run", serial_number: int | None = None,
+    def setup_bms_can1(self, startup: str = "run", serial_number: int | None = None,
                        reopen: Callable[[int], None] | None = None,
                        bitrate: int = DEFAULT_BITRATE,
                        thresholds: dict[str, dict[str, int]] | None = None,
                        channel_periods_ms: Mapping[str, Any] | None = None) -> dict[str, Any]:
         serial = self.read_serial_number() if serial_number is None else int(serial_number)
-        periods = resolve_bms_canb_periods(channel_periods_ms)
+        periods = resolve_bms_can1_periods(channel_periods_ms)
         self.set_mode("stop", startup)
         time.sleep(0.01)
         for channel in CHANNELS:
@@ -611,17 +611,17 @@ class IvtClient:
             if any(parsed[key] != expected[key] for key in ("db1", "period_ms")):
                 raise IvtProtocolError(f"IVT 通道 {channel.name} 配置读回不一致")
             time.sleep(0.01)
-        for channel, can_id in zip(CHANNELS, BMS_CANB_RESULT_IDS):
+        for channel, can_id in zip(CHANNELS, BMS_CAN1_RESULT_IDS):
             parsed = parse_can_id_response(self.set_can_id(parse_can_target(channel.name), can_id, serial))
             if parsed["can_id"] != can_id or parsed["serial_number"] != serial:
                 raise IvtProtocolError(f"IVT 通道 {channel.name} CAN ID 写入读回不一致")
             time.sleep(0.01)
-        self.set_command_can_id(BMS_CANB_CMD_ID, serial)
+        self.set_command_can_id(BMS_CAN1_CMD_ID, serial)
         time.sleep(0.01)
-        self.set_response_can_id(BMS_CANB_RSP_ID, serial)
+        self.set_response_can_id(BMS_CAN1_RSP_ID, serial)
         time.sleep(0.01)
-        expected_targets = [(channel.name, can_id) for channel, can_id in zip(CHANNELS, BMS_CANB_RESULT_IDS)]
-        expected_targets.extend([("command", BMS_CANB_CMD_ID), ("response", BMS_CANB_RSP_ID)])
+        expected_targets = [(channel.name, can_id) for channel, can_id in zip(CHANNELS, BMS_CAN1_RESULT_IDS)]
+        expected_targets.extend([("command", BMS_CAN1_CMD_ID), ("response", BMS_CAN1_RSP_ID)])
         for target_name, can_id in expected_targets:
             parsed = parse_can_id_response(self.get_can_id(parse_can_target(target_name), serial))
             if parsed["can_id"] != can_id or parsed["serial_number"] != serial:
@@ -647,12 +647,12 @@ def frame_to_dict(frame: IvtFrame) -> dict[str, Any]:
 
 
 __all__ = [
-    "ALIVE_MUX", "BMS_CANB_CMD_ID", "BMS_CANB_RESULT_IDS", "BMS_CANB_RSP_ID", "BITRATE_PRESETS",
+    "ALIVE_MUX", "BMS_CAN1_CMD_ID", "BMS_CAN1_RESULT_IDS", "BMS_CAN1_RSP_ID", "BITRATE_PRESETS",
     "CHANNELS", "DEFAULT_BITRATE", "DEFAULT_CMD_ID", "DEFAULT_RSP_ID", "IvtClient", "IvtFrame",
-    "IvtProtocolError", "IVT_RESPONSE_MUXES", "ResultChannel", "BMS_CANB_CHANNEL_BY_CAN_ID",
-    "resolve_bms_canb_periods",
+    "IvtProtocolError", "IVT_RESPONSE_MUXES", "ResultChannel", "BMS_CAN1_CHANNEL_BY_CAN_ID",
+    "resolve_bms_can1_periods",
     "DEFAULT_CHANNEL_BY_CAN_ID", "ARTICLE_NUMBER_RSP_MUX", "MODE_NAME", "MODE_TO_VALUE",
-    "build_db1", "compare_readback", "expected_bms_canb_config", "factory_config",
+    "build_db1", "compare_readback", "expected_bms_can1_config", "factory_config",
     "parse_can_id_response", "parse_can_target", "parse_channel_selector", "parse_config_response",
     "parse_device_id_response", "parse_generic_response", "parse_mode_response", "parse_serial_number_response",
     "parse_threshold_response",

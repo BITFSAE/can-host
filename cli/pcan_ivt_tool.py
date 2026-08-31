@@ -7,7 +7,7 @@
     python3 pcan_ivt_tool.py get-config --channel all
     python3 pcan_ivt_tool.py set-config --channel all --mode cyclic --byte-order little
     python3 pcan_ivt_tool.py setup-intel
-    python3 pcan_ivt_tool.py setup-bms-canb
+    python3 pcan_ivt_tool.py setup-bms-can1
     python3 pcan_ivt_tool.py monitor --byte-order little --seconds 10
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from pathlib import Path
 import sys
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Literal, Sequence
@@ -24,10 +25,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("Missing dependency: pip install python-can") from exc
 
-try:
-    from bms_host.ivt import IvtClient, IvtFrame, compare_readback, expected_bms_canb_config
-except ModuleNotFoundError:  # import path used when loaded from the repository root
-    from TOOLS.bms_host.ivt import IvtClient, IvtFrame, compare_readback, expected_bms_canb_config
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from canhost.ivt import IvtClient, IvtFrame, compare_readback, expected_bms_can1_config
 
 if TYPE_CHECKING:
     ByteOrder = Literal["big", "little"]
@@ -38,9 +40,9 @@ DEFAULT_RSP_ID = 0x511
 DEFAULT_BITRATE = 500000
 DEFAULT_CHANNEL = "PCAN_USBBUS1"
 
-BMS_CANB_CMD_ID = 0x410
-BMS_CANB_RSP_ID = 0x51A
-BMS_CANB_RESULT_IDS = (0x512, 0x513, 0x514, 0x515, 0x516, 0x517, 0x518, 0x519)
+BMS_CAN1_CMD_ID = 0x410
+BMS_CAN1_RSP_ID = 0x51A
+BMS_CAN1_RESULT_IDS = (0x512, 0x513, 0x514, 0x515, 0x516, 0x517, 0x518, 0x519)
 
 SET_MODE_RSP_MUX = 0xB4
 STORE_RSP_MUX = 0xB2
@@ -109,8 +111,8 @@ CHANNELS: List[ResultChannel] = [
 CHANNEL_BY_NAME = {channel.name.lower(): channel for channel in CHANNELS}
 DEFAULT_CHANNEL_BY_CAN_ID = {channel.default_can_id: channel for channel in CHANNELS}
 CHANNEL_BY_INDEX = {channel.index: channel for channel in CHANNELS}
-BMS_CANB_CHANNEL_BY_CAN_ID = {
-    can_id: CHANNEL_BY_INDEX[index] for index, can_id in enumerate(BMS_CANB_RESULT_IDS)
+BMS_CAN1_CHANNEL_BY_CAN_ID = {
+    can_id: CHANNEL_BY_INDEX[index] for index, can_id in enumerate(BMS_CAN1_RESULT_IDS)
 }
 
 SPECIAL_CAN_TARGETS = {
@@ -375,8 +377,8 @@ class IvtPcanTool:
         return response, self.wait_alive(timeout=4.0)
 
     def switch_bms_canb_bitrate(self, bitrate: int, startup: str) -> tuple[can.Message, can.Message]:
-        self.cmd_id = BMS_CANB_CMD_ID
-        self.rsp_id = BMS_CANB_RSP_ID
+        self.cmd_id = BMS_CAN1_CMD_ID
+        self.rsp_id = BMS_CAN1_RSP_ID
         self.set_mode("stop", startup)
         time.sleep(0.01)
         return self.restart_to_bitrate(bitrate)
@@ -430,7 +432,7 @@ class IvtPcanTool:
                 raise RuntimeError(f"post-restart verify failed for {channel.name}")
             time.sleep(0.01)
 
-    def setup_bms_canb(self, startup: str, serial_number: int | None) -> int:
+    def setup_bms_can1(self, startup: str, serial_number: int | None) -> int:
         serial = self.read_serial_number() if serial_number is None else serial_number
         self.set_mode("stop", startup)
         time.sleep(0.01)
@@ -444,22 +446,22 @@ class IvtPcanTool:
                 raise RuntimeError(f"config verify failed for {channel.name}")
             time.sleep(0.01)
 
-        for channel, can_id in zip(CHANNELS, BMS_CANB_RESULT_IDS):
+        for channel, can_id in zip(CHANNELS, BMS_CAN1_RESULT_IDS):
             target = parse_can_target(channel.name)
             parsed = parse_can_id_response(self.set_can_id(target, can_id, serial))
             if parsed["can_id"] != can_id or parsed["serial_number"] != serial:
                 raise RuntimeError(f"CAN ID set verify failed for {channel.name}")
             time.sleep(0.01)
 
-        self.set_command_can_id(BMS_CANB_CMD_ID, serial)
+        self.set_command_can_id(BMS_CAN1_CMD_ID, serial)
         time.sleep(0.01)
-        self.set_response_can_id(BMS_CANB_RSP_ID, serial)
+        self.set_response_can_id(BMS_CAN1_RSP_ID, serial)
         time.sleep(0.01)
 
         expected_targets = [
-            *(zip((channel.name for channel in CHANNELS), BMS_CANB_RESULT_IDS)),
-            ("command", BMS_CANB_CMD_ID),
-            ("response", BMS_CANB_RSP_ID),
+            *(zip((channel.name for channel in CHANNELS), BMS_CAN1_RESULT_IDS)),
+            ("command", BMS_CAN1_CMD_ID),
+            ("response", BMS_CAN1_RSP_ID),
         ]
         for target_name, can_id in expected_targets:
             target = parse_can_target(target_name)
@@ -496,7 +498,7 @@ class IvtPcanTool:
             raise ValueError(f"unsupported byte order: {byte_order}")
         order: ByteOrder = "big" if byte_order == "big" else "little"
         channel_by_can_id = (
-            BMS_CANB_CHANNEL_BY_CAN_ID if id_profile == "bms-canb" else DEFAULT_CHANNEL_BY_CAN_ID
+            BMS_CAN1_CHANNEL_BY_CAN_ID if id_profile == "bms-can1" else DEFAULT_CHANNEL_BY_CAN_ID
         )
         deadline = None if seconds <= 0 else (time.monotonic() + seconds)
         while True:
@@ -757,7 +759,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("info", help="read device-id/mode/sw-version/serial/article in one shot")
 
     readback = subparsers.add_parser(
-        "readback", help="read the complete BMS CANB target and classify the configuration"
+        "readback", help="read the complete BMS CAN1 target and classify the configuration"
     )
     readback.add_argument("--startup", choices=["stop", "run"], default="run")
     readback.add_argument("--positive-threshold-a", type=int, default=0)
@@ -772,8 +774,8 @@ def build_parser() -> argparse.ArgumentParser:
     restart_bitrate.add_argument("--target-bitrate", type=int, choices=[250000, 500000, 1000000], required=True)
 
     bms_bitrate = subparsers.add_parser(
-        "bms-canb-bitrate",
-        help="switch the BMS-owned IVT between CANB 250/500kbps and verify Alive",
+        "bms-can1-bitrate",
+        help="switch the BMS-owned IVT between 250/500kbps and verify Alive; CAN1 target is 500kbps",
     )
     bms_bitrate.add_argument("--target-bitrate", type=int, choices=[250000, 500000], required=True)
     bms_bitrate.add_argument("--startup", choices=["stop", "run"], default="run")
@@ -782,8 +784,8 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--startup", choices=["stop", "run"], default="run")
 
     setup_canb = subparsers.add_parser(
-        "setup-bms-canb",
-        help="configure the BMS-owned IVT for CANB, including dedicated CAN IDs",
+        "setup-bms-can1",
+        help="configure the BMS-owned IVT for CAN1, including dedicated CAN IDs",
     )
     setup_canb.add_argument("--startup", choices=["stop", "run"], default="run")
     setup_canb.add_argument(
@@ -797,8 +799,8 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--seconds", type=float, default=0.0, help="0 means forever")
     monitor.add_argument(
         "--id-profile",
-        choices=["bms-canb", "default"],
-        default="bms-canb",
+        choices=["bms-can1", "default"],
+        default="bms-can1",
         help="BMS-owned 0x512..0x519 or factory 0x521..0x528",
     )
     monitor.add_argument("--show-raw", action="store_true")
@@ -937,7 +939,7 @@ def main(argv: Sequence[str]) -> int:
 
         if args.command == "readback":
             readback_data = tool.readback_shared()
-            expected = expected_bms_canb_config(
+            expected = expected_bms_can1_config(
                 startup=args.startup,
                 bitrate=args.bitrate,
                 positive_threshold_a=args.positive_threshold_a,
@@ -973,13 +975,13 @@ def main(argv: Sequence[str]) -> int:
             print_message("alive", alive)
             return 0
 
-        if args.command == "bms-canb-bitrate":
+        if args.command == "bms-can1-bitrate":
             response, alive = tool.switch_bms_canb_bitrate(args.target_bitrate, args.startup)
             print_message("rsp", response)
             print_message("alive", alive)
             print(
                 f"BMS-owned IVT now uses {args.target_bitrate}bps; "
-                f"command=0x{BMS_CANB_CMD_ID:03X} response=0x{BMS_CANB_RSP_ID:03X}"
+                f"command=0x{BMS_CAN1_CMD_ID:03X} response=0x{BMS_CAN1_RSP_ID:03X}"
             )
             return 0
 
@@ -988,15 +990,15 @@ def main(argv: Sequence[str]) -> int:
             print("setup-intel done")
             return 0
 
-        if args.command == "setup-bms-canb":
-            serial = tool.setup_bms_canb(
+        if args.command == "setup-bms-can1":
+            serial = tool.setup_bms_can1(
                 startup=args.startup,
                 serial_number=args.serial_number,
             )
             print(
-                f"setup-bms-canb done: serial=0x{serial:08X} "
-                f"command=0x{BMS_CANB_CMD_ID:03X} response=0x{BMS_CANB_RSP_ID:03X} "
-                f"results=0x{BMS_CANB_RESULT_IDS[0]:03X}..0x{BMS_CANB_RESULT_IDS[-1]:03X}"
+                f"setup-bms-can1 done: serial=0x{serial:08X} "
+                f"command=0x{BMS_CAN1_CMD_ID:03X} response=0x{BMS_CAN1_RSP_ID:03X} "
+                f"results=0x{BMS_CAN1_RESULT_IDS[0]:03X}..0x{BMS_CAN1_RESULT_IDS[-1]:03X}"
             )
             return 0
 

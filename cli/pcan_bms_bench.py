@@ -7,7 +7,7 @@
 3. 通过简单命令行交互注入从控离线、断线和温度故障；
 4. 查看主控最近一次回帧摘要，辅助告警/Flash 持久化测试。
 
-IVT-S 不由本脚本模拟。测试时把真实 IVT-S 接到 F405 的 CANB；本脚本不发送
+IVT-S 不由本脚本模拟。测试时把真实 IVT-S 接到 F405 的 CAN1；本脚本不发送
 `0x512`。需要在 CANB 上模拟 ECU SOP 确认时，可使用 `--canb-sop-ack`，该模式
 仍然只发送 `0x4A4`，不伪造 IVT 结果帧。
 
@@ -15,8 +15,8 @@ IVT-S 不由本脚本模拟。测试时把真实 IVT-S 接到 F405 的 CANB；�
     pip install python-can
 
 运行前需安装 PEAK 驱动与 PCANBasic。
-默认覆盖 CAN1 从控台架测试。加 `--canb-sop-ack` 后切换到 CANB，接收真实
-IVT 并校验 SOP、发送 ECU 确认。
+默认覆盖 CAN1 从控台架测试。加 `--canb-sop-ack` 后切换到 CANB，只校验 SOP
+并发送 ECU 确认。
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def build_sop_ack(limits: Sequence[int], status: Sequence[int]) -> can.Message:
 
 
 class BenchModel:
-    """F405 CAN1 从控台架模型；IVT 使用 CANB 上的真实设备。"""
+    """F405 CAN1 从控台架模型；IVT 使用同一 CAN1 上的真实设备。"""
 
     def __init__(self) -> None:
         self.slaves: List[SlaveState] = [
@@ -495,7 +495,7 @@ class CommandProcessor:
     def _status(self) -> str:
         lines = [
             f"估算累加: {self.model.estimated_pack_voltage_v():.3f}V",
-            "IVT-S: 使用 CANB 上的真实设备；脚本不发送 0x512",
+            "IVT-S: 使用 CAN1 上的真实设备；脚本不发送 0x512",
             f"单体断线: {len(self.model.open_wire_cells)} 温度断线: {len(self.model.open_wire_temps)}",
         ]
         for s in self.model.slaves:
@@ -682,10 +682,10 @@ class PcanBenchApp:
     def run(self) -> None:
         print(f"PCAN: {self.args.channel} @ {self.args.bitrate}bps")
         if self.args.sop_ack:
-            print("总线用途: CANB · 真实 IVT / ECU SOP 确认")
+            print("总线用途: CANB · ECU SOP 确认")
         else:
             print("总线用途: CAN1 · 六个从控台架")
-        print("IVT-S: 接入 F405 CANB 的真实设备；本脚本不发送 0x512")
+        print("IVT-S: 接入 F405 CAN1 的真实设备；本脚本不发送 0x512")
         print("ECU SOP确认: " + ("开启" if self.args.sop_ack else "关闭"))
         quiet = not self.args.live_rx
         print("脚本已启动。" + (" 安静模式，输入命令查看结果。" if quiet else " 实时打印主控回帧。"))
@@ -832,7 +832,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
     p.add_argument("--canb-sop-ack", "--sop-ack", dest="sop_ack", action="store_true",
-                   help="CANB ECU确认模式：接收真实 IVT，校验 0x4A0/0x4A3 并发送 0x4A4")
+                   help="CANB ECU确认模式：校验 0x4A0/0x4A3 并发送 0x4A4")
     return p.parse_args(argv)
 
 

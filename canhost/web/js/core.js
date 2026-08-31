@@ -153,8 +153,8 @@ async function init() {
     toast(`应用后端未就绪：${error}`, true);
     const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [
       { key: "can1", name: "CAN1 · F405 主控 / 从控 / 工具", bitrate: 500000 },
-      { key: "canb", name: "CANB · IVT / ECU / Chroma · 500 kbit/s", bitrate: 500000 },
-      { key: "canb_legacy", name: "CANB · Legacy / IVT · 250 kbit/s", bitrate: 250000 },
+      { key: "canb", name: "CANB · ECU / Chroma · 500 kbit/s", bitrate: 500000 },
+      { key: "canb_legacy", name: "CANB · Legacy · 250 kbit/s", bitrate: 250000 },
     ]};
     populateConnectionOptions(fallback);
     populateToolChannelOptions(fallback);
@@ -579,7 +579,7 @@ async function sendPendingCommand() {
     const pending = state.pendingIvtAction;
     $("#doConfirm").disabled = true;
     const result = pending.kind === "configure"
-      ? await state.api.configure_ivt_bms_canb(pending.options)
+      ? await state.api.configure_ivt_bms_can1(pending.options)
       : await state.api.switch_ivt_bitrate(pending.options);
     if (result.ok) {
       $("#confirmDialog").close();

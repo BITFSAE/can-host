@@ -8,18 +8,18 @@ from unittest.mock import Mock
 
 from canhost.transport import CanService
 from canhost.ivt import (
-    BMS_CANB_CMD_ID,
-    BMS_CANB_RSP_ID,
-    BMS_CANB_RESULT_IDS,
+    BMS_CAN1_CMD_ID,
+    BMS_CAN1_RSP_ID,
+    BMS_CAN1_RESULT_IDS,
     CHANNELS,
     IvtClient,
     IvtFrame,
     IVT_RESPONSE_MUXES,
     compare_readback,
-    expected_bms_canb_config,
+    expected_bms_can1_config,
     factory_config,
     parse_config_response,
-    resolve_bms_canb_periods,
+    resolve_bms_can1_periods,
 )
 
 
@@ -52,7 +52,7 @@ class FullFakeIvtTransport:
 
     def send(self, arbitration_id: int, data: list[int]) -> None:
         mux = data[0]
-        response_id = BMS_CANB_RSP_ID
+        response_id = BMS_CAN1_RSP_ID
         if mux == 0x7B:
             payload = [0xBB, *self.serial.to_bytes(4, "big"), 0, 0, 0]
         elif mux == 0x79:
@@ -66,18 +66,18 @@ class FullFakeIvtTransport:
         elif 0x60 <= mux <= 0x67:
             channel = CHANNELS[mux - 0x60]
             payload = [channel.rsp_mux, 0x42,
-                       (channel.bms_canb_period_ms >> 8) & 0xFF,
-                       channel.bms_canb_period_ms & 0xFF, 0, 0, 0, 0]
+                       (channel.bms_can1_period_ms >> 8) & 0xFF,
+                       channel.bms_can1_period_ms & 0xFF, 0, 0, 0, 0]
         elif 0x50 <= mux <= 0x57:
             channel = CHANNELS[mux - 0x50]
-            can_id = BMS_CANB_RESULT_IDS[channel.index]
+            can_id = BMS_CAN1_RESULT_IDS[channel.index]
             payload = [channel.can_id_rsp_mux, (can_id >> 8) & 0xFF, can_id & 0xFF,
                        *self.serial.to_bytes(4, "big"), 0]
         elif mux == 0x5D:
-            payload = [0x9D, (BMS_CANB_CMD_ID >> 8) & 0xFF, BMS_CANB_CMD_ID & 0xFF,
+            payload = [0x9D, (BMS_CAN1_CMD_ID >> 8) & 0xFF, BMS_CAN1_CMD_ID & 0xFF,
                        *self.serial.to_bytes(4, "big"), 0]
         elif mux == 0x5F:
-            payload = [0x9F, (BMS_CANB_RSP_ID >> 8) & 0xFF, BMS_CANB_RSP_ID & 0xFF,
+            payload = [0x9F, (BMS_CAN1_RSP_ID >> 8) & 0xFF, BMS_CAN1_RSP_ID & 0xFF,
                        *self.serial.to_bytes(4, "big"), 0]
         elif mux in (0x75, 0x76):
             payload = [0xB5 if mux == 0x75 else 0xB6, 0, 0, 0, 0, 0, 0, 0]
@@ -136,7 +136,7 @@ class IvtProtocolTest(unittest.TestCase):
         self.assertEqual(parsed["period_ms"], 60)
 
     def test_readback_classifies_target_and_factory_defaults(self) -> None:
-        target = expected_bms_canb_config()
+        target = expected_bms_can1_config()
         matching = readback_for(target)
         self.assertEqual(compare_readback(matching, target)["status_name"], "已配置且一致")
 
@@ -162,8 +162,8 @@ class IvtProtocolTest(unittest.TestCase):
         self.assertEqual(result["status_name"], "配置不符")
         self.assertTrue(any(item["field"] == "channel.U1.period_ms" for item in result["differences"]))
 
-    def test_bms_canb_periods_are_reduced_without_changing_factory_classification(self) -> None:
-        target = expected_bms_canb_config()
+    def test_bms_can1_periods_are_reduced_without_changing_factory_classification(self) -> None:
+        target = expected_bms_can1_config()
         factory = factory_config()
         self.assertEqual(
             {channel.name: target["channels"][channel.name]["period_ms"] for channel in CHANNELS},
@@ -176,29 +176,29 @@ class IvtProtocolTest(unittest.TestCase):
              "T": 100, "W": 30, "As": 30, "Wh": 30},
         )
 
-    def test_bms_canb_periods_accept_per_channel_overrides(self) -> None:
+    def test_bms_can1_periods_accept_per_channel_overrides(self) -> None:
         custom = {"I": 25, "u1": 80, "As": 120}
-        target = expected_bms_canb_config(channel_periods_ms=custom)
+        target = expected_bms_can1_config(channel_periods_ms=custom)
         self.assertEqual(target["channels"]["I"]["period_ms"], 25)
         self.assertEqual(target["channels"]["U1"]["period_ms"], 80)
         self.assertEqual(target["channels"]["As"]["period_ms"], 120)
         self.assertEqual(target["channels"]["U2"]["period_ms"], 100)
-        self.assertEqual(resolve_bms_canb_periods({"Wh": "250"})["Wh"], 250)
+        self.assertEqual(resolve_bms_can1_periods({"Wh": "250"})["Wh"], 250)
         for invalid in ({"I": 0}, {"U1": 65536}, {"unknown": 100}, {"I": True}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                resolve_bms_canb_periods(invalid)
+                resolve_bms_can1_periods(invalid)
 
     def test_complete_readback_uses_shared_target_definition(self) -> None:
         transport = FullFakeIvtTransport()
-        client = IvtClient(transport.send, transport.receive, cmd_id=BMS_CANB_CMD_ID, rsp_id=BMS_CANB_RSP_ID)
+        client = IvtClient(transport.send, transport.receive, cmd_id=BMS_CAN1_CMD_ID, rsp_id=BMS_CAN1_RSP_ID)
         readback = client.readback(bitrate=500000)
-        comparison = compare_readback(readback, expected_bms_canb_config())
+        comparison = compare_readback(readback, expected_bms_can1_config())
         self.assertEqual(comparison["status_name"], "已配置且一致")
-        self.assertEqual(readback["can_ids"]["response"], BMS_CANB_RSP_ID)
+        self.assertEqual(readback["can_ids"]["response"], BMS_CAN1_RSP_ID)
         self.assertEqual(readback["thresholds"]["negative"]["threshold_a"], 0)
 
     def test_bms_result_ids_are_the_expected_eight_ids(self) -> None:
-        self.assertEqual(BMS_CANB_RESULT_IDS, tuple(range(0x512, 0x51A)))
+        self.assertEqual(BMS_CAN1_RESULT_IDS, tuple(range(0x512, 0x51A)))
         self.assertIn(0x9D, IVT_RESPONSE_MUXES)
         self.assertIn(0x9F, IVT_RESPONSE_MUXES)
 
@@ -207,35 +207,35 @@ class IvtServiceBoundaryTest(unittest.TestCase):
     def test_service_passes_editable_periods_to_setup_and_comparison(self) -> None:
         periods = {"I": 25, "U1": 80, "U2": 90, "U3": 100,
                    "T": 110, "W": 120, "As": 130, "Wh": 140}
-        expected = expected_bms_canb_config(channel_periods_ms=periods)
+        expected = expected_bms_can1_config(channel_periods_ms=periods)
         client = Mock()
-        client.setup_bms_canb.return_value = readback_for(expected)
+        client.setup_bms_can1.return_value = readback_for(expected)
         service = CanService()
         try:
             service.connection.update({"connected": True, "mode": "pcan",
-                                       "bus_profile": "canb", "bitrate": 500000})
+                                       "bus_profile": "can1", "bitrate": 500000})
             service._probe_ivt_client = Mock(return_value=client)
-            result = service.configure_ivt_bms_canb({"channel_periods_ms": periods})
+            result = service.configure_ivt_bms_can1({"channel_periods_ms": periods})
             self.assertTrue(result["ok"])
             self.assertEqual(result["readback"]["comparison"]["status_name"], "已配置且一致")
-            self.assertEqual(client.setup_bms_canb.call_args.kwargs["channel_periods_ms"], periods)
+            self.assertEqual(client.setup_bms_can1.call_args.kwargs["channel_periods_ms"], periods)
         finally:
             service.disconnect()
 
-    def test_ivt_write_is_rejected_on_can1(self) -> None:
+    def test_ivt_write_is_rejected_on_canb(self) -> None:
         service = CanService()
         try:
-            service.connection.update({"connected": True, "mode": "pcan", "bus_profile": "can1", "bitrate": 500000})
+            service.connection.update({"connected": True, "mode": "pcan", "bus_profile": "canb", "bitrate": 500000})
             result = service.read_ivt_config()
             self.assertFalse(result["ok"])
-            self.assertIn("CANB", result["error"])
+            self.assertIn("CAN1", result["error"])
         finally:
             service.disconnect()
 
     def test_ivt_write_is_rejected_for_simulation(self) -> None:
         service = CanService()
         try:
-            service.connection.update({"connected": True, "mode": "simulation", "bus_profile": "canb", "bitrate": 500000})
+            service.connection.update({"connected": True, "mode": "simulation", "bus_profile": "can1", "bitrate": 500000})
             result = service.read_ivt_config()
             self.assertFalse(result["ok"])
             self.assertIn("真实 PCAN", result["error"])

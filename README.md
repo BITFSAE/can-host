@@ -1,6 +1,6 @@
 # BITFSAE CAN HOST
 
-BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度、故障与记录、参数与命令）+ 整车 CANB 总览（SOP、自有 IVT-S、赛会能量计、PDM 低压、ECU 四轮、胎温、整车风扇）+ MQTT 遥测故障订阅。主要面向 Windows + PCAN-USB。使用者操作、页面分工、连接关系和总线安全边界统一见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；进度、风险、验证和历史变更统一记录在 [`todo.md`](todo.md)。
+BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度、故障与记录、参数与命令）+ 整车 CANB 总览（SOP、赛会能量计、PDM 低压、ECU 四轮、胎温、整车风扇）+ MQTT 遥测故障订阅。自有 IVT-S 位于 CAN1，由 BMS 主监视和独立 IVT 配置页处理。主要面向 Windows + PCAN-USB。使用者操作、页面分工、连接关系和总线安全边界统一见 [`DOC/CAN上位机与工具使用.md`](DOC/CAN上位机与工具使用.md)。本文只保留安装、运行和发布信息；进度、风险、验证和历史变更统一记录在 [`todo.md`](todo.md)。
 
 接口权威：BMS 帧以 [BMS-MASTER-F405](https://github.com/BITFSAE/BMS-MASTER-F405) 固件与 `DOC/CAN通信协议.md` 为准；整车风扇以 [FanController](https://github.com/BITFSAE/FanController)、PDM 以 [PDM](https://github.com/BITFSAE/PDM) 固件仓库为准；整车 DBC 中央登记在 [vehicle-interfaces](https://github.com/BITFSAE/vehicle-interfaces)。
 
@@ -79,8 +79,8 @@ Windows 发布版左下角版本信息可点击，会打开“软件内更新”
 ```powershell
 # 1. 更新 canhost/__init__.py 的 __version__ 和 __version_date__，连同代码一起提交推送
 # 2. 打标签并推送，CI 自动构建并创建 Release；标签版本必须与 __version__ 一致
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 此后已有发布版会在启动时检测到新版本。示例版本号请按当前 `canhost/__init__.py` 的实际值替换。
@@ -94,7 +94,7 @@ git push origin v0.4.1
 | `canhost/decoders.py` | 全部 CAN 帧格式的唯一定义（SOP、包状态、IVT、赛会能量计、PDM、风扇、ECU、胎温） |
 | `canhost/bms/` | BMS 协议状态机、工具命令编码、BMS 模拟器 |
 | `canhost/vehicle/` | 整车协议状态机（含风扇命令应答）与整车模拟器 |
-| `canhost/ivt.py` | IVT 请求、响应解析和 BMS CANB 目标比较 |
+| `canhost/ivt.py` | IVT 请求、响应解析和 BMS CAN1 目标比较 |
 | `canhost/updater.py` | GitHub Release 检查、SHA256 校验、安全解压与 Windows 退出安装 |
 | `canhost/telemetry/` | MQTT 只读订阅、TelemetryFrame Protobuf 解码和故障变化记录 |
 | `canhost/web/` | 无网络依赖的 HTML/CSS/JavaScript 界面（`js/` 按页面模块拆分） |

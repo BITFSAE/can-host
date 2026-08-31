@@ -52,11 +52,12 @@ class Api:
 
     def bootstrap(self) -> dict[str, Any]:
         profiles = [
-            {"key": "can1", "name": "CAN1 · F405 主控 / 从控 / 工具", "bitrate": 500000, "writable": True},
-            {"key": "canb", "name": "CANB · IVT / ECU / Chroma · 500 kbit/s", "bitrate": 500000,
-             "writable": False, "ivt_writable": True},
-            {"key": "canb_legacy", "name": "CANB · Legacy / IVT · 250 kbit/s", "bitrate": 250000,
-             "writable": False, "ivt_writable": True},
+            {"key": "can1", "name": "CAN1 · F405 / 从控 / IVT / 工具", "bitrate": 500000,
+             "writable": True, "ivt_writable": True},
+            {"key": "canb", "name": "CANB · ECU / Chroma · 500 kbit/s", "bitrate": 500000,
+             "writable": False},
+            {"key": "canb_legacy", "name": "CANB · Legacy · 250 kbit/s", "bitrate": 250000,
+             "writable": False},
         ]
         if self._service.allow_simulation:
             profiles.insert(0, {
@@ -156,8 +157,8 @@ class Api:
         return self._bench_service.bench_snapshot()
 
     def connect_ivt(self, config: dict[str, Any]) -> dict[str, Any]:
-        profile = str(config.get("bus_profile") or "canb")
-        bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
+        profile = "can1"
+        bitrate = int(config.get("bitrate") or 500000)
         return self._ivt_service.connect({
             "mode": "pcan", "bus_profile": profile,
             "channel": config.get("channel"), "bitrate": bitrate,
@@ -241,8 +242,8 @@ class Api:
     def read_ivt_config(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._ivt_service.read_ivt_config(options)
 
-    def configure_ivt_bms_canb(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._ivt_service.configure_ivt_bms_canb(options)
+    def configure_ivt_bms_can1(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._ivt_service.configure_ivt_bms_can1(options)
 
     def switch_ivt_bitrate(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._ivt_service.switch_ivt_bitrate(options)

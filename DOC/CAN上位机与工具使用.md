@@ -14,7 +14,7 @@
 
 ### 整车总览与整车风扇
 
-整车总览在一个独立 CANB 连接上集中显示整车侧节点：SOP 限功率（0x4A0/0x4A3/0x4A4）、BMS 整车镜像（0x4B0/0x4B1）、自有 IVT-S 八通道（0x512–0x519）、赛会能量计（0x521/0x522/0x526/0x528）、PDM 低压两侧（0x5A0/0x5A1）、ECU 四轮调试帧（0x502/0x505–0x509）和轮胎温度（0x071–0x074）。
+整车总览在一个独立 CANB 连接上集中显示整车侧节点：SOP 限功率（0x4A0/0x4A3/0x4A4）、BMS 整车镜像（0x4B0/0x4B1）、赛会能量计（0x521/0x522/0x526/0x528）、PDM 低压两侧（0x5A0/0x5A1）、ECU 四轮调试帧（0x502/0x505–0x509）和轮胎温度（0x071–0x074）。自有 IVT-S 八通道位于 CAN1，由 BMS 主监视和 IVT 配置页处理。
 
 整车风扇页面共用同一条整车连接，查看 FanController 的三路转速、两路占空比、温度与故障，并发送模式、自动温控曲线和失联策略命令。命令带 CRC-8 并等待 FanController 按操作码和序号应答。
 
@@ -26,7 +26,7 @@
 
 ### IVT 配置
 
-IVT 配置用于首次安装或维护真实 IVT-S。它在 IVT 所在 CANB 上读取配置，判断当前设备是否已经与页面目标一致，并在需要时完整写入配置或切换 250/500 kbit/s 位率。它使用自己的独立连接，与整车连接互不影响。
+IVT 配置用于首次安装或维护真实 IVT-S。它使用独立 PCAN 连接读取配置，判断当前设备是否已经与 CAN1/500 kbit/s 目标一致，并在需要时完整写入配置或切换 250/500 kbit/s 位率。它与 BMS 主监视连接互不影响。
 
 ### MQTT 遥测故障
 
@@ -39,18 +39,20 @@ IVT 配置用于首次安装或维护真实 IVT-S。它在 IVT 所在 CANB 上�
 | 总线选项 | 位率 | 用途 | 上位机发送范围 |
 |---|---:|---|---|
 | CAN1 | 500 kbit/s | 从控原始采样、主控周期状态、F405 工具命令与应答 | F405 工具命令；台架页发送从控帧 |
-| CANB | 500 kbit/s | BMS 状态/故障/告警、SOP、IVT、赛会能量计、PDM、FanController、ECU、胎温 | IVT 厂商配置命令；整车风扇命令 `0x5A4` |
-| CANB Legacy | 250 kbit/s | Legacy 充电机和 BMS 状态/故障/告警 | IVT 厂商配置命令；整车风扇命令 `0x5A4` |
+| CAN1 | 500 kbit/s | BMS 从控、F405、自有 IVT-S 和工具 | F405 工具命令；独立连接下的 IVT 厂商配置命令 |
+| CANB | 500 kbit/s | BMS 状态/故障/告警、SOP、赛会能量计、PDM、FanController、ECU、胎温 | 整车风扇命令 `0x5A4` |
+| CANB Legacy | 250 kbit/s | Legacy 充电机和 BMS 状态/故障/告警 | 整车风扇命令 `0x5A4` |
 
 - 接口定义以 vehicle-interfaces 的 DBC 做团队中央登记，以各固件仓库的实现为最终依据；本仓库解析代码（`canhost/decoders.py`）与测试和两边保持同步。
 - F405 工具命令只从 CAN1 发送。整车连接是只读监视加 FanController 命令；BMS、ECU、Chroma 和 Legacy 报文按各自接收路径处理。
-- IVT 配置使用独立的 Command/Response ID。配置前先确认 PCAN 位率与 IVT 当前位率一致，并确认 CANB 上只有目标 IVT。
+- IVT 配置使用独立的 Command/Response ID。配置前先确认 PCAN 位率与 IVT 当前位率一致，并确认配置总线上只有目标 IVT；正式接入 F405 前切到 500 kbit/s。
 - 台架模拟从控工具只在自己的 CAN1 连接上发送六个从控帧；它不发送 IVT 结果帧。模拟数据、历史回放和 BMS 主监视连接都不能执行 IVT 配置。
 - 阈值、告警开关、充电请求、电流方向、充电机类型、RTC、Flash 日志清除、故障复位和全部整车风扇命令都要求逐次确认。电池箱内风扇由 F405 主控自动控制并经 CAN1 `0x186250F4` 上报，上位机只显示、不远程命令。
 - 风扇命令发给整车 CANB 上的 FanController，与 F405 主控无关。手动/关闭模式必须带 1..60 秒有效时间，到期 FanController 自动回到自动温控；需要保持手动转速时由操作者按短于有效时间的间隔重发，上位机不做自动续发。温控曲线和失联策略只保存在 FanController 的 RAM 中，复位后恢复默认。
 - 所有 F405 工具命令使用统一扩展 ID `0x18A050F5` 和协议版本 4；Byte0 高 4 位是版本、低 4 位是操作码，Byte1 是请求计数，固定 DLC=8。除 RTC 外均核对请求计数、命令码和主控 `0x18A650F4` 统一应答。
 - 配置类命令只在自检、待机或故障保持态处理。预充和高压闭合期间由主控拒绝；充电机类型还要求退出充电模式且高压状态机空闲。
 - 故障复位仍由主控检查实时告警和实体 HV_ACC 上高压请求是否已释放。上位机只发送请求，不替代主控的安全判断。
+- 单体过压阈值默认 4190mV。上位机输入框统一允许 3011..4500mV，但只有 Debug-Bringup 固件接受 4191..4500mV；该值由 F405 保存到 Flash，重新上电后仍按保存值生效。正式 Debug、Release 和 Release-Legacy 固件最高接受 4190mV。
 - 告警开关页面按 21 项整组写入。Debug-Bringup 中，电流传感器异常、IVT 包电压失联、从控未就绪和从控完全离线四项属于 HV_ON 动作开关；关闭只在已经进入 HV_ON 后影响保护动作，主控仍保留检测、故障码和告警等级明细。
 - MQTT 遥测连接只订阅明确 Topic，拒绝 `#` 和 `+` 通配符，不提供 publish。密码只交给后端建立本次连接，不写入浏览器本地存储、日志或快照；Broker、端口、Topic 和用户名会保存在本机页面设置中。
 
@@ -60,8 +62,9 @@ IVT 配置用于首次安装或维护真实 IVT-S。它在 IVT 所在 CANB 上�
 2. 在弹出的“BMS 主连接”弹窗中选择监视总线和 PCAN 通道。
    - 源码运行时会额外显示 `内置模拟数据 · CAN1 / 开发测试`，用于没有实体 PCAN 时的界面和协议开发；Windows 发布版不提供该项。
    - `CAN1 · F405 主控 / 从控 / 工具`：查看 138 串、48 路温度、F405 状态和发送 F405 工具命令。
-   - `CANB · IVT / ECU / Chroma · 500 kbit/s`：查看 CANB 上的 BMS 状态、IVT 结果和 500 kbit/s 充电链路。
-   - `CANB · Legacy / IVT · 250 kbit/s`：查看 Legacy 固定 250 kbit/s 链路。
+   - `CAN1 · F405 / 从控 / IVT / 工具 · 500 kbit/s`：查看 BMS 原始输入、主控状态和自有 IVT。
+   - `CANB · ECU / Chroma · 500 kbit/s`：查看 BMS 整车镜像、SOP 和 500 kbit/s 充电链路。
+   - `CANB · Legacy · 250 kbit/s`：查看 Legacy 固定 250 kbit/s 链路。
 3. 连接后先看“运行总览”的状态机、告警和关键电气量；需要定位时进入“电芯与温度”“故障与记录”或“CAN 监视器”。
 4. 需要改 F405 参数时进入“参数与命令”。界面会检查 CAN1、主控状态和状态帧新鲜度，每次写入都需要再次确认。PCAN 发送成功不代表主控已经接受，最终以主控应答和周期回报为准。
 
@@ -136,7 +139,7 @@ scenario openwire on 1
 
 ### 连接前准备
 
-1. 将 PCAN 和目标 IVT-S 接到 IVT 所在 CANB。
+1. 断开其他节点，只把 PCAN 和目标 IVT-S 接到配置总线。
 2. 总线上只保留目标 IVT 和 PCAN，暂时移除其他会响应 IVT 命令的节点。
 3. 在页面选择 PCAN 通道和 IVT 当前位率。第一次读取出厂设备通常使用 500 kbit/s；如果设备当前用于旧 Legacy 充电机，按设备当前实际位率选择 250 kbit/s。
 4. 点击“连接”。PCAN 位率必须与 IVT 当前位率一致，否则不会有有效应答。
@@ -149,22 +152,22 @@ scenario openwire on 1
 
 | 页面结果 | 含义 | 下一步 |
 |---|---|---|
-| 已配置且一致 | 当前配置与 F405 CANB 目标全部一致 | 可以断开配置通道，接入 F405 验证结果帧 |
-| 未配置 | 读取到出厂通道、地址和关闭过流阈值 | 首次接入 F405 前执行一次 BMS CANB 配置 |
+| 已配置且一致 | 当前配置与 F405 CAN1 目标全部一致 | 可以断开配置通道，接入 F405 验证结果帧 |
+| 未配置 | 读取到出厂通道、地址和关闭过流阈值 | 首次接入 F405 前执行一次 BMS CAN1 配置 |
 | 配置不符 | 只有部分项目一致，或存在被改过的参数 | 展开逐通道核对，确认后再配置 |
 
 页面主区域只显示现场需要的结果。逐通道周期、格式和差异放在“查看逐通道核对”中；当前 Command/Response ID 和过流核对值放在“高级”中，通常不需要修改。
 
-### 配置为 BMS CANB
+### 配置为 BMS CAN1
 
 当设备是首次安装、核对结果为“配置不符”，或需要调整通道周期时：
 
 1. 确认总线仍只有目标 IVT，且 PCAN 位率与 IVT 当前位率一致。
 2. 如有需要，在“高级”中填写目标上电模式和过流阈值；过流值为 0 表示关闭。
 3. 在“结果通道周期”中填写 I、U1、U2、U3、T、W、As、Wh 的发送周期。页面实时显示八通道合计帧率；默认 I 为 20 ms，其余为 100 ms。“载入读回周期”可把设备当前值填入输入框，再在当前值基础上调整。F405 当前约 360 ms 判通道超时，调整周期时要同步核对固件新鲜度窗口。
-4. 点击“配置为 BMS CANB”，在确认窗口核对通道、位率、目标地址和八个周期后确认。
+4. 确认当前为 500 kbit/s，点击“配置为 BMS CAN1”，在确认窗口核对通道、目标地址和八个周期后确认。
 5. 页面会停止 IVT，写入 BMS 目标配置，保存并重启 IVT，然后自动等待 Alive 和重新读取。
-6. 看到“已配置且一致”后，断开 PCAN，按 BMS-MASTER-F405 仓库 `DOC/IVT能量计配置与CANB切换.md` 的步骤接入 F405 CANB。
+6. 看到“已配置且一致”后，断开配置 PCAN，按 BMS-MASTER-F405 仓库 `DOC/IVT能量计配置与CANB切换.md` 的步骤接入 F405 CAN1。
 
 页面会先要求完成“读取并核对”：读回前配置按钮保持禁用；如果读回结果与当前输入目标一致，配置按钮保持禁用。修改任一通道周期后按钮重新启用，避免无变化时重复写入。
 
@@ -175,7 +178,7 @@ BMS 目标的现场摘要为：结果帧 `0x512..0x519`，通道格式 `0x42`（
 “旧充电机过渡”只改变 IVT 的 CAN 位率，不改变结果通道和 CAN ID：
 
 - 旧 Legacy 充电机链路需要 250 kbit/s 时，点击“切到 250 kbit/s”；
-- 回到 F405 当前 500 kbit/s CANB 链路前，点击“切到 500 kbit/s”。
+- 回到 F405 当前 CAN1/500 kbit/s 链路前，点击“切到 500 kbit/s”。
 
 点击后 IVT 会重启，上位机会关闭当前 PCAN、按目标位率重新打开并等待 Alive。切换前后的连接位率必须与设备实际位率匹配。Legacy 固定变体的安装位率由整车配置决定，运行中不反复切换。
 
@@ -287,12 +290,12 @@ Windows 发布版左下角的版本信息是“软件内更新”入口。程序
 ### 实体联调
 
 1. 先在低压、无高压输出条件下验证 PCAN 通道和位率。
-2. 整车连接接实车 CANB，逐卡确认 SOP、0x4B0、IVT、PDM、ECU、胎温有真实数据；核对 IVT U1 与 BMS 包电压一致性。
-3. 配置 IVT 后断开配置 PCAN，再接入 F405 CANB，检查 `0x512..0x519` 和 IVT 离线告警。
+2. 整车连接接实车 CANB，逐卡确认 SOP、0x4B0、PDM、ECU、胎温有真实数据。
+3. 配置 IVT 后断开配置 PCAN，再接入 F405 CAN1，检查 `0x512..0x519`、IVT 离线告警和 U1 与 BMS 包电压一致性。
 4. 旧 Legacy 链路分别验证 250 kbit/s 和回切 500 kbit/s 的 Alive、结果帧周期和 F405 接收状态。
 5. F405 工具命令、故障复位、Flash 日志和高压动作按 BMS-MASTER-F405 仓库 `DOC/调试与台架测试.md` 执行；本文不重复固件内部判定规则。
 
-项目级自动测试已覆盖从控映射、主控状态、故障与告警、工具命令编码和应答、IVT 协议与核对、CANB 写入边界、SOP/IVT/PDM/赛会能量计/ECU/胎温解码、风扇命令与应答、MQTT Payload 解码与故障变化、模拟链路和记录/回放。实体 PCAN、真实 MQTT Broker、真实 IVT、实车 CANB 各节点、赛会能量计实际发送行为、胎温轮位映射、F405 台架、充电机、Windows 发布包和长时间记录仍需现场验证；详细检查项见 [`todo.md`](../todo.md)。
+项目级自动测试已覆盖从控映射、主控状态、故障与告警、工具命令编码和应答、CAN1 IVT 协议、配置核对和结果帧、CANB 写入边界、SOP/PDM/赛会能量计/ECU/胎温解码、风扇命令与应答、MQTT Payload 解码与故障变化、模拟链路和记录/回放。实体 PCAN、真实 MQTT Broker、真实 IVT、实车 CANB 各节点、赛会能量计实际发送行为、胎温轮位映射、F405 台架、充电机、Windows 发布包和长时间记录仍需现场验证；详细检查项见 [`todo.md`](../todo.md)。
 
 ## 11. 文件职责和维护位置
 
@@ -302,8 +305,8 @@ Windows 发布版左下角的版本信息是“软件内更新”入口。程序
 | BMS 帧协议权威 | BMS-MASTER-F405 仓库 `DOC/CAN通信协议.md` 与固件 `App/bms_can_protocol.c` |
 | FanController 帧格式、命令和故障位 | FanController 仓库 `Doc/风扇控制.md` 与 `Core/Src/fan_controller.c` |
 | PDM 帧格式与无效值 | PDM 仓库 `Doc/CAN接口.md` 与 `Core/Src/pdm_monitor.c` |
-| 整车节点 DBC 中央登记 | vehicle-interfaces 仓库 `can/Vehicle_CanB.dbc`（本地路径与本仓库同级） |
-| IVT 设备目标配置、结果通道和 CANB 位率切换 | BMS-MASTER-F405 仓库 `DOC/IVT能量计配置与CANB切换.md` |
+| 整车节点 DBC 中央登记 | vehicle-interfaces 仓库 `can/Vehicle_Can1.dbc` 与 `can/Vehicle_CanB.dbc`（本地路径与本仓库同级） |
+| IVT 设备目标配置、结果通道和 CAN1/500kbps 接入 | BMS-MASTER-F405 仓库 `DOC/IVT能量计配置与CANB切换.md` |
 | 遥测 Proto 权威源 | vehicle-interfaces 仓库 `telemetry/fsae_telemetry.proto`；G473 同步副本在 `REFERENCE/protobuf-master` |
 | MQTT 订阅、快照和故障变化记录 | 本仓库 `canhost/telemetry/service.py` |
 | 遥测 Payload 展示解析与 Python 生成代码 | 本仓库 `canhost/telemetry/protocol.py`、`fsae_telemetry_pb2.py` 和 `Tests/test_telemetry.py` |

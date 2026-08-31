@@ -669,7 +669,7 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     if name == "alarm_thresholds":
         ov, uv = int(values["ov_mv"]), int(values["uv_mv"])
         ot, ut = int(values["ot_c"]) + 30, int(values["ut_c"]) + 30
-        if not (3011 <= ov <= 4190 and 3010 <= uv <= 4189 and ov > uv):
+        if not (3011 <= ov <= 4500 and 3010 <= uv <= 4189 and ov > uv):
             raise ValueError("电压阈值超出范围，或过压阈值未高于欠压阈值")
         if not (36 <= ot <= 95 and 5 <= ut <= 79 and ot > ut):
             raise ValueError("温度阈值超出范围，或过温阈值未高于低温阈值")

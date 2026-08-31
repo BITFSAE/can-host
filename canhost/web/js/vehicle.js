@@ -1,4 +1,4 @@
-/* 整车页面模块：CANB 整车连接 + 整车总览（SOP/IVT/赛会能量计/PDM/ECU/胎温/趋势）。 */
+/* 整车页面模块：CANB 整车连接 + 整车总览（SOP/赛会能量计/PDM/ECU/胎温/趋势）。 */
 
 const VEH_IVT_CHANNELS = [
   { key: "current_a", label: "电流", unit: "A", digits: 1 },
@@ -97,7 +97,6 @@ function buildVehicleStatics() {
   const channelCell = channel =>
     `<div class="veh-channel" data-channel="${channel.key}"><span>${channel.label}</span>`
     + `<b>等待数据</b><em>${channel.unit}</em><small class="veh-channel-state">未收到</small></div>`;
-  $("#vehIvtGrid").innerHTML = VEH_IVT_CHANNELS.map(channelCell).join("");
   $("#vehMeterGrid").innerHTML = VEH_METER_CHANNELS.map(channelCell).join("");
 
   const wheelRows = ["FL", "FR", "RL", "RR"].map((wheel, index) =>
@@ -194,11 +193,8 @@ function renderVehicle() {
   text("#vehPackAlarm", faultFresh ? fault.alarm_level_name || "—" : "—");
   text("#vehFaultCode", faultFresh ? fault.code_hex : "等待数据");
 
-  // -- IVT + competition meter --------------------------------------------
-  setVehChannel("#vehIvtGrid", VEH_IVT_CHANNELS, snapshot.ivt, SLOW_DATA_FRESH_MAX_S);
+  // -- Competition meter ---------------------------------------------------
   setVehChannel("#vehMeterGrid", VEH_METER_CHANNELS, snapshot.meter, SLOW_DATA_FRESH_MAX_S);
-  const ivtFresh = VEH_IVT_CHANNELS.some(channel => isFresh(snapshot.ivt?.[channel.key]?.age, SLOW_DATA_FRESH_MAX_S));
-  text("#vehIvtNote", ivtFresh ? "0x512–0x519 · 小端" : "0x512–0x519 · 等待数据");
   const meterFresh = VEH_METER_CHANNELS.some(channel => isFresh(snapshot.meter?.[channel.key]?.age, SLOW_DATA_FRESH_MAX_S));
   text("#vehMeterNote", meterFresh ? "0x521/0x522 · 大端" : "0x521/0x522 · 等待数据");
 

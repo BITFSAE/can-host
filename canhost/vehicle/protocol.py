@@ -2,8 +2,8 @@
 
 One instance represents the dedicated vehicle CANB connection.  It decodes
 every node the team monitors on the car: the BMS vehicle mirror (0x4B0/0x4B1),
-SOP trio (0x4A0/0x4A3/0x4A4), own IVT-S (0x512..0x519), competition energy
-meter (0x521/0x522/0x526/0x528), PDM low-voltage telemetry (0x5A0/0x5A1),
+SOP trio (0x4A0/0x4A3/0x4A4), competition energy meter
+(0x521/0x522/0x526/0x528), PDM low-voltage telemetry (0x5A0/0x5A1),
 FanController (0x5A2..0x5A7, including command acknowledgement tracking),
 ECU motor debug frames (0x502/0x505..0x509) and tyre temperatures
 (0x071..0x074).  Frame layouts come from canhost.decoders.
@@ -22,10 +22,9 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
                         decode_fan_ack, decode_fan_curve, decode_fan_diagnostic,
                         decode_fan_failsafe, decode_fan_status, decode_fan_power_status,
                         decode_fan_calib_status, decode_fault_fields,
-                        decode_ivt_result, decode_meter_result, decode_pack_status,
+                        decode_meter_result, decode_pack_status,
                         decode_pdm_side, decode_sop_limits, decode_sop_status,
                         decode_tire_temp_frame, format_raw_frame,
-                        IVT_RESULT_KEYS, IVT_RESULT_SCALES,
                         FAN_COMMAND_ACK_ID, FAN_CURVE_STATUS_ID, FAN_DIAGNOSTIC_ID,
                         FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID, FAN_POWER_STATUS_ID,
                         FAN_CALIB_STATUS_ID, PDM_BATTERY_ID, PDM_BUS_ID,
@@ -34,9 +33,6 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
 
 # Frames arriving slower than this are treated as timed out by the UI layer;
 # the backend always reports the raw age and lets the frontend decide.
-IVT_KEYS = IVT_RESULT_KEYS
-
-
 class VehicleProtocol:
     """Stateful decoder for the vehicle CANB channel."""
 
@@ -52,10 +48,6 @@ class VehicleProtocol:
         self.last_sop_limits_monotonic: float | None = None
         self.last_sop_status_monotonic: float | None = None
         self.last_sop_ack_monotonic: float | None = None
-        self.ivt: dict[str, dict[str, Any]] = {
-            key: {"value": None, "status": None, "counter": None, "valid": False}
-            for key in IVT_KEYS}
-        self.ivt_seen: dict[str, float | None] = {key: None for key in IVT_KEYS}
         self.meter: dict[str, dict[str, Any]] = {
             "current_a": {"value": None, "status": None, "counter": None},
             "u1_v": {"value": None, "status": None, "counter": None},
@@ -131,8 +123,6 @@ class VehicleProtocol:
         elif can_id == 0x4A4 and len(data) >= 8:
             self.sop["ecu_ack"] = decode_ecu_sop_ack(data)
             self.last_sop_ack_monotonic = now_mono
-        elif 0x512 <= can_id <= 0x519 and len(data) >= 6:
-            self._ingest_ivt(can_id, data, now_mono)
         elif can_id in METER_IDS and len(data) >= 6:
             expected_mux, key, scale = METER_IDS[can_id]
             result = decode_meter_result(data, expected_mux)
@@ -210,17 +200,6 @@ class VehicleProtocol:
                     "lv_current": self.pdm["bus"]["current_a"] if pdm_fresh else None,
                 })
 
-    def _ingest_ivt(self, can_id: int, data: bytes, now_mono: float) -> None:
-        mux = can_id - 0x512
-        result = decode_ivt_result(data, mux)
-        if result is None:
-            return
-        key = IVT_KEYS[mux]
-        self.ivt[key] = {"value": result["value"] * IVT_RESULT_SCALES[mux],
-                         "status": result["status"], "counter": result["counter"],
-                         "valid": result["status"] == 0}
-        self.ivt_seen[key] = now_mono
-
     # -- snapshots ----------------------------------------------------------
 
     def snapshot(self, connection: dict[str, Any]) -> dict[str, Any]:
@@ -237,7 +216,6 @@ class VehicleProtocol:
         sop["limits_age"] = age(now, self.last_sop_limits_monotonic)
         sop["status_age"] = age(now, self.last_sop_status_monotonic)
         sop["ecu_ack_age"] = age(now, self.last_sop_ack_monotonic)
-        ivt = {key: {**dict(channel), "age": age(now, self.ivt_seen[key])} for key, channel in self.ivt.items()}
         meter = {key: {**dict(channel), "age": age(now, self.meter_seen[key])} for key, channel in self.meter.items()}
         pdm = {side: {**dict(values), "age": age(now, self.pdm_seen[side])} for side, values in self.pdm.items()}
         fan = {key: dict(value) for key, value in self.fan.items()}
@@ -255,7 +233,7 @@ class VehicleProtocol:
         return {
             "connection": {**connection, "rx_count": self.rx_count, "tx_count": self.tx_count,
                            "last_rx_age": age(now, self.last_rx_monotonic)},
-            "pack": pack, "fault": fault, "sop": sop, "ivt": ivt, "meter": meter, "pdm": pdm,
+            "pack": pack, "fault": fault, "sop": sop, "meter": meter, "pdm": pdm,
             "fan": {**fan, "ack_history": list(self.fan_ack_history)},
             "ecu": {**ecu, "wheel_names": list(ECU_WHEEL_NAMES)},
             "tires": {**tires, "age": tire_age},

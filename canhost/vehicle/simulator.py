@@ -43,7 +43,7 @@ class VehicleSimulator:
     def _run(self) -> None:
         next_fast = 0.0    # 10 ms: ECU debug frames
         next_sop = 0.0     # 10 ms: SOP pair
-        next_mid = 0.0     # 100 ms: IVT, meter, tyres
+        next_mid = 0.0     # 100 ms: competition meter, tyres
         next_slow = 0.0    # 500 ms: pack, fault, PDM, fan
         while not self.stop_event.wait(0.005):
             now = time.monotonic()
@@ -55,7 +55,7 @@ class VehicleSimulator:
                 self._emit_sop()
             if now >= next_mid:
                 next_mid = now + 0.10
-                self._emit_ivt_and_meter()
+                self._emit_meter()
                 self._emit_tires()
             if now >= next_slow:
                 next_slow = now + 0.50
@@ -90,15 +90,9 @@ class VehicleSimulator:
         crc_input = bytes.fromhex("04 A0") + limits + bytes.fromhex("04 A3") + body
         self._send(0x4A3, body + bytes([crc8_sae_j1850(crc_input)]))
 
-    def _emit_ivt_and_meter(self) -> None:
+    def _emit_meter(self) -> None:
         _, current = self._pack()
         voltage, _ = self._pack()
-        values = [round(current * 1000), round(voltage * 1000), round(voltage * 1000),
-                  round(voltage * 1000), 251, round(voltage * current),
-                  0, self.tick % 400]
-        for mux, value in enumerate(values):
-            raw = int(value).to_bytes(4, "little", signed=True)
-            self._send(0x512 + mux, bytes([mux, self.tick & 0x0F]) + raw + b"\x00\x00")
         # Competition meter frames are big-endian and only current/U1 are
         # reliably present on the car.
         for can_id, mux, value in ((0x521, 0x00, round(current * 1000)), (0x522, 0x01, round(voltage * 1000))):

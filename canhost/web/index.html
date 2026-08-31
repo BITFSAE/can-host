@@ -269,7 +269,7 @@
               </header>
               <div class="panel-body">
                 <div class="field-grid">
-                  <label class="field"><span class="field-label">过压上限</span><span class="field-input"><input id="ovInput" type="number" min="3011" max="4190" placeholder="4190"><em>mV</em></span></label>
+                  <label class="field"><span class="field-label">过压上限</span><span class="field-input"><input id="ovInput" type="number" min="3011" max="4500" placeholder="4190"><em>mV</em></span></label>
                   <label class="field"><span class="field-label">欠压下限</span><span class="field-input"><input id="uvInput" type="number" min="3010" max="4189" placeholder="3100"><em>mV</em></span></label>
                   <label class="field"><span class="field-label">过温上限</span><span class="field-input"><input id="otInput" type="number" min="6" max="65" placeholder="60"><em>°C</em></span></label>
                   <label class="field"><span class="field-label">低温下限</span><span class="field-input"><input id="utInput" type="number" min="-25" max="49" placeholder="0"><em>°C</em></span></label>
@@ -405,11 +405,6 @@
               </dl>
             </article>
 
-            <article class="data-section vehicle-ivt-section">
-              <header><h3>自有 IVT-S</h3><span id="vehIvtNote" class="state-text">0x512–0x519 · 小端</span></header>
-              <div class="vehicle-channel-grid" id="vehIvtGrid"></div>
-            </article>
-
             <article class="data-section vehicle-meter-section">
               <header><h3>赛会能量计</h3><span id="vehMeterNote" class="state-text">0x521/0x522 · 大端</span></header>
               <div class="vehicle-channel-grid" id="vehMeterGrid"></div>
@@ -515,7 +510,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>IVT 能量计配置</h2>
-              <span class="tool-header-desc">CANB · 0x410/0x51A · 结果 0x512–0x519</span>
+              <span class="tool-header-desc">CAN1 · 0x410/0x51A · 结果 0x512–0x519</span>
             </div>
             <div class="tool-header-connection">
               <span id="ivtConfigStatus" class="tag neutral">未读取</span>
@@ -552,10 +547,10 @@
 
             <div class="ivt-action-stack">
               <article class="panel ivt-action-panel">
-                <header class="panel-head"><h3>配置为 BMS CANB</h3><span class="tag neutral">完整写入并复核</span></header>
+                <header class="panel-head"><h3>配置为 BMS CAN1</h3><span class="tag neutral">完整写入并复核</span></header>
                 <div class="panel-body">
                   <div class="ivt-action-fact"><b>配置目标</b><span>通道周期与格式 · 0x410 / 0x51A · 结果 0x512–0x519</span><small>保存到 IVT 非易失存储并重启读回</small></div>
-                  <button class="action-button" type="button" id="configureIvt">配置为 BMS CANB</button>
+                  <button class="action-button" type="button" id="configureIvt">配置为 BMS CAN1</button>
                 </div>
               </article>
 
@@ -585,7 +580,7 @@
                 <label class="field"><span class="field-label">Wh · 0x519</span><span class="field-input"><input id="ivtPeriodWh" data-ivt-period="Wh" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
               </div>
               <div class="ivt-period-footer">
-                <p class="ivt-period-note">这些值随“配置为 BMS CANB”写入并读回核对。F405 当前约 360 ms 判通道超时，调整周期时同时核对固件新鲜度窗口。</p>
+                <p class="ivt-period-note">这些值随“配置为 BMS CAN1”写入并读回核对。F405 当前约 360 ms 判通道超时，调整周期时同时核对固件新鲜度窗口。</p>
                 <button class="outline-button" type="button" id="loadIvtReadbackPeriods" disabled>载入读回周期</button>
               </div>
             </div>
@@ -1044,7 +1039,7 @@
             <option value="250000">250 kbit/s（旧充电机 / 过渡）</option>
           </select>
         </label>
-        <p class="note tight">整车 CANB 独立通道，用于整车总览遥测（SOP、IVT、赛会能量计、PDM、ECU、胎温）与风扇控制。可与 BMS CAN1 监视同时连接不同 PCAN 接口。</p>
+        <p class="note tight">整车 CANB 独立通道，用于整车总览遥测（SOP、赛会能量计、PDM、ECU、胎温）与风扇控制。自有 IVT 已迁到 CAN1，可由 BMS 主监视连接查看。</p>
         <div id="vehicleConnectError" class="modal-error hidden"></div>
       </div>
       <footer>
