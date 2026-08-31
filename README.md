@@ -79,8 +79,8 @@ Windows 发布版左下角版本信息可点击，会打开“软件内更新”
 ```powershell
 # 1. 更新 canhost/__init__.py 的 __version__ 和 __version_date__，连同代码一起提交推送
 # 2. 打标签并推送，CI 自动构建并创建 Release；标签版本必须与 __version__ 一致
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
 此后已有发布版会在启动时检测到新版本。示例版本号请按当前 `canhost/__init__.py` 的实际值替换。

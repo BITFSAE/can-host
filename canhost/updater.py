@@ -124,11 +124,9 @@ if ($OldPid -gt 0) {
     }
 }
 
+$backupPrefix = "$(Split-Path $AppDir -Leaf).old-"
+$backupDir = Split-Path $AppDir -Parent
 $backup = "$AppDir.old-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
-$stale = Get-ChildItem -LiteralPath (Split-Path $AppDir -Parent) -Filter "$(Split-Path $AppDir -Leaf).old-*" -Directory -ErrorAction SilentlyContinue
-foreach ($item in $stale) {
-    try { Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop } catch { Write-Log "stale cleanup failed $($item.FullName)" }
-}
 
 $movedOld = $false
 try {
@@ -137,15 +135,37 @@ try {
     Write-Log "old renamed $backup"
     Move-Item -LiteralPath $StagedDir -Destination $AppDir
     Write-Log "new moved"
+
     $newExe = Join-Path $AppDir $ExeName
-    $new = Start-Process -FilePath $newExe -WorkingDirectory $AppDir -WindowStyle Normal -PassThru
-    Start-Sleep -Seconds 3
-    if ($new -and $new.HasExited) {
-        Write-Log "new process exited code=$($new.ExitCode)"
-        throw "new process exited"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $newExe
+    $psi.WorkingDirectory = $AppDir
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+    $new = [System.Diagnostics.Process]::Start($psi)
+    Write-Log "new process started pid=$($new.Id)"
+
+    $deadline = (Get-Date).AddSeconds(8)
+    $ok = $false
+    while ((Get-Date) -lt $deadline) {
+        $new.Refresh()
+        if ($new.HasExited) {
+            Write-Log "new process exited early code=$($new.ExitCode)"
+            break
+        }
+        Start-Sleep -Milliseconds 250
+        $ok = $true
     }
+    if (-not $ok) {
+        throw "new process exited early"
+    }
+
     Write-Log "install success pid=$($new.Id)"
-    try { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop } catch { Write-Log "old backup cleanup failed" }
+    $stale = Get-ChildItem -LiteralPath $backupDir -Filter "$backupPrefix*" -Directory -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 1
+    foreach ($item in $stale) {
+        try { Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop } catch { Write-Log "stale cleanup failed $($item.FullName)" }
+    }
     try { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction Stop } catch { Write-Log "work cleanup failed" }
     exit 0
 } catch {
