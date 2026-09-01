@@ -200,14 +200,18 @@ class Api:
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self._vehicle_service.send_fan_command(name, values, acknowledged)
 
+    def send_battery_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
+        return self._vehicle_service.send_battery_fan_command(name, values, acknowledged)
+
     def start_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         opts = options or {}
         channel = int(opts.get("channel", 1))
         steps = opts.get("steps")
         hold_s = float(opts.get("hold_s", 6.0))
         max_current_a = float(opts.get("max_current_a", 18.0))
+        tier = str(opts.get("tier", "dcdc"))
         return self._vehicle_service.start_fan_calibration(
-            channel, steps, hold_s, max_current_a)
+            channel, steps, hold_s, max_current_a, tier)
 
     def confirm_dcdc_ready(self) -> dict[str, Any]:
         """操作者独立确认 DCDC 已实际供电。
@@ -229,6 +233,18 @@ class Api:
 
     def export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
         return self._vehicle_service.export_fan_calibration(format_type)
+
+    def start_battery_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        opts = options or {}
+        return self._vehicle_service.start_battery_fan_calibration(
+            opts.get("steps"), float(opts.get("hold_s", 5.0)),
+            float(opts.get("max_current_a", 18.0)))
+
+    def stop_battery_fan_calibration(self) -> dict[str, Any]:
+        return self._vehicle_service.stop_battery_fan_calibration()
+
+    def export_battery_fan_calibration(self) -> dict[str, Any]:
+        return self._vehicle_service.export_battery_fan_calibration()
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()

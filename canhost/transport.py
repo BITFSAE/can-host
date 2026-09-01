@@ -17,9 +17,10 @@ from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                            BmsProtocol, build_command, command_ack_matches)
-from .decoders import CanFrame, build_fan_command, fan_ack_matches
+from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
+                       build_bms_fan_command, bms_fan_ack_matches)
 from .vehicle.protocol import VehicleProtocol
-from .vehicle.calibration import FanCalibrationSession
+from .vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSession
 
 
 class CanService:
@@ -58,6 +59,7 @@ class CanService:
         self.replay_db_buffer: deque[tuple[Any, ...]] = deque()
         self.command_sequence = 0
         self.fan_command_sequence = 0
+        self.battery_fan_command_sequence = 0
         self.ivt_operation_lock = threading.Lock()
         self.ivt_rx_condition = threading.Condition(self.lock)
         self.ivt_rx_frames: deque[IvtFrame] = deque(maxlen=512)
@@ -74,6 +76,10 @@ class CanService:
         self.fan_calib_session = FanCalibrationSession(
             send_fn=self.send_fan_command,
             snapshot_fn=self.vehicle_snapshot
+        ) if self.protocol_kind == "vehicle" else None
+        self.battery_fan_calib_session = BatteryFanCalibrationSession(
+            send_fn=self.send_battery_fan_command,
+            snapshot_fn=self.vehicle_snapshot,
         ) if self.protocol_kind == "vehicle" else None
 
     def _new_protocol(self, clock=None) -> BmsProtocol | VehicleProtocol:
@@ -312,6 +318,47 @@ class CanService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def send_battery_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
+        if not acknowledged:
+            return {"ok": False, "error": "发送前必须确认本次写操作"}
+        if self.protocol_kind != "vehicle":
+            return {"ok": False, "error": "电池箱风扇命令通过整车 CANB 连接发送"}
+        with self.lock:
+            if not self.connection.get("connected"):
+                return {"ok": False, "error": "CAN 尚未连接"}
+            if self.connection.get("mode") != "pcan":
+                return {"ok": False, "error": "电池箱风扇命令只允许使用真实 PCAN 发送"}
+            if self.connection.get("bus_profile") not in {"canb", "canb_legacy"}:
+                return {"ok": False, "error": "电池箱风扇命令只允许从 CANB 发送"}
+            self.battery_fan_command_sequence = (self.battery_fan_command_sequence + 1) & 0xFF
+            sequence = self.battery_fan_command_sequence
+            self.protocol.battery_fan_acks.pop(sequence, None)
+        try:
+            frame = build_bms_fan_command(name, {**(values or {}), "_sequence": sequence})
+            import can
+            self.bus.send(can.Message(arbitration_id=frame.arbitration_id, data=frame.data,
+                                      is_extended_id=False, is_fd=False), timeout=0.2)
+            with self.lock:
+                self.protocol.ingest(frame)
+                self._record(frame)
+            deadline = time.monotonic() + 1.0
+            ack = None
+            while time.monotonic() < deadline:
+                with self.lock:
+                    candidate = self.protocol.battery_fan_acks.get(sequence)
+                    ack = candidate if candidate is not None and bms_fan_ack_matches(name, candidate) else None
+                if ack is not None:
+                    break
+                time.sleep(0.01)
+            if ack is None:
+                return {"ok": False, "sequence": sequence,
+                        "error": "BMS 电池箱风扇在 1.0s 内没有应答；请确认 F405 已上电且 CANB 位率正确"}
+            if not ack.get("accepted"):
+                return {"ok": False, "error": f"BMS 拒绝：{ack.get('result_name')}", "ack": ack}
+            return {"ok": True, "sequence": sequence, "message": ack.get("result_name"), "ack": ack}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def read_flash_fault_logs(self, limit: int = 50) -> dict[str, Any]:
         if self.protocol_kind != "bms":
             return {"ok": False, "error": "此连接不支持 F405 工具命令"}
@@ -386,14 +433,17 @@ class CanService:
             snap = self.protocol.snapshot(dict(self.connection))
             if self.fan_calib_session:
                 snap["fan"]["calib_session"] = self.fan_calib_session.get_snapshot()
+            if self.battery_fan_calib_session:
+                snap["battery_fan"]["calib_session"] = self.battery_fan_calib_session.get_snapshot()
             return snap
 
     def start_fan_calibration(self, channel: int = 1, steps: list[int] | None = None,
-                              hold_s: float = 4.0, max_current_a: float = 18.0) -> dict[str, Any]:
+                              hold_s: float = 4.0, max_current_a: float = 18.0,
+                              tier: str = "dcdc") -> dict[str, Any]:
         if not self.fan_calib_session:
             return {"ok": False, "error": "当前连接不支持风扇标定"}
         return self.fan_calib_session.start_sweep(
-            channel, steps, hold_s, max_current_a)
+            channel, steps, hold_s, max_current_a, tier)
 
     def stop_fan_calibration(self) -> dict[str, Any]:
         if not self.fan_calib_session:
@@ -406,6 +456,22 @@ class CanService:
         if format_type.lower() == "json":
             return {"ok": True, "data": self.fan_calib_session.export_json(), "format": "json"}
         return {"ok": True, "data": self.fan_calib_session.export_csv(), "format": "csv"}
+
+    def start_battery_fan_calibration(self, steps: list[int] | None = None,
+                                      hold_s: float = 5.0, max_current_a: float = 18.0) -> dict[str, Any]:
+        if not self.battery_fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
+        return self.battery_fan_calib_session.start(steps, hold_s, max_current_a)
+
+    def stop_battery_fan_calibration(self) -> dict[str, Any]:
+        if not self.battery_fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
+        return self.battery_fan_calib_session.abort()
+
+    def export_battery_fan_calibration(self) -> dict[str, Any]:
+        if not self.battery_fan_calib_session:
+            return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
+        return {"ok": True, "data": self.battery_fan_calib_session.export_csv(), "format": "csv"}
 
     def quick_snapshot(self) -> dict[str, Any]:
         """Small state polled by the always-visible quick-value strip."""

@@ -309,7 +309,7 @@
             </article>
 
             <article class="panel span-12 command-panel">
-              <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><small class="muted">21 项整组写入 · 关闭后仍上报</small></header>
+              <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><small class="muted">23 项整组写入 · 关闭后仍上报</small></header>
               <div class="panel-body">
                 <div id="switchList" class="switch-list"></div>
                 <div class="panel-foot"><button class="action-button" type="button" id="sendSwitches">写入告警开关</button></div>
@@ -746,12 +746,13 @@
               <!-- 风扇标定工作台 -->
               <article class="panel fan-calib-panel">
                 <header class="panel-head">
-                  <h3>风扇台架功率标定 (0x5A9)</h3>
+                  <h3>整车风扇两档功率标定 (0x5A9/0x5AE)</h3>
                   <span id="fanCalibStateTag" class="tag neutral">未激活</span>
                 </header>
                 <div class="panel-body">
                   <div class="field-grid fan-calib-fields">
                     <label class="field"><span class="field-label">标定通道</span><span class="field-input"><select id="fanCalibChannelSelect"><option value="1">回路 1 (PWM1, 双 2H4PU)</option><option value="2">回路 2 (PWM2, 单 2H6P)</option></select></span></label>
+                    <label class="field"><span class="field-label">供电档位</span><span class="field-input"><select id="fanCalibTierSelect"><option value="battery">低压电池</option><option value="dcdc">DCDC 高压</option></select></span></label>
                     <label class="field"><span class="field-label">稳态保持时间</span><span class="field-input"><input id="fanCalibHoldInput" type="number" min="3" max="10" value="6"><em>s</em></span></label>
                     <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="fanCalibMaxCurrentInput" type="number" min="5" max="20" value="18"><em>A</em></span></label>
                   </div>
@@ -761,6 +762,13 @@
                     <button class="outline-button" type="button" id="exportFanCalibCsv">导出 CSV 记录</button>
                     <button class="outline-button" type="button" id="exportFanCalibJson">导出 JSON 记录</button>
                   </div>
+                  <div class="field-grid fan-calib-fields">
+                    <label class="field"><span class="field-label">电池档上限</span><span class="field-input"><input id="fanBatteryCapInput" type="number" min="5" max="100" value="15"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">DCDC档上限</span><span class="field-input"><input id="fanDcdcCapInput" type="number" min="5" max="100" value="15"><em>%</em></span></label>
+                    <button class="action-button" type="button" id="commitFanCapsButton">保存两档上限</button>
+                    <button class="danger-outline" type="button" id="clearFanCapsButton">清除标定（恢复15%）</button>
+                  </div>
+                  <p id="fanCapsReport" class="fan-inline-note">未收到 0x5AE；保存前应先分别完成两档扫频。</p>
                   <div class="fan-calib-table-wrap">
                     <table class="data-table fan-calib-table" id="fanCalibTable">
                       <thead>
@@ -786,6 +794,54 @@
             </div>
 
             <div class="fan-control-column">
+              <article class="panel fan-control-panel">
+                <header class="panel-head">
+                  <h3>BMS 电池箱风扇 (0x5AA..0x5AD)</h3>
+                  <span id="batteryFanFreshTag" class="tag neutral">等待查询</span>
+                </header>
+                <div class="panel-body">
+                  <p id="batteryFanStatusText" class="fan-inline-note">发送查询后，F405 在限时窗口内回报状态。</p>
+                  <div class="field-grid fan-mode-fields">
+                    <label class="field"><span class="field-label">目标模式</span><span class="field-input"><select id="batteryFanModeSelect"><option value="0">自动温控</option><option value="1">手动调速</option><option value="2">强制停机</option></select></span></label>
+                    <label class="field"><span class="field-label">占空比</span><span class="field-input"><input id="batteryFanDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">租约</span><span class="field-input"><input id="batteryFanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                  </div>
+                  <div class="fan-quick-actions">
+                    <button class="outline-button" type="button" id="batteryFanQueryButton">查询状态</button>
+                    <button class="action-button" type="button" id="batteryFanControlButton">下发控制</button>
+                  </div>
+                  <h4>高压/DCDC 标定会话</h4>
+                  <div class="field-grid fan-mode-fields">
+                    <label class="field"><span class="field-label">稳态保持</span><span class="field-input"><input id="batteryFanAutoHoldInput" type="number" min="3" max="10" value="5"><em>s</em></span></label>
+                    <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="batteryFanAutoCurrentInput" type="number" min="5" max="20" value="18"><em>A</em></span></label>
+                  </div>
+                  <div class="fan-quick-actions">
+                    <button class="action-button" type="button" id="batteryFanAutoStartButton">自动阶梯扫频</button>
+                    <button class="danger-button" type="button" id="batteryFanAutoStopButton">安全中止</button>
+                    <button class="outline-button" type="button" id="batteryFanExportButton">导出CSV</button>
+                  </div>
+                  <p id="batteryFanCalibProgress" class="fan-inline-note">尚未运行自动扫频。</p>
+                  <div class="field-grid fan-mode-fields">
+                    <label class="field"><span class="field-label">动作</span><span class="field-input"><select id="batteryFanCalibAction"><option value="1">开始</option><option value="2">更新/续租</option><option value="3">停止</option></select></span></label>
+                    <label class="field"><span class="field-label">步骤</span><span class="field-input"><input id="batteryFanStepInput" type="number" min="0" max="255" value="0"></span></label>
+                    <label class="field"><span class="field-label">标定占空比</span><span class="field-input"><input id="batteryFanCalibDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">租约</span><span class="field-input"><input id="batteryFanCalibLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                  </div>
+                  <div class="fan-quick-actions">
+                    <button class="action-button" type="button" id="batteryFanCalibButton">发送标定步骤</button>
+                  </div>
+                  <div class="field-grid fan-mode-fields">
+                    <label class="field"><span class="field-label">35W Chroma上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">70W 高压上限</span><span class="field-input"><input id="batteryFanHvCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
+                  </div>
+                  <div class="fan-quick-actions">
+                    <button class="action-button" type="button" id="batteryFanCommitButton">提交35W/70W上限</button>
+                    <button class="danger-outline" type="button" id="batteryFanClearButton">清除标定</button>
+                  </div>
+                  <p class="fan-inline-note">标定只允许在非 Chroma 的稳定高压状态。用本页 PDM 功率读数扣除 0% 基线；停止会话后再提交。保存完成以 0x5AD 保存等待位清零为准，并需断电复核。</p>
+                </div>
+              </article>
+
               <article class="panel fan-control-panel">
                 <header class="panel-head">
                   <h3>运行模式设定</h3>
@@ -1066,7 +1122,7 @@
         </div>
         <label class="field">
           <span class="field-label">Topic</span>
-          <input id="telemetryTopic" autocomplete="off" value="fsae/telemetry" required>
+          <input id="telemetryTopic" autocomplete="off" value="fsae/telemetry/v1" required>
         </label>
         <label class="field">
           <span class="field-label">只读账号</span>

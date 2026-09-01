@@ -319,7 +319,7 @@ def format_alarm_levels(levels: Dict[str, int]) -> str:
 def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
     if len(data) < 2:
         return {}
-    return {
+    result = {
         "OV": (data[0] >> 7) & 1, "UV": (data[0] >> 6) & 1,
         "OT": (data[0] >> 5) & 1, "UT": (data[0] >> 4) & 1,
         "DV": (data[0] >> 3) & 1, "DT": (data[0] >> 2) & 1,
@@ -330,6 +330,14 @@ def decode_switch_frame(data: Sequence[int]) -> Dict[str, int]:
         "BATTUV": (data[1] >> 2) & 1, "BEEP": (data[1] >> 1) & 1,
         "SOCLO": data[1] & 1,
     }
+    if len(data) >= 3:
+        result.update({
+            "IVTLOSS": (data[2] >> 7) & 1, "LV1_BLK": (data[2] >> 6) & 1,
+            "LV2_BLK": (data[2] >> 5) & 1, "BSUNRDY": (data[2] >> 4) & 1,
+            "BSUOFF": (data[2] >> 3) & 1, "LBK": (data[2] >> 2) & 1,
+            "TBK": (data[2] >> 1) & 1,
+        })
+    return result
 
 
 def format_faults(faults: List[str]) -> str:

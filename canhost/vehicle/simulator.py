@@ -124,6 +124,12 @@ class VehicleSimulator:
                    + controller_temp.to_bytes(2, "big", signed=True) + bytes([42, 38]))
         self._send(0x5A6, bytes([35, 40, 60, 30, 20, 0, 0, 0]))
         self._send(0x5A7, bytes([1, 50, 50, 5, 50, 0, 0, 0]))
+        self._send(0x5A8, bytes([0x03, 42, 38, 42, 38, 180, 95, 0]))
+        self._send(0x5A9, bytes([0, 0, 0, 0, 0, 2, 0, 0]))
+        self._send(0x5AE, bytes([1, 15, 55, 1, 55, 3, 0, 0]))
+        battery_rpm = 2100 + round(300 * math.sin(self.tick / 6.0))
+        self._send(0x5AA, battery_rpm.to_bytes(2, "big") + bytes([40, 55, 0x08, 0x27, 0, 1]))
+        self._send(0x5AD, bytes([1, 35, 70, 35, 70, 0, 0, 0]))
 
     def _emit_ecu(self) -> None:
         phase = (self.tick % 60) / 60.0

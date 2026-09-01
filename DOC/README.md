@@ -15,7 +15,8 @@
 | 接口 | 权威位置 |
 |---|---|
 | F405 BMS 帧（CAN1/CANB） | `../BMS_MASTER_F405` 的 `DOC/CAN通信协议.md` 与 `App/bms_can_protocol.c` |
-| 整车风扇（0x5A2–0x5A7） | `../FanController` 的 `Doc/风扇控制.md` 与 `Core/Src/fan_controller.c` |
+| 整车风扇（0x5A2–0x5A9/0x5AE） | `../FanController` 的 `Doc/风扇控制.md` 与 `Core/Src/fan_controller.c` |
+| 电池箱风扇（0x5AA–0x5AD） | `../BMS_MASTER_F405` 的 `DOC/风扇控制.md` 与 `App/bms_fan.c` |
 | PDM 低压（0x5A0/0x5A1） | `../PDM` 的 `Doc/CAN接口.md` 与 `Core/Src/pdm_monitor.c` |
 | 整车 DBC 中央登记 | `../vehicle-interfaces` 的 `can/Vehicle_CanB.dbc` |
 | MQTT 遥测 Protobuf | `../vehicle-interfaces` 的 `telemetry/fsae_telemetry.proto`；固件/服务器同步副本在 `../CANRS485_G473/REFERENCE/protobuf-master` |

@@ -54,21 +54,25 @@ function bindFanControls() {
   });
 
   // Calibration controls
+  $("#fanCalibTierSelect")?.addEventListener("change", () => {
+    $("#fanCalibMaxCurrentInput").value = $("#fanCalibTierSelect").value === "battery" ? "8" : "18";
+  });
   $("#startFanCalibButton")?.addEventListener("click", () => {
     if (!fanConnectionAvailable()) return toast("请先连接 CANB", true);
     const channel = +$("#fanCalibChannelSelect").value || 1;
     const hold_s = +$("#fanCalibHoldInput").value || 6;
     const max_current_a = +$("#fanCalibMaxCurrentInput").value || 18;
+    const tier = $("#fanCalibTierSelect")?.value || "dcdc";
     const chName = channel === 2 ? "回路 2 (PWM2 · 单 2H6P)" : "回路 1 (PWM1 · 双 2H4PU)";
     // 计划 11.1：开始标定前必须由操作者逐次确认现场安全条件。
     confirmFanAction(
       "启动风扇自动扫频标定",
-      `标定通道 ${chName}\n稳态保持 ${hold_s} s · 总线电流保护 ${max_current_a} A\n\n`
+      `标定通道 ${chName}\n供电档位 ${tier === "battery" ? "低压电池" : "DCDC 高压"}\n稳态保持 ${hold_s} s · 总线电流保护 ${max_current_a} A\n\n`
       + "标定期间该回路会按阶梯从 0% 扫到 100% 再扫回，三台风扇会高速运转。\n"
       + "任一安全条件（温度、PDM、供电、停转、电流）触发都会自动中止并恢复自动温控。",
       "我已确认车辆静止、车轮安全、风道无遮挡，且人员远离旋转部件。",
       async () => {
-        const res = await pywebview.api.start_fan_calibration({ channel, hold_s, max_current_a });
+        const res = await pywebview.api.start_fan_calibration({ channel, hold_s, max_current_a, tier });
         if (res && res.ok) {
           toast("风扇自动扫频标定已启动");
         } else {
@@ -76,6 +80,71 @@ function bindFanControls() {
         }
       });
   });
+
+  $("#commitFanCapsButton")?.addEventListener("click", () => {
+    const battery_cap_pct = +$("#fanBatteryCapInput").value;
+    const dcdc_cap_pct = +$("#fanDcdcCapInput").value;
+    confirmFanCommand("fan_calib", { action: 5, battery_cap_pct, dcdc_cap_pct },
+      "保存整车风扇两档上限", `低压电池 ${battery_cap_pct}% · DCDC ${dcdc_cap_pct}%\n将写入 FanController 双页 Flash。`);
+  });
+  $("#clearFanCapsButton")?.addEventListener("click", () => {
+    confirmFanCommand("fan_calib", { action: 6 }, "清除整车风扇标定",
+      "清除两档保存值并恢复未标定 15% 上限。", true);
+  });
+
+  const sendBatteryFan = (name, values, title, message, destructive = false) => {
+    confirmFanAction(title, message, "我已核对电池箱风扇、供电状态和旋转部件安全。", async () => {
+      const res = await pywebview.api.send_battery_fan_command(name, values, true);
+      toast(res?.ok ? (res.message || "电池箱风扇命令已执行") : `命令失败：${res?.error || "未知原因"}`, !res?.ok);
+    }, destructive);
+  };
+  $("#batteryFanQueryButton")?.addEventListener("click", () => sendBatteryFan(
+    "battery_fan_query", {}, "查询电池箱风扇", "开启 5 秒状态上报窗口。"));
+  $("#batteryFanControlButton")?.addEventListener("click", () => {
+    const mode = +$("#batteryFanModeSelect").value;
+    sendBatteryFan("battery_fan_control", {
+      mode, duty_pct: mode === 1 ? (+$("#batteryFanDutyInput").value || 0) : 0,
+      lease_s: mode === 0 ? 0 : (+$("#batteryFanLeaseInput").value || 10),
+    }, "控制电池箱风扇", `模式 ${["自动", "手动", "关闭"][mode]}；普通手动仍受当前 35W/70W 上限约束。`, mode === 2);
+  });
+  $("#batteryFanAutoStartButton")?.addEventListener("click", () => {
+    confirmFanAction("确认电池箱风扇自动扫频", "将先查询状态，再采集0%基线并逐档计算增量功率，完成后给出35W/70W建议上限。",
+      "我已确认车辆静止、高压/DCDC稳定、风道无遮挡且人员远离旋转部件。", async () => {
+        const query = await pywebview.api.send_battery_fan_command("battery_fan_query", {}, true);
+        if (!query?.ok) return toast(`查询失败：${query?.error || "未知原因"}`, true);
+        await new Promise(resolve => setTimeout(resolve, 700));
+        const res = await pywebview.api.start_battery_fan_calibration({
+          hold_s: +$("#batteryFanAutoHoldInput").value || 5,
+          max_current_a: +$("#batteryFanAutoCurrentInput").value || 18,
+        });
+        toast(res?.ok ? "电池箱风扇自动扫频已启动" : `启动失败：${res?.error || "未知原因"}`, !res?.ok);
+      });
+  });
+  $("#batteryFanAutoStopButton")?.addEventListener("click", async () => {
+    const res = await pywebview.api.stop_battery_fan_calibration();
+    toast(res?.ok ? "已中止电池箱风扇标定" : `中止失败：${res?.error || "未知原因"}`, !res?.ok);
+  });
+  $("#batteryFanExportButton")?.addEventListener("click", async () => {
+    const res = await pywebview.api.export_battery_fan_calibration();
+    if (res?.ok) downloadFile(res.data, `battery_fan_calibration_${Date.now()}.csv`, "text/csv");
+    else toast(`导出失败：${res?.error || "未知原因"}`, true);
+  });
+  $("#batteryFanCalibButton")?.addEventListener("click", () => {
+    const action = +$("#batteryFanCalibAction").value;
+    sendBatteryFan("battery_fan_calib", {
+      action, step: +$("#batteryFanStepInput").value || 0,
+      duty_pct: action === 3 ? 0 : (+$("#batteryFanCalibDutyInput").value || 0),
+      lease_s: action === 3 ? 0 : (+$("#batteryFanCalibLeaseInput").value || 10),
+    }, "发送电池箱风扇标定步骤", "标定会话可越过当前运行上限；离开高压、超温、停转或租约到期会立即中止。", action === 3);
+  });
+  $("#batteryFanCommitButton")?.addEventListener("click", () => {
+    const chroma_cap_pct = +$("#batteryFanChromaCapInput").value;
+    const hv_cap_pct = +$("#batteryFanHvCapInput").value;
+    sendBatteryFan("battery_fan_commit", { chroma_cap_pct, hv_cap_pct },
+      "提交电池箱风扇功率上限", `35W Chroma ${chroma_cap_pct}% · 70W 高压 ${hv_cap_pct}%\n停止有效标定会话后才能提交。`);
+  });
+  $("#batteryFanClearButton")?.addEventListener("click", () => sendBatteryFan(
+    "battery_fan_clear", {}, "清除电池箱风扇标定", "清除保存值并恢复两档 55% 上限；只允许未上高压且非充电时执行。", true));
 
   $("#abortFanCalibButton")?.addEventListener("click", async () => {
     try {
@@ -192,6 +261,7 @@ function renderFan() {
   const status = fan.status || {};
   const diag = fan.diagnostic || {};
   const power = fan.power_status || {};
+  const limits = fan.calib_limits || {};
   const statusFresh = isFresh(fan.status_age);
   const diagFresh = isFresh(fan.diagnostic_age);
   const powerFresh = isFresh(fan.power_status_age);
@@ -269,6 +339,14 @@ function renderFan() {
   text("#fanPowerLimitReason", powerFresh ? (power.power_limit_name || "未知") : "—");
   text("#fanCurrentBudget", powerFresh && power.current_budget_a != null ? `${power.current_budget_a} A` : "—");
   text("#fanPredictedCurrent", powerFresh && power.predicted_current_a != null ? `${power.predicted_current_a} A` : "—");
+  const limitsFresh = isFresh(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S);
+  text("#fanCapsReport", limitsFresh
+    ? `0x5AE · ${limits.calibrated ? "已标定" : "未标定"} · 电池 ${limits.battery_cap_pct}% · DCDC ${limits.dcdc_cap_pct}% · 当前 ${limits.active_cap_pct}%${limits.flash_error ? " · Flash错误" : ""}`
+    : "未收到 0x5AE；保存前应先分别完成两档扫频。");
+  if (limitsFresh) {
+    $("#fanBatteryCapInput").value = limits.battery_cap_pct;
+    $("#fanDcdcCapInput").value = limits.dcdc_cap_pct;
+  }
 
   // Render Fault Badges
   $$("#page-fan [data-fan-fault]").forEach(chip => {
@@ -371,4 +449,35 @@ function renderFan() {
       `).join("");
     }
   }
+
+  const batteryFan = snapshot.battery_fan || {};
+  const batteryStatus = batteryFan.status || {};
+  const batteryCalib = batteryFan.calibration || {};
+  const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
+  text("#batteryFanFreshTag", batteryFresh ? `0x5AA · ${fmt(batteryFan.status_age, 1)} s 前` : "等待查询");
+  text("#batteryFanStatusText", batteryFresh
+    ? `${batteryStatus.mode_name} · ${batteryStatus.power_source_name} · ${batteryStatus.actual_duty_pct}% / 上限 ${batteryStatus.active_limit_pct}% · ${batteryStatus.rpm} RPM`
+    : "发送查询后，F405 在限时窗口内回报状态。");
+  if (isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S)) {
+    $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
+    $("#batteryFanHvCapInput").value = batteryCalib.hv_cap_pct;
+    text("#batteryFanStatusText", `${$("#batteryFanStatusText").textContent} · ${batteryCalib.calibrated ? "已标定" : "未标定"}${batteryCalib.save_pending ? " · 等待Flash保存" : ""}`);
+  }
+  const batterySession = batteryFan.calib_session || {};
+  const batteryRecords = batterySession.records || [];
+  const suggested = batterySession.suggested_caps || {};
+  text("#batteryFanCalibProgress", batterySession.status === "running"
+    ? `自动扫频中：步骤 ${batterySession.current_step || 0}，已记录 ${batteryRecords.length} 点`
+    : batterySession.status === "completed"
+      ? `自动扫频完成：建议35W ${suggested.chroma_cap_pct}% / 70W ${suggested.hv_cap_pct}%；复核CSV后再提交。`
+      : batterySession.status === "aborted" ? `已中止：${batterySession.abort_reason || "未知原因"}` : "尚未运行自动扫频。");
+  if (batterySession.status === "completed") {
+    $("#batteryFanChromaCapInput").value = suggested.chroma_cap_pct;
+    $("#batteryFanHvCapInput").value = suggested.hv_cap_pct;
+  }
+  ["#batteryFanQueryButton", "#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanCommitButton", "#batteryFanClearButton",
+   "#batteryFanAutoStartButton", "#batteryFanAutoStopButton", "#batteryFanExportButton",
+   "#commitFanCapsButton", "#clearFanCapsButton"].forEach(id => { if ($(id)) $(id).disabled = !available; });
+  if ($("#batteryFanAutoStartButton")) $("#batteryFanAutoStartButton").disabled = !available || batterySession.status === "running";
+  if ($("#batteryFanAutoStopButton")) $("#batteryFanAutoStopButton").disabled = batterySession.status !== "running";
 }

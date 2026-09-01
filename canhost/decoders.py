@@ -84,7 +84,7 @@ CANB_OCCUPIED_WITHOUT_CHROMA = {
     0x300, 0x301, 0x305, 0x310, 0x430,
     0x4A0, 0x4A3, 0x4A4, 0x4B0, 0x4B1, 0x4B2,
     *range(0x502, 0x50A),
-    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5AA), 0x700, 0x784,
+    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5AF), 0x700, 0x784,
 }
 if CHROMA_ACK_STD_ID > 0x7FF or len(CHROMA_DERIVED_STD_IDS) != 6:
     raise RuntimeError("Chroma 节点基准派生出的 ID 超出 11 位范围或发生内部重复")
@@ -142,6 +142,11 @@ CANB_IDS = {
     0x5A7: "风扇失联策略状态",
     0x5A8: "风扇功率仲裁状态",
     0x5A9: "风扇标定状态",
+    0x5AA: "BMS 电池箱风扇状态",
+    0x5AB: "BMS 电池箱风扇命令",
+    0x5AC: "BMS 电池箱风扇应答",
+    0x5AD: "BMS 电池箱风扇标定状态",
+    0x5AE: "风扇两档标定限值",
     0x1806E5F4: "Legacy 充电请求",
     0x18FF50E5: "Legacy 充电反馈",
 }
@@ -314,13 +319,14 @@ FAN_CURVE_STATUS_ID = 0x5A6
 FAN_FAILSAFE_STATUS_ID = 0x5A7
 FAN_POWER_STATUS_ID = 0x5A8
 FAN_CALIB_STATUS_ID = 0x5A9
+FAN_CALIB_LIMITS_ID = 0x5AE
 
 FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
 FAN_FAILSAFE_NAMES = {0: "保持最后目标", 1: "固定保底", 2: "全速"}
 FAN_RESULT_NAMES = {
     0: "成功", 1: "CRC 错误", 2: "长度错误", 3: "参数错误",
     4: "操作码不支持", 5: "模式超时，已回到自动",
-    6: "安全门控拦截（非DCDC就绪或超温）",
+    6: "安全门控拦截（供电状态或温度不允许）", 7: "Flash 保存失败",
 }
 FAN_FAULT_NAMES = [
     "风扇 1 无转速", "风扇 2 无转速", "风扇 3 无转速", "电机温度超时",
@@ -338,7 +344,7 @@ FAN_CALIB_STATE_NAMES = {
     0: "未激活", 1: "标定中", 2: "已中止", 3: "已完成",
 }
 FAN_CALIB_ABORT_NAMES = {
-    0: "无", 1: "DCDC供电丢失", 2: "PDM遥测超时", 3: "总线功率受限",
+    0: "无", 1: "供电状态变化", 2: "PDM遥测超时", 3: "总线功率受限",
     4: "温度超限", 5: "风扇停转", 6: "租约超时", 7: "用户停止",
 }
 FAN_COMMAND_CODES = {
@@ -465,6 +471,17 @@ def decode_fan_calib_status(data: bytes) -> dict[str, Any]:
     }
 
 
+def decode_fan_calib_limits(data: bytes) -> dict[str, Any]:
+    flags = data[0]
+    return {
+        "calibrated": bool(flags & 0x01), "flash_error": bool(flags & 0x02),
+        "battery_cap_pct": data[1], "dcdc_cap_pct": data[2],
+        "active_tier": data[3],
+        "active_tier_name": {0: "低压电池", 1: "DCDC"}.get(data[3], f"未知 {data[3]}"),
+        "active_cap_pct": data[4], "protocol_version": data[5],
+    }
+
+
 def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     """Build a validated FanController command frame (CANB 0x5A4, DLC 8).
 
@@ -524,27 +541,154 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
             raise ValueError("占空比下降速度必须在 10..100 %/s")
         return command_frame(0x03, bytes([strategy, fallback1, fallback2, hold_s, ramp_down]))
     if name == "fan_calib":
-        action = int(values.get("action", 1)) # 1=Start, 2=Lease/Update, 3=Stop, 4=ConfirmDcdc
+        action = int(values.get("action", 1))
         step = int(values.get("step", 0)) & 0xFF
         duty1 = int(values.get("duty1_pct", 0))
         duty2 = int(values.get("duty2_pct", 0))
         lease_s = int(values.get("lease_s", 10))
-        if action not in (1, 2, 3, 4):
-            raise ValueError("标定动作必须是 1=启动、2=续约、3=停止 或 4=确认DCDC就绪")
+        if action not in (1, 2, 3, 4, 5, 6):
+            raise ValueError("标定动作必须在 1..6")
         if not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
             raise ValueError("占空比必须在 0..100 %")
-        if action not in (3,) and not 1 <= lease_s <= 60:
+        if action in (1, 2, 4) and not 1 <= lease_s <= 60:
             raise ValueError("标定租约必须在 1..60 秒")
         if action == 3:
             duty1 = duty2 = lease_s = 0
         if action == 4:
             step = duty1 = duty2 = 0
+        if action == 5:
+            battery_cap = int(values.get("battery_cap_pct", 0))
+            dcdc_cap = int(values.get("dcdc_cap_pct", 0))
+            if not (5 <= battery_cap <= 100 and 5 <= dcdc_cap <= 100):
+                raise ValueError("电池/DCDC 标定上限必须在 5..100 %")
+            return command_frame(0x08, bytes([5, battery_cap, dcdc_cap, 0xA5, 0]))
+        if action == 6:
+            return command_frame(0x08, bytes([6, 0xA5, 0x5A, 0, 0]))
         return command_frame(0x08, bytes([action, step, duty1, duty2, lease_s]))
     if name == "fan_restore_defaults":
         return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
     if name == "fan_query":
         return command_frame(0x05, bytes([0, 0, 0, 0, 0]))
     raise ValueError(f"未知风扇命令：{name}")
+
+
+# ---------------------------------------------------------------------------
+# F405 battery-box fan CANB 0x5AA..0x5AD and CAN1 0x186E50F4
+# ---------------------------------------------------------------------------
+
+BMS_FAN_STATUS_ID = 0x5AA
+BMS_FAN_COMMAND_ID = 0x5AB
+BMS_FAN_ACK_ID = 0x5AC
+BMS_FAN_CALIB_ID = 0x5AD
+BMS_FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
+BMS_FAN_SOURCE_NAMES = {0: "低压/未识别", 1: "Chroma 35W", 2: "高压/DCDC 70W"}
+BMS_FAN_RESULT_NAMES = {
+    0: "成功", 1: "CRC 错误", 2: "DLC 错误", 3: "参数错误",
+    4: "操作码不支持", 5: "租约到期", 6: "安全条件拒绝", 7: "Flash 不可用",
+}
+BMS_FAN_COMMAND_CODES = {
+    "battery_fan_control": 0x01, "battery_fan_query": 0x02,
+    "battery_fan_calib": 0x03, "battery_fan_commit": 0x04,
+    "battery_fan_clear": 0x05,
+}
+
+
+def _decode_bms_fan_flags(flags: int) -> dict[str, bool]:
+    return {
+        "hardware_ready": bool(flags & 0x01), "target_active": bool(flags & 0x02),
+        "speed_detected": bool(flags & 0x04), "manual_mode": bool(flags & 0x08),
+        "stall_confirmed": bool(flags & 0x10), "calibrated": bool(flags & 0x20),
+        "remote_lease_active": bool(flags & 0x40), "calibration_active": bool(flags & 0x80),
+    }
+
+
+def decode_bms_fan_status(data: bytes) -> dict[str, Any]:
+    mode, source = data[4] & 0x03, (data[4] >> 2) & 0x03
+    return {
+        "rpm": u16be(data), "actual_duty_pct": data[2], "active_limit_pct": data[3],
+        "mode": mode, "mode_name": BMS_FAN_MODE_NAMES.get(mode, f"未知 {mode}"),
+        "power_source": source, "power_source_name": BMS_FAN_SOURCE_NAMES.get(source, f"未知 {source}"),
+        "flags": _decode_bms_fan_flags(data[5]), "lease_remaining_s": data[6],
+        "protocol_version": data[7],
+    }
+
+
+def decode_bms_fan_detail(data: bytes) -> dict[str, Any]:
+    mode, source = data[6] & 0x03, (data[6] >> 2) & 0x03
+    return {
+        "rpm": u16be(data), "actual_duty_pct": u16be(data, 2) / 10.0,
+        "active_limit_pct": u16be(data, 4) / 10.0,
+        "mode": mode, "mode_name": BMS_FAN_MODE_NAMES.get(mode, f"未知 {mode}"),
+        "power_source": source, "power_source_name": BMS_FAN_SOURCE_NAMES.get(source, f"未知 {source}"),
+        "flags": _decode_bms_fan_flags(data[7]),
+    }
+
+
+def decode_bms_fan_ack(data: bytes) -> dict[str, Any]:
+    result = data[2]
+    return {
+        "opcode": data[0], "sequence": data[1], "result": result,
+        "result_name": BMS_FAN_RESULT_NAMES.get(result, f"未知 {result}"), "accepted": result == 0,
+        "mode": data[3], "mode_name": BMS_FAN_MODE_NAMES.get(data[3], f"未知 {data[3]}"),
+        "actual_duty_pct": data[4], "active_limit_pct": data[5],
+        "flags": _decode_bms_fan_flags(data[6]), "power_source": data[7],
+        "power_source_name": BMS_FAN_SOURCE_NAMES.get(data[7], f"未知 {data[7]}"),
+    }
+
+
+def decode_bms_fan_calib(data: bytes) -> dict[str, Any]:
+    state, abort = data[5] & 0x0F, (data[5] >> 4) & 0x0F
+    return {
+        "calibrated": bool(data[0] & 0x01), "save_pending": bool(data[0] & 0x02),
+        "chroma_cap_pct": data[1], "hv_cap_pct": data[2],
+        "chroma_budget_w": data[3], "hv_budget_w": data[4],
+        "calib_state": state, "calib_state_name": FAN_CALIB_STATE_NAMES.get(state, f"未知 {state}"),
+        "abort_reason": abort,
+        "abort_reason_name": {0: "无", 1: "状态变化", 2: "温度过高", 3: "停转", 4: "租约到期", 5: "用户停止", 6: "启动失败"}.get(abort, f"未知 {abort}"),
+        "step": data[6], "target_duty_pct": data[7],
+    }
+
+
+def bms_fan_ack_matches(name: str, ack: dict[str, Any]) -> bool:
+    return int(ack.get("opcode", -1)) == BMS_FAN_COMMAND_CODES.get(name, -2)
+
+
+def build_bms_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
+    values = values or {}
+    sequence = int(values.get("_sequence", 0)) & 0xFF
+    opcode = BMS_FAN_COMMAND_CODES.get(name)
+    if opcode is None:
+        raise ValueError(f"未知电池箱风扇命令：{name}")
+    params = [0, 0, 0, 0, 0]
+    if name == "battery_fan_control":
+        mode, duty, lease = int(values.get("mode", -1)), int(values.get("duty_pct", 0)), int(values.get("lease_s", 0))
+        if mode not in (0, 1, 2) or not 0 <= duty <= 100:
+            raise ValueError("模式必须是0..2，占空比必须是0..100%")
+        if mode in (1, 2) and not 1 <= lease <= 60:
+            raise ValueError("手动/关闭租约必须在1..60秒")
+        if mode == 0:
+            duty = lease = 0
+        if mode == 2 and duty != 0:
+            raise ValueError("关闭模式占空比必须为0")
+        params = [mode, duty, lease, 0, 0]
+    elif name == "battery_fan_calib":
+        action, step = int(values.get("action", 1)), int(values.get("step", 0)) & 0xFF
+        duty, lease = int(values.get("duty_pct", 0)), int(values.get("lease_s", 10))
+        if action not in (1, 2, 3) or not 0 <= duty <= 100:
+            raise ValueError("标定动作必须是1..3，占空比必须是0..100%")
+        if action in (1, 2) and not 1 <= lease <= 60:
+            raise ValueError("标定租约必须在1..60秒")
+        params = [action, step, duty, lease, 0] if action != 3 else [3, step, 0, 0, 0]
+    elif name == "battery_fan_commit":
+        chroma, hv = int(values.get("chroma_cap_pct", 0)), int(values.get("hv_cap_pct", 0))
+        if not (5 <= chroma <= hv <= 100):
+            raise ValueError("提交值必须满足5 <= Chroma上限 <= 高压上限 <= 100")
+        params = [chroma, hv, 35, 70, 0xA5]
+    elif name == "battery_fan_clear":
+        params = [0xA5, 0x5A, 0, 0, 0]
+    body = bytearray([opcode, sequence, *params])
+    body.append(crc8_sae_j1850(body))
+    return CanFrame(BMS_FAN_COMMAND_ID, bytes(body), False, time.time(), "tx")
 
 
 # ---------------------------------------------------------------------------

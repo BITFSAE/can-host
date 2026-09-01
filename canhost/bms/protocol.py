@@ -19,7 +19,7 @@ from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
                         CHROMA_PROTECT_STD_ID, CHROMA_VOLT_STD_ID,
                         decode_alarm_levels, decode_ecu_sop_ack, decode_fault_fields,
                         decode_ivt_result, decode_pack_status, decode_sop_limits,
-                        decode_sop_status, format_raw_frame, u16be, u16le,
+                        decode_sop_status, decode_bms_fan_detail, format_raw_frame, u16be, u16le,
                         IVT_RESULT_KEYS, IVT_RESULT_SCALES)
 
 
@@ -48,6 +48,7 @@ CAN1_IDS = {
     0x186C50F4: "固件身份",
     0x186C51F4: "固件构建日期",
     0x186D50F4: "IVT 与 SOC 诊断",
+    0x186E50F4: "电池箱风扇详细状态",
     0x187650F4: "统一故障状态",
     0x187750F4: "告警阈值",
     0x187850F4: "告警等级明细",
@@ -99,6 +100,8 @@ SWITCH_DEFS = [
     ("lv2_blocked", "二级告警全部受阻", "lv2blk", "ALM_LV2_ALL_BLOCKED_SWITCH", 2, 5),
     ("bsu_not_ready_hv", "从控未就绪（HV_ON动作）", "bsunrdy", "ALM_BSU_NOT_READY_HV_SWITCH", 2, 4),
     ("bsu_offline_hv", "从控离线（HV_ON动作）", "bsuoff", "ALM_BSU_OFFLINE_HV_SWITCH", 2, 3),
+    ("cell_lbk", "电压采样线断线", "lbk", "ALM_CELL_LBK_SWITCH", 2, 2),
+    ("cell_tbk", "温度采样线断线", "tbk", "ALM_CELL_TBK_SWITCH", 2, 1),
 ]
 
 COMMAND_RESULT_NAMES = {
@@ -172,6 +175,8 @@ class BmsProtocol:
             "max_temp_no": None, "min_temp_no": None,
         }
         self.relay: dict[str, Any] = {}
+        self.battery_fan_detail: dict[str, Any] = {}
+        self.last_battery_fan_detail_monotonic: float | None = None
         self.hv: dict[str, Any] = {}
         self.imd: dict[str, Any] = {}
         self.sop: dict[str, Any] = {}
@@ -210,8 +215,7 @@ class BmsProtocol:
         self.last_runtime_diag_monotonic: float | None = None
         self.last_thresholds_monotonic: float | None = None
         self.last_switches_monotonic: float | None = None
-        # All firmware variants use the same 350 ms raw-sample freshness window.
-        # Debug-Bringup changes only the allowed HV_ON protection actions.
+        # 默认正式窗口 350ms；收到身份帧后按变体刷新，Debug-Bringup 为 600ms。
         self.slave_sample_timeout_s = 0.35
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
@@ -270,8 +274,14 @@ class BmsProtocol:
                                   "min_temp_no": data[3] + 1 if valid else None})
             self.relay.update({"cooling": bool(data[4]), "fan_duty_pct": data[5] if len(data) > 5 else None,
                                "fan_rpm": data[6] * 100 if len(data) > 6 else None,
-                               "fan_flags": data[7] if len(data) > 7 else None})
+                               "fan_flags": data[7] if len(data) > 7 else None,
+                               "fan_calibrated": bool(data[7] & 0x20) if len(data) > 7 else False,
+                               "fan_remote_lease_active": bool(data[7] & 0x40) if len(data) > 7 else False,
+                               "fan_calibration_active": bool(data[7] & 0x80) if len(data) > 7 else False})
             self.last_thermal_monotonic = now_mono
+        elif can_id == 0x186E50F4 and len(data) >= 8:
+            self.battery_fan_detail = decode_bms_fan_detail(data)
+            self.last_battery_fan_detail_monotonic = now_mono
         elif can_id == 0x186350F4 and len(data) >= 8:
             self.relay.update({"positive": bool((data[0] >> 6) & 0x03), "negative": bool((data[0] >> 4) & 0x03),
                                "precharge": bool((data[0] >> 2) & 0x03), "charger_state": bool(data[1] & 0x10),
@@ -321,7 +331,9 @@ class BmsProtocol:
             charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
             charger_variant_code = (data[1] >> 2) & 0x03
-            self.slave_sample_timeout_s = 0.35
+            # Debug-Bringup 从控原始数据窗口放宽到 600ms；正式 Debug/Release
+            # （含 Release-Legacy 身份码 1）保持 350ms。
+            self.slave_sample_timeout_s = 0.6 if variant == 2 else 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),
@@ -629,6 +641,8 @@ class BmsProtocol:
                            "last_rx_age": age(now, self.last_rx_monotonic),
                            "summary_age": age(now, self.last_summary_monotonic)},
             "overview": overview, "relay": relay, "hv": hv, "imd": imd,
+            "battery_fan_detail": {**self.battery_fan_detail,
+                                   "age": age(now, self.last_battery_fan_detail_monotonic)},
             "sop": dict(self.sop), "ivt": dict(self.ivt), "config": config, "fault": fault,
             "alarms": alarms, "cells": cell_values, "temps": temp_values, "modules": modules,
             "raw_cell_data_available": raw_cell_data_available,
@@ -685,7 +699,8 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
         switches = values.get("switches", values)
         # 默认整组全部开启。只写调用方给出的位，缺失位保持开启；
         # 正式 Debug/Release 固件会拒绝关闭强制保护位并返回参数无效。
-        data = bytearray([0xFF, 0xFF, 0xF8])
+        # Byte2 bit0 为保留位，保持 0。
+        data = bytearray([0xFF, 0xFF, 0xFE])
         for key, _, _, _, byte, bit in SWITCH_DEFS:
             if key in switches:
                 if bool(switches[key]):

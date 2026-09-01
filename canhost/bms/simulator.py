@@ -11,6 +11,9 @@ from datetime import datetime
 
 from ..decoders import CanFrame
 from .protocol import CAN1_COMMAND_REQ_EXT_ID, TOOL_PROTOCOL_VERSION
+# 告警开关位图布局版本，与固件 CAN1_ALARM_SWITCH_FRAME_VERSION 一致：
+# 0x06 起开关帧 Byte2 bit2/bit1 为电压/温度采样线断线开关。
+ALARM_SWITCH_FRAME_VERSION = 6
 
 
 class BmsSimulator:
@@ -22,7 +25,7 @@ class BmsSimulator:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.thresholds = [4190, 3100, 90, 30]
-        self.switch_bytes = [0xFF, 0xFF, 0xF8]
+        self.switch_bytes = [0xFF, 0xFF, 0xFE]
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = False
@@ -113,7 +116,7 @@ class BmsSimulator:
                 self.config_save_pending_cycles = 2
                 detail = ov
         elif operation == 3:
-            if (data[4] & 0x07) or data[5:8] != b"\x00\x00\x00":
+            if (data[4] & 0x01) or data[5:8] != b"\x00\x00\x00":
                 result = 5
             else:
                 self.switch_bytes = list(data[2:5])
@@ -283,7 +286,7 @@ class BmsSimulator:
         self._send(0x4B1, fault_data, False)
         self._send(0x4B2, bytes(8), False)
         self._send(0x187750F4, self.thresholds[0].to_bytes(2, "big") + self.thresholds[1].to_bytes(2, "big") + bytes(self.thresholds[2:]))
-        self._send(0x187F50F4, bytes(self.switch_bytes) + bytes([TOOL_PROTOCOL_VERSION]))
+        self._send(0x187F50F4, bytes(self.switch_bytes) + bytes([ALARM_SWITCH_FRAME_VERSION]))
         runtime_flags = ((1 if self.current_inverted else 0)
                          | (2 if self.charger_type else 0)
                          | (0x20 if self.config_save_pending_cycles else 0)

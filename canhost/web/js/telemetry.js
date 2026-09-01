@@ -1,4 +1,4 @@
-/* MQTT 遥测页：独立订阅 fsae/telemetry，聚焦 BMS 故障码与 Alarm。 */
+/* MQTT 遥测页：独立订阅经重组校验的 fsae/telemetry/v1。 */
 
 const TELEMETRY_FRESH_MAX_S = 3.0;
 
@@ -120,7 +120,7 @@ function renderTelemetry() {
 
   text("#telemetryConnectionName", telemetryStateName(connection));
   const endpoint = connection.host
-    ? `${connection.host}:${connection.port || 1883} · ${connection.topic || "fsae/telemetry"}`
+    ? `${connection.host}:${connection.port || 1883} · ${connection.topic || "fsae/telemetry/v1"}`
     : "配置 MQTT 订阅";
   text("#telemetryConnectionDetail", error || endpoint);
   $("#telemetryConnectionDetail").title = error || endpoint;
@@ -138,11 +138,14 @@ function renderTelemetry() {
 
   text("#telemetryFaultCode", faultFresh ? fault.code_hex : "等待数据");
   $("#telemetryFaultCode").classList.toggle("bad", faultFresh && fault.code !== 0);
+  const sourceMismatch = !!fault.sources_mismatch;
+  const detailMismatch = !!fault.alarm_details_mismatch;
   text("#telemetryFaultSource", !payloadFresh ? "等待 TelemetryFrame"
     : !faultFresh ? "BMS 故障源未上报或已过期"
-    : fault.sources_mismatch ? `${fault.source} · 两个兼容字段不一致`
+    : sourceMismatch ? `${fault.source} · 两个兼容字段不一致`
+    : detailMismatch ? `${fault.source} · 告警明细与故障字不一致`
     : `${fault.source} · ${latest.received_at}`);
-  $("#telemetryFaultSource").classList.toggle("bad", faultFresh && fault.sources_mismatch);
+  $("#telemetryFaultSource").classList.toggle("bad", faultFresh && (sourceMismatch || detailMismatch));
   text("#telemetryActiveCount", faultFresh ? `${active.length} 项` : "等待数据");
   text("#telemetryAlarmLevel", faultFresh ? latest.bms?.alarm_level_name || "未上报" : "等待数据");
   text("#telemetryBmsState", faultFresh ? latest.bms?.state_name || "未上报" : "等待数据");
@@ -163,7 +166,7 @@ function renderTelemetry() {
   $("#telemetryAlarmList").innerHTML = !payloadFresh
     ? `<div class="empty-state">遥测数据无效或已超时，等待新数据。</div>`
     : alarms.length
-      ? alarms.map(item => `<div class="telemetry-alarm-item severity-${item.severity}"><span><b>${escapeHtml(item.id_hex)}</b><small>${escapeHtml(item.message || "未附消息")}</small></span><em>${escapeHtml(item.severity_name)}</em></div>`).join("")
+      ? alarms.map(item => `<div class="telemetry-alarm-item severity-${item.severity}"><span><b>${escapeHtml(item.id_label || item.id_hex)}</b><small>${escapeHtml(item.message || "未附消息")}</small></span><em>${escapeHtml(item.severity_name)}</em></div>`).join("")
       : `<div class="telemetry-normal-state neutral"><b>本帧未携带 Alarm</b><span>以 BMS 故障字和告警等级为准</span></div>`;
 
   const history = snapshot.fault_history || [];

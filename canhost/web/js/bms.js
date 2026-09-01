@@ -55,7 +55,7 @@ function bindBmsControls() {
   $("#sendSwitches").addEventListener("click", () => {
     const switches = {};
     $$("#switchList input").forEach(input => switches[input.dataset.key] = input.checked);
-    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的 21 个开关作为一组写入主控。基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。");
+    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的全部开关作为一组写入主控。基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。");
   });
   $("#sendChargeConfig").addEventListener("click", () => confirmCommand(
     "charge_config", { voltage_v: +$("#chargeVoltage").value, current_a: +$("#chargeCurrent").value },

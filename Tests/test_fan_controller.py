@@ -6,13 +6,77 @@ import json
 import unittest
 
 from canhost.decoders import (CanFrame, build_fan_command, fan_ack_matches,
-                              decode_fan_power_status, decode_fan_calib_status)
+                              decode_fan_power_status, decode_fan_calib_status,
+                              build_bms_fan_command, decode_bms_fan_detail)
 from canhost.transport import CanService
 from canhost.vehicle.protocol import VehicleProtocol
-from canhost.vehicle.calibration import FanCalibrationSession
+from canhost.vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSession
 
 
 class FanControllerToolTest(unittest.TestCase):
+    def test_battery_fan_calibration_safety_and_cap_calculation_helpers(self) -> None:
+        snap = {
+            "connection": {"connected": True, "mode": "pcan"},
+            "pack": {"age": 0.1, "state": 5},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "current_a": 3.0}},
+            "battery_fan": {"status_age": 0.1, "status": {
+                "power_source": 2, "power_source_name": "高压/DCDC 70W",
+                "flags": {"stall_confirmed": False},
+            }},
+        }
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        self.assertIsNone(session._safety_error(snap, 18.0))
+        snap["pack"]["state"] = 3
+        self.assertIn("高压接通", session._safety_error(snap, 18.0))
+        snap["pack"]["state"] = 5
+        snap["battery_fan"]["status"]["flags"]["stall_confirmed"] = True
+        self.assertIn("停转", session._safety_error(snap, 18.0))
+        summary = session._median([{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 2000.0}] * 10)
+        self.assertEqual({key: summary[key] for key in ("v", "i", "p", "rpm")},
+                         {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 2000.0})
+        self.assertEqual(summary["std_i"], 0.0)
+
+    def test_v3_cap_commands_and_battery_fan_commands(self) -> None:
+        self.assertEqual(build_fan_command("fan_calib", {
+            "_sequence": 11, "action": 5, "battery_cap_pct": 35, "dcdc_cap_pct": 70,
+        }).data, bytes.fromhex("08 0B 05 23 46 A5 00 8F"))
+        self.assertEqual(build_fan_command("fan_calib", {
+            "_sequence": 12, "action": 6,
+        }).data, bytes.fromhex("08 0C 06 A5 5A 00 00 6D"))
+        vectors = [
+            ("battery_fan_query", {"_sequence": 1}, "02 01 00 00 00 00 00 F6"),
+            ("battery_fan_control", {"_sequence": 2, "mode": 1, "duty_pct": 40, "lease_s": 10},
+             "01 02 01 28 0A 00 00 68"),
+            ("battery_fan_calib", {"_sequence": 3, "action": 1, "step": 0, "duty_pct": 0, "lease_s": 10},
+             "03 03 01 00 00 0A 00 8F"),
+            ("battery_fan_commit", {"_sequence": 4, "chroma_cap_pct": 35, "hv_cap_pct": 70},
+             "04 04 23 46 23 46 A5 CF"),
+            ("battery_fan_clear", {"_sequence": 5}, "05 05 A5 5A 00 00 00 4A"),
+        ]
+        for name, values, expected in vectors:
+            frame = build_bms_fan_command(name, values)
+            self.assertEqual(frame.arbitration_id, 0x5AB)
+            self.assertEqual(frame.data, bytes.fromhex(expected))
+
+    def test_battery_fan_status_calibration_and_can1_detail_decode(self) -> None:
+        protocol = VehicleProtocol()
+        protocol.ingest(CanFrame(0x5AA, bytes.fromhex("0B B8 28 37 09 E7 0A 01"), False))
+        protocol.ingest(CanFrame(0x5AD, bytes.fromhex("03 23 46 23 46 03 10 50"), False))
+        protocol.ingest(CanFrame(0x5AE, bytes.fromhex("01 0F 32 01 32 03 00 00"), False))
+        status = protocol.battery_fan["status"]
+        self.assertEqual(status["rpm"], 3000)
+        self.assertEqual(status["mode_name"], "手动")
+        self.assertEqual(status["power_source_name"], "高压/DCDC 70W")
+        self.assertTrue(status["flags"]["calibrated"])
+        self.assertTrue(protocol.battery_fan["calibration"]["save_pending"])
+        self.assertEqual(protocol.fan["calib_limits"]["dcdc_cap_pct"], 50)
+        self.assertEqual(protocol.fan["calib_limits"]["active_tier_name"], "DCDC")
+        self.assertEqual(protocol.fan["calib_limits"]["protocol_version"], 3)
+        detail = decode_bms_fan_detail(bytes.fromhex("0B B8 01 90 02 26 09 E0"))
+        self.assertEqual(detail["actual_duty_pct"], 40.0)
+        self.assertEqual(detail["active_limit_pct"], 55.0)
+        self.assertTrue(detail["flags"]["calibration_active"])
+
     def test_command_frames_match_fancontroller_doc_examples(self) -> None:
         frames = [
             (build_fan_command("fan_control", {"_sequence": 1, "mode": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0}),
@@ -314,6 +378,23 @@ class FanControllerToolTest(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             # 不等待后台线程完成，只验证调用没有持锁卡死。
             self.assertEqual(session.status, "running")
+        finally:
+            session._stop_event.set()
+
+    def test_calibration_accepts_matching_battery_tier(self) -> None:
+        sent = []
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+        fake_snap = _calib_snap(state=1, bus_current=3.0, bat_current=3.0,
+                                bus_v=23.5, bat_v=23.5)
+        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        try:
+            result = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                         max_current_a=8.0, tier="battery")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(session.tier, "battery")
+            self.assertEqual(session.run_params["tier"], "battery")
         finally:
             session._stop_event.set()
 

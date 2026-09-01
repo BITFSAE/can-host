@@ -14,7 +14,7 @@ from .protocol import decode_telemetry_payload
 
 DEFAULT_HOST = "bitfsae.com"
 DEFAULT_PORT = 1883
-DEFAULT_TOPIC = "fsae/telemetry"
+DEFAULT_TOPIC = "fsae/telemetry/v1"
 MAX_HISTORY = 120
 
 

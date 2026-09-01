@@ -1,4 +1,4 @@
-"""Decode the team ``TelemetryFrame`` used on ``fsae/telemetry``.
+"""Decode the CRC-checked ``TelemetryFrame`` from ``fsae/telemetry/v1``.
 
 The generated module beside this file is a synchronized artifact of
 ``vehicle-interfaces/telemetry/fsae_telemetry.proto``.  This module owns only
@@ -89,13 +89,23 @@ def decode_telemetry_payload(payload: bytes) -> dict[str, Any]:
         if fault_code & (1 << bit)
     ]
 
-    alarms = [{
-        "id": int(item.alarm_id),
-        "id_hex": f"0x{int(item.alarm_id):X}",
-        "severity": int(item.severity),
-        "severity_name": SEVERITY_NAMES.get(int(item.severity), f"未知 {int(item.severity)}"),
-        "message": item.message,
-    } for item in frame.alarms]
+    alarms = []
+    alarm_detail_mask = 0
+    for item in frame.alarms:
+        alarm_id = int(item.alarm_id)
+        is_bms_detail = 0 <= alarm_id < len(ALARM_NAMES)
+        if is_bms_detail:
+            alarm_detail_mask |= 1 << alarm_id
+        alarms.append({
+            "id": alarm_id,
+            "id_hex": f"0x{alarm_id:X}",
+            "id_label": f"BIT {alarm_id}" if is_bms_detail else f"0x{alarm_id:X}",
+            "is_bms_detail": is_bms_detail,
+            "severity": int(item.severity),
+            "severity_name": SEVERITY_NAMES.get(int(item.severity), f"未知 {int(item.severity)}"),
+            "message": item.message or (ALARM_NAMES[alarm_id] if is_bms_detail else ""),
+        })
+    alarm_details_present = any(item["is_bms_detail"] for item in alarms)
 
     header = frame.header if _message_present(frame, "header") else None
     bms = frame.bms_telemetry if _message_present(frame, "bms_telemetry") else None
@@ -126,6 +136,10 @@ def decode_telemetry_payload(payload: bytes) -> dict[str, Any]:
             # conflict only when both compatibility fields are non-zero.
             "sources_mismatch": legacy_fault != 0 and battery_fault != 0
             and legacy_fault != battery_fault,
+            "alarm_details_present": alarm_details_present,
+            "alarm_detail_code": alarm_detail_mask,
+            "alarm_detail_code_hex": f"0x{alarm_detail_mask:08X}",
+            "alarm_details_mismatch": alarm_details_present and alarm_detail_mask != fault_code,
             "valid": fault_valid,
             "active": active_faults,
         },

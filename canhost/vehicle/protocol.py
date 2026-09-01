@@ -22,12 +22,16 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
                         decode_fan_ack, decode_fan_curve, decode_fan_diagnostic,
                         decode_fan_failsafe, decode_fan_status, decode_fan_power_status,
                         decode_fan_calib_status, decode_fault_fields,
+                        decode_fan_calib_limits, decode_bms_fan_status,
+                        decode_bms_fan_ack, decode_bms_fan_calib,
                         decode_meter_result, decode_pack_status,
                         decode_pdm_side, decode_sop_limits, decode_sop_status,
                         decode_tire_temp_frame, format_raw_frame,
                         FAN_COMMAND_ACK_ID, FAN_CURVE_STATUS_ID, FAN_DIAGNOSTIC_ID,
                         FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID, FAN_POWER_STATUS_ID,
                         FAN_CALIB_STATUS_ID, PDM_BATTERY_ID, PDM_BUS_ID,
+                        FAN_CALIB_LIMITS_ID, BMS_FAN_STATUS_ID, BMS_FAN_ACK_ID,
+                        BMS_FAN_CALIB_ID,
                         ALARM_LEVEL_NAMES, STATE_NAMES, TIRE_TEMP_IDS)
 
 
@@ -62,8 +66,11 @@ class VehicleProtocol:
         self.pdm_seen: dict[str, float | None] = {"bus": None, "battery": None}
         self.fan: dict[str, Any] = {
             "status": {}, "diagnostic": {}, "curve": {}, "failsafe": {},
-            "power_status": {}, "calib_status": {},
+            "power_status": {}, "calib_status": {}, "calib_limits": {},
         }
+        self.battery_fan: dict[str, Any] = {"status": {}, "calibration": {}}
+        self.battery_fan_acks: dict[int, dict[str, Any]] = {}
+        self.battery_fan_ack_history: deque[dict[str, Any]] = deque(maxlen=40)
         self.fan_acks: dict[int, dict[str, Any]] = {}
         self.fan_ack_history: deque[dict[str, Any]] = deque(maxlen=40)
         self.last_fan_status_monotonic: float | None = None
@@ -72,6 +79,9 @@ class VehicleProtocol:
         self.last_fan_failsafe_monotonic: float | None = None
         self.last_fan_power_monotonic: float | None = None
         self.last_fan_calib_monotonic: float | None = None
+        self.last_fan_limits_monotonic: float | None = None
+        self.last_battery_fan_status_monotonic: float | None = None
+        self.last_battery_fan_calib_monotonic: float | None = None
         self.ecu: dict[str, Any] = {
             "torque_pct": [None] * 4, "velocity_rpm": [None] * 4,
             "motor_temp_c": [None] * 4, "inverter_temp_c": [None] * 4,
@@ -163,6 +173,22 @@ class VehicleProtocol:
         elif can_id == FAN_CALIB_STATUS_ID and len(data) >= 6:
             self.fan["calib_status"] = decode_fan_calib_status(data)
             self.last_fan_calib_monotonic = now_mono
+        elif can_id == FAN_CALIB_LIMITS_ID and len(data) >= 8:
+            self.fan["calib_limits"] = decode_fan_calib_limits(data)
+            self.last_fan_limits_monotonic = now_mono
+        elif can_id == BMS_FAN_STATUS_ID and len(data) >= 8:
+            self.battery_fan["status"] = decode_bms_fan_status(data)
+            self.last_battery_fan_status_monotonic = now_mono
+        elif can_id == BMS_FAN_ACK_ID and len(data) >= 8:
+            ack = decode_bms_fan_ack(data)
+            self.battery_fan_acks[ack["sequence"]] = ack
+            if len(self.battery_fan_acks) > 64:
+                self.battery_fan_acks.pop(next(iter(self.battery_fan_acks)))
+            self.battery_fan_ack_history.appendleft({
+                "time": datetime.fromtimestamp(frame.timestamp).strftime("%H:%M:%S.%f")[:-3], **ack})
+        elif can_id == BMS_FAN_CALIB_ID and len(data) >= 8:
+            self.battery_fan["calibration"] = decode_bms_fan_calib(data)
+            self.last_battery_fan_calib_monotonic = now_mono
         elif can_id == 0x502 and len(data) >= 8:
             self.ecu["torque_pct"] = decode_ecu_wheels_i16(data, 0.1)
             self.last_ecu_monotonic["torque"] = now_mono
@@ -225,6 +251,11 @@ class VehicleProtocol:
         fan["failsafe_age"] = age(now, self.last_fan_failsafe_monotonic)
         fan["power_status_age"] = age(now, self.last_fan_power_monotonic)
         fan["calib_status_age"] = age(now, self.last_fan_calib_monotonic)
+        fan["calib_limits_age"] = age(now, self.last_fan_limits_monotonic)
+        battery_fan = {key: dict(value) for key, value in self.battery_fan.items()}
+        battery_fan["status_age"] = age(now, self.last_battery_fan_status_monotonic)
+        battery_fan["calibration_age"] = age(now, self.last_battery_fan_calib_monotonic)
+        battery_fan["ack_history"] = list(self.battery_fan_ack_history)
         ecu = {key: (list(value) if isinstance(value, list) else dict(value))
                for key, value in self.ecu.items()}
         ecu["age"] = {key: age(now, seen) for key, seen in self.last_ecu_monotonic.items()}
@@ -235,6 +266,7 @@ class VehicleProtocol:
                            "last_rx_age": age(now, self.last_rx_monotonic)},
             "pack": pack, "fault": fault, "sop": sop, "meter": meter, "pdm": pdm,
             "fan": {**fan, "ack_history": list(self.fan_ack_history)},
+            "battery_fan": battery_fan,
             "ecu": {**ecu, "wheel_names": list(ECU_WHEEL_NAMES)},
             "tires": {**tires, "age": tire_age},
             "raw_frames": list(self.raw_frames), "trends": list(self.trends),

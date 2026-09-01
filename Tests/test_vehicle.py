@@ -110,7 +110,8 @@ class VehicleSimulatorTest(unittest.TestCase):
         simulator._emit_tires()
         ids = {frame.arbitration_id for frame in frames}
         for expected in (0x4B0, 0x4B1, 0x4A0, 0x4A3, 0x521, 0x522,
-                         0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7,
+                         0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7, 0x5A8, 0x5A9,
+                         0x5AA, 0x5AD, 0x5AE,
                          0x502, 0x505, 0x506, 0x507, 0x508, 0x509,
                          0x071, 0x072, 0x073, 0x074):
             self.assertIn(expected, ids)
@@ -127,6 +128,8 @@ class VehicleSimulatorTest(unittest.TestCase):
         self.assertTrue(snapshot["pdm"]["bus"]["voltage_v"] > 20)
         self.assertIsNotNone(snapshot["pack"]["voltage_v"])
         self.assertTrue(snapshot["fan"]["status"]["rpm"][0] > 0)
+        self.assertEqual(snapshot["fan"]["calib_limits"]["protocol_version"], 3)
+        self.assertTrue(snapshot["battery_fan"]["status"])
 
     def test_simulation_transport_produces_vehicle_snapshot(self) -> None:
         service = CanService(protocol_kind="vehicle")
@@ -143,6 +146,7 @@ class VehicleSimulatorTest(unittest.TestCase):
             self.assertIsNotNone(snapshot["pdm"]["bus"]["voltage_v"])
             self.assertIsNotNone(snapshot["sop"]["limits"]["discharge_current_a"])
             self.assertTrue(snapshot["fan"]["status"])
+            self.assertTrue(snapshot["battery_fan"]["status"])
             quick = service.quick_snapshot()
             self.assertEqual(quick["connection"]["bus_profile"], "canb")
             self.assertIsNotNone(quick["pdm"]["bus_voltage_v"])

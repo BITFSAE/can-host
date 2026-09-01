@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from canhost.telemetry import fsae_telemetry_pb2 as telemetry_pb
 from canhost.telemetry.protocol import decode_telemetry_payload
-from canhost.telemetry.service import TelemetryService
+from canhost.telemetry.service import DEFAULT_TOPIC, TelemetryService
 
 
 def telemetry_payload(
@@ -60,6 +60,30 @@ class TelemetryProtocolTest(unittest.TestCase):
         self.assertEqual(decoded["fault"]["source"], "battery_fault_code")
         self.assertTrue(decoded["fault"]["sources_mismatch"])
 
+    def test_bms_alarm_details_use_name_fallback_and_match_fault_word(self) -> None:
+        frame = telemetry_pb.TelemetryFrame()
+        frame.ParseFromString(telemetry_payload((1 << 0) | (1 << 31)))
+        frame.ClearField("alarms")
+        first = frame.alarms.add()
+        first.alarm_id = 0
+        first.severity = telemetry_pb.ALARM_SEVERITY_FATAL
+        second = frame.alarms.add()
+        second.alarm_id = 31
+        second.severity = telemetry_pb.ALARM_SEVERITY_WARNING
+
+        decoded = decode_telemetry_payload(frame.SerializeToString())
+        self.assertEqual(decoded["alarms"][0]["id_label"], "BIT 0")
+        self.assertEqual(decoded["alarms"][0]["message"], "单体过压")
+        self.assertEqual(decoded["alarms"][0]["severity_name"], "严重故障")
+        self.assertEqual(decoded["alarms"][1]["message"], "IVT 包电压通道失联")
+        self.assertTrue(decoded["fault"]["alarm_details_present"])
+        self.assertEqual(decoded["fault"]["alarm_detail_code_hex"], "0x80000001")
+        self.assertFalse(decoded["fault"]["alarm_details_mismatch"])
+
+        frame.alarms[1].alarm_id = 1
+        mismatch = decode_telemetry_payload(frame.SerializeToString())
+        self.assertTrue(mismatch["fault"]["alarm_details_mismatch"])
+
     def test_legacy_fault_word_is_accepted_when_battery_field_is_zero(self) -> None:
         decoded = decode_telemetry_payload(telemetry_payload(0, legacy_code=4))
         self.assertEqual(decoded["fault"]["code"], 4)
@@ -79,6 +103,10 @@ class TelemetryProtocolTest(unittest.TestCase):
 
 
 class TelemetryServiceTest(unittest.TestCase):
+    def test_default_topic_is_crc_checked_stream(self) -> None:
+        self.assertEqual(DEFAULT_TOPIC, "fsae/telemetry/v1")
+        self.assertEqual(TelemetryService().snapshot()["connection"]["topic"], DEFAULT_TOPIC)
+
     @patch("paho.mqtt.client.Client")
     def test_connect_subscribes_read_only_and_does_not_expose_password(self, client_factory: MagicMock) -> None:
         client = client_factory.return_value

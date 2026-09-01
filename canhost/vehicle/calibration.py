@@ -58,6 +58,7 @@ class FanCalibrationSession:
         self.status: str = "idle"  # "idle", "running", "aborted", "completed"
         self.abort_reason: str = ""
         self.channel: int = 1  # 1 (PWM1), 2 (PWM2), or 3 (both)
+        self.tier: str = "dcdc"
         self.current_step: int = 0
         self.total_steps: int = 0
         self.current_duty: list[int] = [0, 0]
@@ -184,10 +185,12 @@ class FanCalibrationSession:
 
     def start_sweep(self, channel: int = 1, steps: list[int] | None = None,
                     hold_s: float = DEFAULT_HOLD_S,
-                    max_current_a: float = 18.0) -> dict[str, Any]:
+                    max_current_a: float = 18.0, tier: str = "dcdc") -> dict[str, Any]:
         """Start a background automated calibration sweep."""
         if channel not in (1, 2):
             return {"ok": False, "error": "计划要求先分别标定回路 1/2，暂不开放双回路联合扫频"}
+        if tier not in {"battery", "dcdc"}:
+            return {"ok": False, "error": "供电档位必须是 battery 或 dcdc"}
         # 前置检查（内部会经 vehicle_snapshot() -> get_snapshot()）必须放在
         # 本锁外，不能持有 session 锁去获取 service 锁，否则 service 侧
         # 同步调用会反过来获取 session 锁，形成跨锁死锁。
@@ -198,19 +201,20 @@ class FanCalibrationSession:
         # 用 PDM 原始测量值独立验证 DCDC 真的在供电，并连续稳定 3 秒。
         # 不采信固件上报的供电状态本身：Action=4 手动覆盖也会上报同一个状态，
         # 只检查 power_supply_state == 3 无法区分“自动识别”和“人工覆盖”。
-        dcdc_check = self._verify_dcdc_ready(self.DCDC_STABLE_REQUIRED_S)
-        if not dcdc_check["ok"]:
-            return dcdc_check
+        if tier == "dcdc":
+            dcdc_check = self._verify_dcdc_ready(self.DCDC_STABLE_REQUIRED_S)
+            if not dcdc_check["ok"]:
+                return dcdc_check
 
         # 固件状态与实测不一致时同样拒绝：说明供电状态来自覆盖或已过期。
         current_state = self.snapshot_fn().get("fan", {}).get("power_status", {}).get("power_supply_state")
-        if current_state != 3:
+        expected_state = 3 if tier == "dcdc" else 1
+        if current_state != expected_state:
             state_name = self.snapshot_fn().get("fan", {}).get("power_status", {}).get(
                 "power_supply_name", str(current_state))
             return {
                 "ok": False,
-                "error": f"PDM 实测判据满足，但固件上报供电为 {state_name}；"
-                         "两侧不一致时禁止开始自动扫频，请检查 DCDC 与 PDM 接线。",
+                "error": f"固件上报供电为 {state_name}，与所选标定档位不一致；禁止开始自动扫频。",
             }
 
         # 起始总线负载必须足够低，否则扫到高占空比时必然触发电流保护。
@@ -238,6 +242,7 @@ class FanCalibrationSession:
             self.status = "running"
             self.abort_reason = ""
             self.channel = channel
+            self.tier = tier
             self.current_step = 0
             # 双向扫描执行 len(steps) * 2 个点。
             self.total_steps = len(steps) * 2
@@ -249,6 +254,7 @@ class FanCalibrationSession:
                 "steps": list(steps),
                 "hold_s": hold_s,
                 "max_current_a": max_current_a,
+                "tier": tier,
             }
             self.raw_samples.clear()
             self.baseline_raw_samples.clear()
@@ -258,7 +264,7 @@ class FanCalibrationSession:
 
             self._thread = threading.Thread(
                 target=self._run_sweep,
-                args=(channel, steps, hold_s, max_current_a),
+                args=(channel, steps, hold_s, max_current_a, tier),
                 name="fan-calib-runner",
                 daemon=True,
             )
@@ -308,6 +314,7 @@ class FanCalibrationSession:
                 "status": self.status,
                 "abort_reason": self.abort_reason,
                 "channel": self.channel,
+                "tier": self.tier,
                 "current_step": self.current_step,
                 "total_steps": self.total_steps,
                 "current_duty": list(self.current_duty),
@@ -325,7 +332,7 @@ class FanCalibrationSession:
             output = StringIO()
             writer = csv.writer(output)
             writer.writerow([
-                "Step", "Channel", "Direction", "PWM1_Duty_Pct", "PWM2_Duty_Pct",
+                "Step", "Channel", "Power_Tier", "Direction", "PWM1_Duty_Pct", "PWM2_Duty_Pct",
                 "Fan1_RPM", "Fan2_RPM", "Fan3_RPM",
                 "Bus_Voltage_V", "Bus_Current_A", "Bus_Power_W",
                 "Delta_Current_A", "Delta_Power_W",
@@ -334,7 +341,7 @@ class FanCalibrationSession:
             ])
             for r in self.records:
                 writer.writerow([
-                    r.get("step"), r.get("channel"), r.get("direction", ""),
+                    r.get("step"), r.get("channel"), r.get("tier", self.tier), r.get("direction", ""),
                     r.get("duty1_pct"), r.get("duty2_pct"),
                     r.get("rpm1"), r.get("rpm2"), r.get("rpm3"),
                     r.get("voltage_v"), r.get("current_a"), r.get("power_w"),
@@ -416,7 +423,8 @@ class FanCalibrationSession:
         这样导出的记录可以复核每个稳态点实际关联的基线。
         """
         cmd_res = self.send_fn("fan_calib", {
-            "action": 1, "step": step_label, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 15,
+            "action": 1 if self.baseline_id == 0 else 2,
+            "step": step_label, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 15,
         }, True)
         if not cmd_res.get("ok"):
             return None
@@ -482,7 +490,7 @@ class FanCalibrationSession:
             time.sleep(0.1)
         return False
 
-    def _watchdog(self, snap: dict[str, Any], max_current_a: float) -> str | None:
+    def _watchdog(self, snap: dict[str, Any], max_current_a: float, expected_state: int = 3) -> str | None:
         """扫描期间持续安全检查，返回中止原因；None 表示通过。"""
         conn = snap.get("connection", {})
         fan = snap.get("fan", {})
@@ -503,9 +511,9 @@ class FanCalibrationSession:
             return "FanController 0x5A3 诊断超时 (>1.0s)，触发安全中止"
         if power_status_age is None or power_status_age > 1.0:
             return "FanController 0x5A8 功率状态超时 (>1.0s)，触发安全中止"
-        if fan_power.get("power_supply_state") not in (None, 3):
+        if fan_power.get("power_supply_state") not in (None, expected_state):
             state_name = fan_power.get("power_supply_name", str(fan_power.get("power_supply_state")))
-            return f"供电脱离 DCDC_READY 状态（当前：{state_name}），触发安全中止"
+            return f"供电脱离所选标定档位（当前：{state_name}），触发安全中止"
         if fan_diag.get("faults", 0) & FAULT_TACH_MASK:
             return "检测到风扇停转故障，触发安全中止"
         # 温度失联或温度无效时继续标定等于没有温度保护，必须中止。
@@ -529,7 +537,7 @@ class FanCalibrationSession:
                     hold_s: float, max_current_a: float,
                     baseline: dict[str, float],
                     direction: str = "",
-                    baseline_id: int = 0) -> dict[str, Any] | None:
+                    baseline_id: int = 0, expected_state: int = 3) -> dict[str, Any] | None:
         """下发一个目标点，等待稳定并采集后 3s 中位数，返回记录或 None。"""
         cmd_res = self.send_fn("fan_calib", {
             "action": 2, "step": step, "duty1_pct": duty1, "duty2_pct": duty2, "lease_s": 15,
@@ -543,7 +551,7 @@ class FanCalibrationSession:
         while time.monotonic() < settle_end:
             if self._stop_event.is_set():
                 return None
-            reason = self._watchdog(self.snapshot_fn(), max_current_a)
+            reason = self._watchdog(self.snapshot_fn(), max_current_a, expected_state)
             if reason:
                 self._abort_and_return(reason)
                 return None
@@ -559,7 +567,7 @@ class FanCalibrationSession:
             if self._stop_event.is_set():
                 return None
             snap = self.snapshot_fn()
-            reason = self._watchdog(snap, max_current_a)
+            reason = self._watchdog(snap, max_current_a, expected_state)
             if reason:
                 self._abort_and_return(reason)
                 return None
@@ -649,6 +657,7 @@ class FanCalibrationSession:
         return {
             "step": step,
             "channel": self.channel,
+            "tier": self.tier,
             "direction": direction,
             "baseline_id": baseline_id,
             "duty1_pct": duty1,
@@ -672,12 +681,13 @@ class FanCalibrationSession:
         }
 
     def _run_sweep(self, channel: int, steps: list[int],
-                   hold_s: float, max_current_a: float) -> None:
+                   hold_s: float, max_current_a: float, tier: str = "dcdc") -> None:
         """执行计划中的上升+下降双向阶梯扫频。"""
         try:
             current_state = self.snapshot_fn().get("fan", {}).get("power_status", {}).get("power_supply_state")
-            if current_state != 3:
-                self._abort_and_return("启动后供电已离开 DCDC_READY，中止标定")
+            expected_state = 3 if tier == "dcdc" else 1
+            if current_state != expected_state:
+                self._abort_and_return("启动后供电已离开所选档位，中止标定")
                 return
 
             baseline = self._measure_baseline(0, "initial")
@@ -719,6 +729,7 @@ class FanCalibrationSession:
                         record_index + 1, d1, d2, hold_s, max_current_a,
                         self.baseline, direction_name,
                         int(self.baseline.get("baseline_id") or 0),
+                        expected_state,
                     )
                     if record is None:
                         return
@@ -737,3 +748,212 @@ class FanCalibrationSession:
                     self.abort_reason = "扫描完成但固件恢复自动失败：" + "；".join(result["errors"])
         except Exception as exc:
             self._abort_and_return(f"标定执行发生异常：{exc}")
+
+
+class BatteryFanCalibrationSession:
+    """F405 battery-box fan sweep using PDM power with a nearby 0% baseline."""
+
+    DEFAULT_STEPS = [0, 5, 10, 15, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100]
+    BASELINE_INTERVAL = 4
+
+    def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
+                 snapshot_fn: Callable[[], dict[str, Any]]) -> None:
+        self.send_fn = send_fn
+        self.snapshot_fn = snapshot_fn
+        self.lock = threading.RLock()
+        self.status = "idle"
+        self.abort_reason = ""
+        self.current_step = 0
+        self.baseline: dict[str, float] = {}
+        self.baseline_history: list[dict[str, float]] = []
+        self.baseline_id = 0
+        self.records: list[dict[str, Any]] = []
+        self.suggested_caps = {"chroma_cap_pct": 5, "hv_cap_pct": 5}
+        self.run_params: dict[str, Any] = {}
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _safety_error(self, snap: dict[str, Any], max_current_a: float) -> str | None:
+        conn = snap.get("connection", {})
+        pack = snap.get("pack", {})
+        pdm = snap.get("pdm", {}).get("bus", {})
+        battery = snap.get("battery_fan", {})
+        status = battery.get("status", {})
+        if not conn.get("connected") or conn.get("mode") != "pcan":
+            return "必须连接真实PCAN上的CANB"
+        if pack.get("age") is None or pack.get("age") > 1.5 or pack.get("state") != 5:
+            return "BMS必须处于新鲜的高压接通状态"
+        if pdm.get("offline", True) or pdm.get("age") is None or pdm.get("age") > 1.0:
+            return "PDM总线遥测离线或超时"
+        if battery.get("status_age") is None or battery.get("status_age") > 1.0:
+            return "电池箱风扇0x5AA状态超时；请先查询"
+        if status.get("power_source") != 2:
+            return f"电池箱风扇当前供电不是高压/DCDC（{status.get('power_source_name', '未知')}）"
+        if status.get("flags", {}).get("stall_confirmed"):
+            return "电池箱风扇已确认停转"
+        if (pdm.get("current_a") or 0.0) > max_current_a:
+            return f"总线电流超过{max_current_a:.1f}A保护值"
+        return None
+
+    def start(self, steps: list[int] | None = None, hold_s: float = 5.0,
+              max_current_a: float = 18.0) -> dict[str, Any]:
+        steps = list(self.DEFAULT_STEPS if steps is None else steps)
+        if not steps or any(not 0 <= int(value) <= 100 for value in steps):
+            return {"ok": False, "error": "扫描点必须在0..100%"}
+        if not 3.0 <= hold_s <= 10.0 or not 5.0 <= max_current_a <= 20.0:
+            return {"ok": False, "error": "保持时间需3..10秒，总线保护需5..20A"}
+        error = self._safety_error(self.snapshot_fn(), max_current_a)
+        if error:
+            return {"ok": False, "error": error}
+        with self.lock:
+            if self.status == "running":
+                return {"ok": False, "error": "电池箱风扇标定正在进行"}
+            self.status, self.abort_reason, self.current_step = "running", "", 0
+            self.baseline.clear()
+            self.baseline_history.clear()
+            self.baseline_id = 0
+            self.records.clear()
+            self.run_params = {"steps": steps, "hold_s": hold_s, "max_current_a": max_current_a}
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run, args=(steps, hold_s, max_current_a),
+                                            name="battery-fan-calib", daemon=True)
+            self._thread.start()
+        return {"ok": True, "message": "电池箱风扇自动扫频已启动", "total_steps": len(steps)}
+
+    def _samples(self, seconds: float, max_current_a: float) -> tuple[list[dict[str, float]], str | None]:
+        result: list[dict[str, float]] = []
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                return result, "用户停止"
+            snap = self.snapshot_fn()
+            error = self._safety_error(snap, max_current_a)
+            if error:
+                return result, error
+            bus = snap["pdm"]["bus"]
+            fan = snap["battery_fan"]["status"]
+            result.append({"v": float(bus.get("voltage_v") or 0),
+                           "i": float(bus.get("current_a") or 0),
+                           "p": float(bus.get("power_w") or 0),
+                           "rpm": float(fan.get("rpm") or 0)})
+            time.sleep(0.1)
+        return result, None
+
+    @staticmethod
+    def _median(samples: list[dict[str, float]]) -> dict[str, float] | None:
+        if len(samples) < 10:
+            return None
+        result = {key: statistics.median(sample[key] for sample in samples) for key in ("v", "i", "p", "rpm")}
+        result["std_i"] = statistics.pstdev(sample["i"] for sample in samples)
+        result["std_p"] = statistics.pstdev(sample["p"] for sample in samples)
+        return result
+
+    def _send(self, action: int, step: int, duty: int, lease: int = 15) -> dict[str, Any]:
+        return self.send_fn("battery_fan_calib", {
+            "action": action, "step": step, "duty_pct": duty,
+            "lease_s": 0 if action == 3 else lease,
+        }, True)
+
+    def _measure_baseline(self, step: int, max_current_a: float, start: bool) -> tuple[dict[str, float] | None, str | None]:
+        if not self._send(1 if start else 2, step, 0).get("ok"):
+            return None, "0%基线命令失败"
+        _, error = self._samples(2.0, max_current_a)
+        if error:
+            return None, error
+        samples, error = self._samples(2.0, max_current_a)
+        summary = self._median(samples)
+        if error or summary is None or summary["std_i"] > 0.05 or summary["std_p"] > 2.0:
+            return None, error or "0%基线样本不足或功率未稳定"
+        with self.lock:
+            self.baseline_id += 1
+            measured = {key: round(summary[key], 3) for key in ("v", "i", "p", "rpm", "std_i", "std_p")}
+            measured["baseline_id"] = self.baseline_id
+            measured["step"] = step
+            self.baseline = dict(measured)
+            self.baseline_history.append(dict(measured))
+        return measured, None
+
+    def _finish_abort(self, reason: str) -> None:
+        self._stop_event.set()
+        try:
+            self._send(3, self.current_step, 0, 0)
+        finally:
+            with self.lock:
+                self.status, self.abort_reason = "aborted", reason
+
+    def _run(self, steps: list[int], hold_s: float, max_current_a: float) -> None:
+        try:
+            baseline, error = self._measure_baseline(0, max_current_a, True)
+            if error or baseline is None:
+                self._finish_abort(error or "0%基线测量失败")
+                return
+            for index, duty in enumerate(steps, start=1):
+                if index > 1 and (index - 1) % self.BASELINE_INTERVAL == 0:
+                    baseline, error = self._measure_baseline(index, max_current_a, False)
+                    if error or baseline is None:
+                        self._finish_abort(error or f"步骤{index}前重新测量基线失败")
+                        return
+                if not self._send(2, index, int(duty)).get("ok"):
+                    self._finish_abort(f"步骤{index}命令失败")
+                    return
+                settle, error = self._samples(2.0, max_current_a)
+                if error:
+                    self._finish_abort(error)
+                    return
+                samples, error = self._samples(max(1.0, hold_s - 2.0), max_current_a)
+                summary = self._median(samples)
+                if error or summary is None or summary["std_i"] > 0.05 or summary["std_p"] > 2.0:
+                    self._finish_abort(error or f"步骤{index}样本不足或功率未稳定")
+                    return
+                record = {
+                    "step": index, "duty_pct": int(duty), "rpm": round(summary["rpm"]),
+                    "voltage_v": round(summary["v"], 3), "current_a": round(summary["i"], 3),
+                    "power_w": round(summary["p"], 2),
+                    "delta_current_a": round(max(0.0, summary["i"] - baseline["i"]), 3),
+                    "delta_power_w": round(max(0.0, summary["p"] - baseline["p"]), 2),
+                    "baseline_current_a": round(baseline["i"], 3),
+                    "baseline_power_w": round(baseline["p"], 2),
+                    "baseline_id": int(baseline["baseline_id"]),
+                    "std_current_a": round(summary["std_i"], 3),
+                    "std_power_w": round(summary["std_p"], 3),
+                }
+                with self.lock:
+                    self.current_step = index
+                    self.records.append(record)
+            stop = self._send(3, len(steps), 0, 0)
+            if not stop.get("ok"):
+                self._finish_abort("扫描完成但停止命令失败")
+                return
+            with self.lock:
+                for budget, key in ((35.0, "chroma_cap_pct"), (70.0, "hv_cap_pct")):
+                    valid = [r["duty_pct"] for r in self.records
+                             if r["duty_pct"] >= 5 and r["delta_power_w"] <= budget and r["rpm"] > 0]
+                    self.suggested_caps[key] = max(valid, default=5)
+                if self.suggested_caps["chroma_cap_pct"] > self.suggested_caps["hv_cap_pct"]:
+                    self.suggested_caps["chroma_cap_pct"] = self.suggested_caps["hv_cap_pct"]
+                self.status = "completed"
+        except Exception as exc:
+            self._finish_abort(f"标定异常：{exc}")
+
+    def abort(self) -> dict[str, Any]:
+        self._finish_abort("用户手动停止")
+        return {"ok": True, "status": self.status, "reason": self.abort_reason}
+
+    def get_snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {"status": self.status, "abort_reason": self.abort_reason,
+                    "current_step": self.current_step, "records": list(self.records),
+                    "suggested_caps": dict(self.suggested_caps), "baseline": dict(self.baseline),
+                    "baseline_history": list(self.baseline_history),
+                    "run_params": dict(self.run_params)}
+
+    def export_csv(self) -> str:
+        with self.lock:
+            output = StringIO()
+            writer = csv.DictWriter(output, fieldnames=[
+                "step", "duty_pct", "rpm", "voltage_v", "current_a", "power_w",
+                "delta_current_a", "delta_power_w", "baseline_current_a", "baseline_power_w",
+                "baseline_id", "std_current_a", "std_power_w"])
+            writer.writeheader()
+            writer.writerows(self.records)
+            return output.getvalue()
