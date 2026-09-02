@@ -54,15 +54,20 @@ function bindFanControls() {
   });
 
   // Calibration controls
+  const fanCalibTierPicked = () => {
+    const tier = $("#fanCalibTierSelect")?.value || "dcdc";
+    $("#fanCalibMaxCurrentInput").value = tier === "battery" ? "8" : "18";
+    return tier;
+  };
   $("#fanCalibTierSelect")?.addEventListener("change", () => {
-    $("#fanCalibMaxCurrentInput").value = $("#fanCalibTierSelect").value === "battery" ? "8" : "18";
+    fanCalibTierPicked();
   });
   $("#startFanCalibButton")?.addEventListener("click", () => {
     if (!fanConnectionAvailable()) return toast("请先连接 CANB", true);
     const channel = +$("#fanCalibChannelSelect").value || 1;
     const hold_s = +$("#fanCalibHoldInput").value || 6;
-    const max_current_a = +$("#fanCalibMaxCurrentInput").value || 18;
-    const tier = $("#fanCalibTierSelect")?.value || "dcdc";
+    const tier = fanCalibTierPicked();
+    const max_current_a = +$("#fanCalibMaxCurrentInput").value || (tier === "battery" ? 8 : 18);
     const chName = channel === 2 ? "回路 2 (PWM2 · 单 2H6P)" : "回路 1 (PWM1 · 双 2H4PU)";
     // 计划 11.1：开始标定前必须由操作者逐次确认现场安全条件。
     confirmFanAction(
@@ -84,6 +89,10 @@ function bindFanControls() {
   $("#commitFanCapsButton")?.addEventListener("click", () => {
     const battery_cap_pct = +$("#fanBatteryCapInput").value;
     const dcdc_cap_pct = +$("#fanDcdcCapInput").value;
+    if (!Number.isFinite(battery_cap_pct) || !Number.isFinite(dcdc_cap_pct)
+        || !(5 <= battery_cap_pct && battery_cap_pct <= dcdc_cap_pct && dcdc_cap_pct <= 100)) {
+      return toast("两档上限必须满足 5% ≤ 电池档 ≤ DCDC档 ≤ 100%", true);
+    }
     confirmFanCommand("fan_calib", { action: 5, battery_cap_pct, dcdc_cap_pct },
       "保存整车风扇两档上限", `低压电池 ${battery_cap_pct}% · DCDC ${dcdc_cap_pct}%\n将写入 FanController 双页 Flash。`);
   });
@@ -184,6 +193,7 @@ function bindFanControls() {
   ["#fanTempOffInput", "#fanTempOnInput", "#fanTempFullInput", "#fanMinDutyInput", "#fanRampUpInput",
    "#fanFallback1Input", "#fanFallback2Input", "#fanHoldInput", "#fanRampDownInput", "#fanStrategySelect"]
     .forEach(id => $(id)?.addEventListener("input", () => state.dirty.fan = true));
+  fanCalibTierPicked();
   renderFanControlFields();
 }
 
@@ -352,8 +362,14 @@ function renderFan() {
     const suggestions = [];
     if (fanSuggested.battery_cap_pct != null) suggestions.push("电池 " + fanSuggested.battery_cap_pct + "%");
     if (fanSuggested.dcdc_cap_pct != null) suggestions.push("DCDC " + fanSuggested.dcdc_cap_pct + "%");
-    if (suggestions.length > 0) {
-      capsReportText += " (推荐: " + suggestions.join(" / ") + ")";
+    const missing = [];
+    if (fanSuggested.battery_cap_pct == null) missing.push("电池待标定");
+    if (fanSuggested.dcdc_cap_pct == null) missing.push("DCDC待标定");
+    if (suggestions.length > 0 || missing.length > 0) {
+      const statusParts = [];
+      if (suggestions.length > 0) statusParts.push("推荐: " + suggestions.join(" / "));
+      if (missing.length > 0) statusParts.push(missing.join("、"));
+      capsReportText += " (" + statusParts.join("；") + ")。";
       const batteryActive = document.activeElement === $("#fanBatteryCapInput");
       const dcdcActive = document.activeElement === $("#fanDcdcCapInput");
       if (!batteryActive && fanSuggested.battery_cap_pct != null) {

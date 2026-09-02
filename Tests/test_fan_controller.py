@@ -132,6 +132,9 @@ class FanControllerToolTest(unittest.TestCase):
             ("fan_calib", {"action": 1, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 65}),
             ("fan_calib", {"action": 4, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 0}),
             ("fan_calib", {"action": 5, "step": 1, "duty1_pct": 50, "duty2_pct": 50, "lease_s": 15}),
+            ("fan_calib", {"action": 5, "battery_cap_pct": 80, "dcdc_cap_pct": 20}),
+            ("fan_calib", {"action": 5, "battery_cap_pct": 4, "dcdc_cap_pct": 100}),
+            ("fan_calib", {"action": 5, "battery_cap_pct": 100, "dcdc_cap_pct": 101}),
         ]
         for name, values in cases:
             with self.assertRaises(ValueError, msg=f"{name} {values}"):
@@ -622,6 +625,22 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
         # 温度失联或温度无效时必须中止，否则标定在没有温度保护的情况下继续。
         self.assertIn("温度输入失联", session._watchdog(snapshot(faults=0x18), 18.0))
         self.assertIn("温度无效", session._watchdog(snapshot(motor=None, ctrl=None), 18.0))
+
+    def test_watchdog_keeps_selected_battery_tier(self) -> None:
+        """重复采样路径也必须使用所选档位，不能把电池档误当成 DCDC 放行。"""
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        snap = {
+            "connection": {"mode": "pcan", "connected": True},
+            "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
+                            "age": 0.1, "offline": False}},
+            "fan": {
+                "status": {"rpm": [3000, 3000, 0]},
+                "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
+                "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+                "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+            },
+        }
+        self.assertIn("档位", session._watchdog(snap, 8.0, expected_state=1))
 
 
 if __name__ == "__main__":

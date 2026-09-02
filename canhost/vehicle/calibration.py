@@ -659,7 +659,7 @@ class FanCalibrationSession:
                 if self._stop_event.is_set():
                     return None
                 extra_snap = self.snapshot_fn()
-                reason = self._watchdog(extra_snap, max_current_a)
+                reason = self._watchdog(extra_snap, max_current_a, expected_state)
                 if reason:
                     self._abort_and_return(reason)
                     return None

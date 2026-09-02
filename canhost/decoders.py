@@ -559,8 +559,8 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         if action == 5:
             battery_cap = int(values.get("battery_cap_pct", 0))
             dcdc_cap = int(values.get("dcdc_cap_pct", 0))
-            if not (5 <= battery_cap <= 100 and 5 <= dcdc_cap <= 100):
-                raise ValueError("电池/DCDC 标定上限必须在 5..100 %")
+            if not (5 <= battery_cap <= dcdc_cap <= 100):
+                raise ValueError("电池档/DCDC 档标定上限必须满足 5 <= 电池档 <= DCDC档 <= 100 %")
             return command_frame(0x08, bytes([5, battery_cap, dcdc_cap, 0xA5, 0]))
         if action == 6:
             return command_frame(0x08, bytes([6, 0xA5, 0x5A, 0, 0]))
