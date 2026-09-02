@@ -5,11 +5,11 @@ const TELEMETRY_FRESH_MAX_S = 3.0;
 function bindTelemetryControls() {
   const openButton = $("#telemetryConnectButton");
   if (!openButton) return;
-  restoreTelemetrySettings();
   openButton.addEventListener("click", () => {
     const connectionState = state.telemetrySnapshot?.connection?.state;
     const active = !!connectionState && connectionState !== "disconnected";
     $("#disconnectTelemetryButton").classList.toggle("hidden", !active);
+    restoreTelemetrySettings();
     $("#telemetryConnectDialog").showModal();
   });
   $("#doConnectTelemetry").addEventListener("click", connectTelemetry);
@@ -29,6 +29,7 @@ function restoreTelemetrySettings() {
     if (saved.port) $("#telemetryPort").value = String(saved.port);
     if (saved.topic) $("#telemetryTopic").value = saved.topic;
     if (saved.username) $("#telemetryUsername").value = saved.username;
+    if (saved.password) $("#telemetryPassword").value = saved.password;
     $("#telemetryTls").checked = saved.tls === true;
   } catch { /* local storage may be disabled or contain an old value */ }
 }
@@ -40,9 +41,10 @@ function saveTelemetrySettings(config) {
       port: config.port,
       topic: config.topic,
       username: config.username,
+      password: config.password,
       tls: config.tls,
     }));
-  } catch { /* local storage is optional; passwords are never persisted */ }
+  } catch { /* local storage is optional; the password stays on this machine only */ }
 }
 
 async function connectTelemetry() {
