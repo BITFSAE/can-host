@@ -335,6 +335,64 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertIn("baseline_raw_samples", json_data)
         self.assertIn("baseline_history", json_data)
 
+    def test_fan_calibration_suggested_caps_use_bus_current_and_merge(self) -> None:
+        """推荐上限应使用总线总电流，并按档位保守合并。"""
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+
+        # 同一档位先扫 PWM1：PWM1 双风扇正常，1A、3A、9A 三点。
+        records = [
+            {
+                "tier": "dcdc", "channel": 1, "duty1_pct": 20, "duty2_pct": 0,
+                "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+                "current_a": 3.0,
+            },
+            {
+                "tier": "dcdc", "channel": 1, "duty1_pct": 40, "duty2_pct": 0,
+                "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+                "current_a": 6.0,
+            },
+            {
+                "tier": "dcdc", "channel": 1, "duty1_pct": 60, "duty2_pct": 0,
+                "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+                "current_a": 19.0,
+            },
+        ]
+        self.assertEqual(session._max_safe_duty(records, "dcdc"), 40)
+
+        # 第一组 PWM1 得到 40%；随后 PWM2 电流达 17A，仍有效，合并后保持 40%。
+        session.tier = "dcdc"
+        session.records = records
+        with session.lock:
+            old_cap = session._max_safe_duty(session.records, session.tier)
+            session.suggested_caps["dcdc_cap_pct"] = old_cap
+        second = [{
+            "tier": "dcdc", "channel": 2, "duty1_pct": 0, "duty2_pct": 55,
+            "rpm1": 0, "rpm2": 0, "rpm3": 2500, "current_a": 17.0,
+        }]
+        second_cap = session._max_safe_duty(second, "dcdc")
+        self.assertEqual(second_cap, 55)
+        # 实际两次扫频分别计算后，再取更保守值，防止后扫回路覆盖此前更严格上限。
+        merged_cap = min(old_cap, second_cap)
+        self.assertEqual(merged_cap, 40)
+
+        # 电池档使用 8A 阈值；超过 8A 的有效点会被排除。
+        battery_records = [{
+            "tier": "battery", "channel": 1, "duty1_pct": 30, "duty2_pct": 0,
+            "rpm1": 2500, "rpm2": 2500, "rpm3": 0, "current_a": 8.5,
+        }]
+        self.assertIsNone(session._max_safe_duty(battery_records, "battery"))
+
+        # 即使净风扇电流很小，只要总线总电流超过预算也不能推荐更高占空比。
+        bg_limited = [{
+            "tier": "dcdc", "channel": 1, "duty1_pct": 80, "duty2_pct": 0,
+            "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+            "current_a": 18.5, "delta_current_a": 3.0,
+        }]
+        self.assertIsNone(session._max_safe_duty(bg_limited, "dcdc"))
+
+        # 没有有效数据时返回 None，不应生成 15% 的假建议。
+        self.assertIsNone(session._max_safe_duty([], "dcdc"))
+
     def test_calibration_preconditions_require_real_pcan_and_fresh_fan_frames(self) -> None:
         sent_commands = []
         def fake_send(name, vals, ack):

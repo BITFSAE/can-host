@@ -37,6 +37,10 @@ CALIB_MAX_MOTOR_TEMP_C = 70.0
 CALIB_MAX_CONTROLLER_TEMP_C = 65.0
 CALIB_ABORT_MOTOR_TEMP_C = 72.0
 CALIB_ABORT_CONTROLLER_TEMP_C = 68.0
+# 推荐上限按固件“正常预算”目标计算，而不是按快速限/硬限计算：
+# 预算给测量误差和背景负载留出余量，8A/18A 是正常控制目标。
+FAN_CALIB_BATTERY_CAP_CURRENT_A = 8.0
+FAN_CALIB_DCDC_CAP_CURRENT_A = 18.0
 
 
 class FanCalibrationSession:
@@ -71,8 +75,52 @@ class FanCalibrationSession:
         # baseline_raw_samples 是追加保存的逐样本原始数据。
         self.baseline_history: list[dict[str, Any]] = []
         self.baseline_id: int = 0
+        # None 表示该档位还没有完成过可用的扫频数据；完成后再填充。
+        self.suggested_caps: dict[str, int | None] = {
+            "battery_cap_pct": None,
+            "dcdc_cap_pct": None,
+        }
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+
+    @staticmethod
+    def _max_safe_duty(records: list[dict[str, Any]], tier: str) -> int | None:
+        """根据当前档位扫频记录，返回不超过电流预算的最大安全占空比。
+
+        固件预算限制的是 PDM 总线总电流（已包含整车背景负载），因此使用每条
+        记录的 current_a 直接与 8.0A/18.0A 比较；同时按被扫回路的实际转速确认
+        风扇已经正常运行。没有任何可用点时不生成推荐值，避免把无数据误当成
+        15% 的安全建议。
+        """
+        if tier == "battery":
+            threshold = FAN_CALIB_BATTERY_CAP_CURRENT_A
+        elif tier == "dcdc":
+            threshold = FAN_CALIB_DCDC_CAP_CURRENT_A
+        else:
+            return None
+
+        valid_duties: list[int] = []
+        for rec in records:
+            if rec.get("tier") != tier:
+                continue
+            channel = int(rec.get("channel") or 0)
+            if channel not in (1, 2):
+                continue
+            duty = int(rec.get(f"duty{channel}_pct") or 0)
+            if duty <= 0:
+                continue
+            current = rec.get("current_a")
+            if current is None or float(current) > threshold:
+                continue
+            if channel == 1:
+                rpm_ok = (int(rec.get("rpm1") or 0) > 0 and
+                          int(rec.get("rpm2") or 0) > 0)
+            else:
+                rpm_ok = int(rec.get("rpm3") or 0) > 0
+            if rpm_ok:
+                valid_duties.append(duty)
+
+        return max(valid_duties) if valid_duties else None
 
     def check_preconditions(self) -> dict[str, Any]:
         """Verify bus and vehicle safety conditions before calibration."""
@@ -318,6 +366,7 @@ class FanCalibrationSession:
                 "current_step": self.current_step,
                 "total_steps": self.total_steps,
                 "current_duty": list(self.current_duty),
+                "suggested_caps": dict(self.suggested_caps),
                 "baseline": dict(self.baseline),
                 "records": list(self.records),
                 "run_params": dict(self.run_params),
@@ -737,6 +786,16 @@ class FanCalibrationSession:
                     with self.lock:
                         self.current_step = record_index
                         self.records.append(record)
+
+            # 只更新当前档位的推荐值；同一档位反复扫不同回路时取较保守结果，
+            # 避免最后一条记录覆盖已经确认过的更严格上限。
+            key = "battery_cap_pct" if tier == "battery" else "dcdc_cap_pct"
+            with self.lock:
+                new_cap = self._max_safe_duty(self.records, tier)
+                if new_cap is not None:
+                    old_cap = self.suggested_caps.get(key)
+                    self.suggested_caps[key] = (new_cap if old_cap is None
+                                                else min(old_cap, new_cap))
 
             result = self._stop_and_restore_auto()
             with self.lock:

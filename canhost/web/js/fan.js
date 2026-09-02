@@ -254,6 +254,9 @@ function renderFan() {
   const snapshot = state.vehicleSnapshot || {};
   const connection = snapshot.connection || {};
   const available = fanConnectionAvailable();
+  // 标定会话状态在前面就要使用（推荐上限区域），必须先于其声明。
+  const calibSession = (snapshot.fan || {}).calib_session || {};
+  const calibStatus = calibSession.status || "idle";
   ["#sendFanControl", "#sendFanCurve", "#sendFanFailsafe", "#fanQueryButton", "#fanRestoreButton"]
     .forEach(id => { const node = $(id); if (node) node.disabled = !available; });
 
@@ -262,6 +265,7 @@ function renderFan() {
   const diag = fan.diagnostic || {};
   const power = fan.power_status || {};
   const limits = fan.calib_limits || {};
+  const calib = calibSession;
   const statusFresh = isFresh(fan.status_age);
   const diagFresh = isFresh(fan.diagnostic_age);
   const powerFresh = isFresh(fan.power_status_age);
@@ -340,13 +344,30 @@ function renderFan() {
   text("#fanCurrentBudget", powerFresh && power.current_budget_a != null ? `${power.current_budget_a} A` : "—");
   text("#fanPredictedCurrent", powerFresh && power.predicted_current_a != null ? `${power.predicted_current_a} A` : "—");
   const limitsFresh = isFresh(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S);
-  text("#fanCapsReport", limitsFresh
-    ? `0x5AE · ${limits.calibrated ? "已标定" : "未标定"} · 电池 ${limits.battery_cap_pct}% · DCDC ${limits.dcdc_cap_pct}% · 当前 ${limits.active_cap_pct}%${limits.flash_error ? " · Flash错误" : ""}`
-    : "未收到 0x5AE；保存前应先分别完成两档扫频。");
-  if (limitsFresh) {
-    $("#fanBatteryCapInput").value = limits.battery_cap_pct;
-    $("#fanDcdcCapInput").value = limits.dcdc_cap_pct;
+  const fanSuggested = (calib && calib.suggested_caps) || {};
+  let capsReportText = limitsFresh
+    ? "0x5AE · " + (limits.calibrated ? "已标定" : "未标定") + " · 电池 " + limits.battery_cap_pct + "% · DCDC " + limits.dcdc_cap_pct + "% · 当前 " + limits.active_cap_pct + "%" + (limits.flash_error ? " · Flash错误" : "")
+    : "未收到 0x5AE；保存前应先分别完成两档扫频。";
+  if (calibStatus === "completed") {
+    const suggestions = [];
+    if (fanSuggested.battery_cap_pct != null) suggestions.push("电池 " + fanSuggested.battery_cap_pct + "%");
+    if (fanSuggested.dcdc_cap_pct != null) suggestions.push("DCDC " + fanSuggested.dcdc_cap_pct + "%");
+    if (suggestions.length > 0) {
+      capsReportText += " (推荐: " + suggestions.join(" / ") + ")";
+      const batteryActive = document.activeElement === $("#fanBatteryCapInput");
+      const dcdcActive = document.activeElement === $("#fanDcdcCapInput");
+      if (!batteryActive && fanSuggested.battery_cap_pct != null) {
+        $("#fanBatteryCapInput").value = fanSuggested.battery_cap_pct;
+      }
+      if (!dcdcActive && fanSuggested.dcdc_cap_pct != null) {
+        $("#fanDcdcCapInput").value = fanSuggested.dcdc_cap_pct;
+      }
+    }
+  } else if (limitsFresh) {
+    if (document.activeElement !== $("#fanBatteryCapInput")) $("#fanBatteryCapInput").value = limits.battery_cap_pct;
+    if (document.activeElement !== $("#fanDcdcCapInput")) $("#fanDcdcCapInput").value = limits.dcdc_cap_pct;
   }
+  text("#fanCapsReport", capsReportText);
 
   // Render Fault Badges
   $$("#page-fan [data-fan-fault]").forEach(chip => {
@@ -407,8 +428,6 @@ function renderFan() {
   ).join("") : '<div class="empty-state">尚未收到 0x5A5 应答。</div>';
 
   // Calibration session state & table
-  const calib = fan.calib_session || {};
-  const calibStatus = calib.status || "idle";
   const calibRunning = calibStatus === "running";
   const tagMap = {
     idle: { text: "未激活", cls: "neutral" },
