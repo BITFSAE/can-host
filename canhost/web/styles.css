@@ -5,12 +5,16 @@
   --app-height: 100vh;
   /* Surfaces, from deepest to highest elevation */
   --bg: #0d0e0f;
+  --surface-ground: #08090a;
   --surface-1: #141516;
   --surface-2: #1b1c1e;
   --surface-3: #222426;
+  --surface-card: #141619;
+  --surface-elevated: #24272c;
   --surface-hi: #2b2d30;
   --line: #343638;
   --line-soft: #282a2c;
+  --line-highlight: rgba(255, 255, 255, .06);
 
   /* Text */
   --text: #eef0ed;
@@ -40,7 +44,13 @@
   --r-lg: 6px;
   --r-md: 4px;
   --r-sm: 2px;
-  --shadow: 0 12px 32px rgba(0, 0, 0, .34);
+  --shadow: 0 16px 40px rgba(0, 0, 0, .45);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, .25);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, .32);
+  --shadow-glow-ok: 0 0 16px rgba(62, 207, 142, .25);
+  --shadow-glow-warn: 0 0 16px rgba(240, 180, 41, .25);
+  --shadow-glow-fault: 0 0 16px rgba(242, 85, 77, .3);
+  --shadow-glow-action: 0 0 16px rgba(58, 181, 197, .3);
 
   /* 字体栈按目标平台 Windows 11 优先：界面用 Segoe UI Variable Text（Win10 回退 Segoe UI，
      macOS 回退系统 SF Pro）；等宽栈里的中文字体让表格中文帧名等不落到宋体或日文兜底。 */
@@ -398,8 +408,8 @@ body.is-tool-page .quick-bar {
   padding: 14px 18px 14px 20px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  background-color: var(--surface-1);
-  background-image: none;
+  background: linear-gradient(135deg, var(--surface-1) 0%, rgba(27, 28, 30, .85) 100%);
+  box-shadow: var(--shadow-sm);
 }
 .hero-state h2 {
   margin: 2px 0;
@@ -459,6 +469,11 @@ body.is-tool-page .quick-bar {
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.panel:hover {
+  border-color: rgba(255, 255, 255, .09);
 }
 .panel-head {
   display: flex;
@@ -468,6 +483,7 @@ body.is-tool-page .quick-bar {
   min-height: 42px;
   padding: 9px 14px;
   border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1) 100%);
 }
 .panel-head h3 {
   font-family: var(--cjk);
@@ -539,10 +555,11 @@ body.is-tool-page .quick-bar {
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--fault);
-  transition: background .18s ease;
+  transition: background .18s ease, box-shadow .18s ease;
+  box-shadow: 0 0 6px rgba(242, 85, 77, .4);
 }
 .hv-link em { font-style: normal; font-family: var(--cjk); font-size: 11.5px; color: var(--fault); }
-.hv-link.closed i { background: var(--ok); }
+.hv-link.closed i { background: var(--ok); box-shadow: 0 0 6px rgba(62, 207, 142, .4); }
 .hv-link.closed em { color: var(--ok); }
 .hv-link.closed { border-left-color: var(--ok); border-left-style: solid; }
 
@@ -1153,10 +1170,14 @@ body.is-tool-page .quick-bar {
   border-radius: var(--r-lg);
   background: var(--surface-1);
   color: var(--text);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, .05);
   overflow: hidden;
 }
-.modal::backdrop { background: rgba(4, 8, 12, .7); }
+.modal::backdrop {
+  background: rgba(4, 8, 12, .75);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
 .modal > form {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
