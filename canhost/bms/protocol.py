@@ -17,7 +17,8 @@ from typing import Any
 from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
                         CHROMA_CURR_STD_ID, CHROMA_OUTPUT_STD_ID,
                         CHROMA_PROTECT_STD_ID, CHROMA_VOLT_STD_ID,
-                        decode_alarm_levels, decode_ecu_sop_ack, decode_fault_fields,
+                        bms_cell_voltage_is_open, decode_alarm_levels,
+                        decode_ecu_sop_ack, decode_fault_fields,
                         decode_ivt_result, decode_pack_status, decode_sop_limits,
                         decode_sop_status, decode_bms_fan_detail, format_raw_frame, u16be, u16le,
                         IVT_RESULT_KEYS, IVT_RESULT_SCALES)
@@ -521,7 +522,7 @@ class BmsProtocol:
                 cell = start + offset
                 self.cells[cell] = raw_value
                 self.cell_seen[cell] = now
-                self.cell_reason[cell] = None
+                self.cell_reason[cell] = "断线" if bms_cell_voltage_is_open(raw_value) else None
             self.volt_frame_seen[slave][frame_index] = now
             return True
         delta = can_id - CAN1_CELL_TEMP_BASE
@@ -587,11 +588,12 @@ class BmsProtocol:
         if raw_cell_data_available:
             for index, value in enumerate(self.cells):
                 cell_age = age(now, self.cell_seen[index])
-                valid = (value is not None and value != 0xFFFF and cell_age is not None
+                valid = (value is not None and not bms_cell_voltage_is_open(value)
+                         and cell_age is not None
                          and cell_age <= self.slave_sample_timeout_s)
                 cell_values.append({"no": index + 1, "module": index // 23 + 1, "local": index % 23 + 1,
                                     "value": value if valid else None, "raw": value, "age": cell_age,
-                                    "status": self.cell_reason[index] or ("断线" if value == 0xFFFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
+                                    "status": self.cell_reason[index] or ("过期" if value is not None and not valid else "正常" if valid else "未收到")})
             for index, value in enumerate(self.temps):
                 temp_age = age(now, self.temp_seen[index])
                 valid = (value is not None and value != 0xFF and value <= 129 and temp_age is not None

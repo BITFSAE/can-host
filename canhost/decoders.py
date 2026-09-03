@@ -35,6 +35,15 @@ def u16le(data: bytes, offset: int = 0) -> int:
     return data[offset] | (data[offset + 1] << 8)
 
 
+CELL_VOLT_OPEN_LOW_MAX_MV = 2100
+CELL_VOLT_OPEN_HIGH_MIN_MV = 5400
+
+
+def bms_cell_voltage_is_open(value_mv: int) -> bool:
+    """Match the F405 rule for slave-reported open-wire cell voltages."""
+    return value_mv <= CELL_VOLT_OPEN_LOW_MAX_MV or value_mv >= CELL_VOLT_OPEN_HIGH_MIN_MV
+
+
 def age(now: float, seen: float | None) -> float | None:
     return None if seen is None else round(max(0.0, now - seen), 2)
 

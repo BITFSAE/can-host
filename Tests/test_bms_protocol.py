@@ -336,13 +336,14 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["sop"]["status"]["crc_valid"])
         self.assertTrue(snapshot["sop"]["status"]["ack_fresh"])
 
-    def test_out_of_range_voltage_keeps_neighbour_cells(self) -> None:
+    def test_open_range_voltage_keeps_neighbour_cells(self) -> None:
         protocol = BmsProtocol()
         payload = b"\x00\x00" + (3700).to_bytes(2, "little") + (6000).to_bytes(2, "little") + (3702).to_bytes(2, "little")
         protocol.ingest(CanFrame(0x180050F3, payload, True))
         snapshot = protocol.snapshot({"connected": True})
-        self.assertEqual([item["value"] for item in snapshot["cells"][:3]], [3700, 6000, 3702])
-        self.assertEqual([item["status"] for item in snapshot["cells"][:3]], ["正常"] * 3)
+        self.assertEqual([item["value"] for item in snapshot["cells"][:3]], [3700, None, 3702])
+        self.assertEqual([item["status"] for item in snapshot["cells"][:3]], ["正常", "断线", "正常"])
+        self.assertEqual(snapshot["cells"][1]["raw"], 6000)
         self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
 
     def test_open_wire_is_per_channel_on_last_voltage_frame(self) -> None:
@@ -357,14 +358,15 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(cells[3]["raw"], 0xFFFF)
         self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
 
-    def test_tap_fault_pair_keeps_all_four_cells(self) -> None:
+    def test_voltage_open_boundaries_and_nearby_valid_values(self) -> None:
         protocol = BmsProtocol()
-        payload = b"".join(value.to_bytes(2, "little") for value in (1000, 6500, 3700, 3701))
+        payload = b"".join(value.to_bytes(2, "little") for value in (2100, 2101, 5399, 5400))
         protocol.ingest(CanFrame(0x180550F3, payload, True))
         snapshot = protocol.snapshot({"connected": True})
         cells = snapshot["cells"][19:23]
-        self.assertEqual([item["value"] for item in cells], [1000, 6500, 3700, 3701])
-        self.assertEqual([item["status"] for item in cells], ["正常"] * 4)
+        self.assertEqual([item["value"] for item in cells], [None, 2101, 5399, None])
+        self.assertEqual([item["status"] for item in cells], ["断线", "正常", "正常", "断线"])
+        self.assertEqual([item["raw"] for item in cells], [2100, 2101, 5399, 5400])
         self.assertEqual(snapshot["modules"][0]["voltage_frames"], 1)
 
     def test_temp_open_code_is_per_channel(self) -> None:
