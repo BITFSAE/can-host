@@ -46,6 +46,7 @@ const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", 
 const TOOL_PAGES = ["bench", "ivt"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
+const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
 
 function fmt(value, digits = 1, fallback = "—") {
   return value === null || value === undefined || Number.isNaN(value) ? fallback : Number(value).toFixed(digits);
@@ -142,9 +143,14 @@ async function init() {
     state.bootstrap = await state.api.bootstrap();
     text("#appVersion", `v${state.bootstrap.version || "—"}`);
     text("#appVersionDate", state.bootstrap.version_date || "—");
+    $("#simulationBusButton")?.classList.toggle(
+      "hidden",
+      state.bootstrap.simulation_enabled !== true && state.bootstrap.vehicle_simulation_enabled !== true
+    );
     populateConnectionOptions();
     populateToolChannelOptions();
     populateVehicleOptions();
+    restoreConnectionPreferences();
     buildSwitchList();
     buildSwitchStatusList();
     await poll();
@@ -158,6 +164,7 @@ async function init() {
     ]};
     populateConnectionOptions(fallback);
     populateToolChannelOptions(fallback);
+    restoreConnectionPreferences();
   }
 }
 
@@ -185,11 +192,12 @@ function showPage(page) {
 }
 
 function bindCoreControls() {
-  $("#connectButton").addEventListener("click", () => $("#connectDialog").showModal());
-  $("#connectProfile").addEventListener("change", updateConnectionDialog);
-  $("#doConnect").addEventListener("click", connectCan);
-  $("#disconnectButton").addEventListener("click", disconnectCan);
-  $("#vehicleStatusPill").addEventListener("click", () => $("#vehicleConnectDialog")?.showModal());
+  $("#can1BusButton")?.addEventListener("click", () => toggleMainDockConnection("can1"));
+  $("#canbBmsBusButton")?.addEventListener("click", () => toggleMainDockConnection("canb_bms"));
+  $("#canbVehicleBusButton")?.addEventListener("click", toggleVehicleDockConnection);
+  $("#simulationBusButton")?.addEventListener("click", toggleSimulationChannels);
+  $("#connectionSettingsButton")?.addEventListener("click", () => $("#connectDialog")?.showModal());
+  $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
   $("#frameType").addEventListener("click", event => {
     const button = event.target.closest("button"); if (!button) return;
     state.frameKind = button.dataset.kind;
@@ -212,6 +220,15 @@ function bindCoreControls() {
     renderFrames();
   });
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
+  $("#confirmDialog").addEventListener("close", () => {
+    state.pendingCommand = null;
+    state.pendingIvtAction = null;
+    state.pendingFanCommand = null;
+    state.pendingFanAction = null;
+    $("#confirmCheck").checked = false;
+    $("#doConfirm").disabled = true;
+    setConfirmModeBadge("待确认");
+  });
   $("#doConfirm").addEventListener("click", sendPendingCommand);
   $("#recordButton").addEventListener("click", toggleRecording);
   $("#replayButton").addEventListener("click", openReplay);
@@ -259,18 +276,12 @@ function bindCoreControls() {
 function populateConnectionOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data) return;
-  const profiles = [...(data.profiles || [])];
-  if (data.simulation_enabled === true && !profiles.some(item => item.key === "simulation" || item.mode === "simulation")) {
-    profiles.unshift({ key: "simulation", mode: "simulation", name: "内置模拟数据 · CAN1 / 开发测试", bitrate: 500000 });
-  }
+  // 模拟入口只在底栏开发按钮出现，连接弹窗只配置真实 PCAN，避免同一模式重复入口。
+  const profiles = [...(data.profiles || [])].filter(item => ["canb", "canb_legacy"].includes(item.key));
   $("#connectProfile").innerHTML = profiles.map(item =>
-    `<option value="${item.key}" data-mode="${item.mode || (item.key === "simulation" ? "simulation" : "pcan")}" data-bitrate="${item.bitrate}">${item.name}</option>`
+    `<option value="${item.key}" data-mode="${item.mode || "pcan"}" data-bitrate="${item.bitrate}">${item.name}</option>`
   ).join("");
-  if (data.simulation_enabled === true && !state.snapshot?.connection?.connected) {
-    $("#connectProfile").value = "simulation";
-  }
   $("#connectChannel").innerHTML = (data.channels || ["PCAN_USBBUS1"]).map(item => `<option>${item}</option>`).join("");
-  updateConnectionDialog();
 }
 
 function populateToolChannelOptions(fallback) {
@@ -281,43 +292,198 @@ function populateToolChannelOptions(fallback) {
     .forEach(id => { if ($(id)) $(id).innerHTML = options; });
 }
 
-function updateConnectionDialog() {
-  const option = $("#connectProfile").selectedOptions?.[0] || $("#connectProfile").options?.[0];
-  const simulation = option?.dataset?.mode === "simulation" || option?.value === "simulation";
-  $("#channelField")?.classList.toggle("hidden", simulation);
-  text("#connectBitrate", simulation ? "虚拟 CAN1" : `${Number(option?.dataset?.bitrate || 500000) / 1000} kbit/s`);
+function restoreConnectionPreferences() {
+  let prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem(CONNECTION_PREFS_KEY) || "{}"); } catch { /* 使用默认项 */ }
+  const apply = (selector, value) => {
+    const node = $(selector);
+    if (node && [...node.options].some(option => option.value === String(value))) node.value = String(value);
+  };
+  apply("#connectChannel", prefs.mainChannel || "PCAN_USBBUS1");
+  apply("#connectProfile", prefs.bmsCanbProfile || "canb");
+  apply("#vehicleConnectChannel", prefs.vehicleChannel || "PCAN_USBBUS1");
+  apply("#vehicleConnectBitrate", prefs.vehicleBitrate || "500000");
 }
 
-async function connectCan() {
+function saveConnectionPreferences() {
+  const prefs = {
+    mainChannel: $("#connectChannel")?.value || "PCAN_USBBUS1",
+    bmsCanbProfile: $("#connectProfile")?.value || "canb",
+    vehicleChannel: $("#vehicleConnectChannel")?.value || "PCAN_USBBUS1",
+    vehicleBitrate: $("#vehicleConnectBitrate")?.value || "500000",
+  };
+  try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
+  $("#connectDialog")?.close();
+  toast("CAN 连接设置已保存");
+}
+
+function mainConnectionRole() {
+  const main = (state.snapshot || {}).connection || {};
+  if (main.connected !== true || main.mode === "simulation") return null;
+  if (main.connected === true && ["canb", "canb_legacy"].includes(main.bus_profile)) return "canb_bms";
+  return "can1";
+}
+
+function vehicleConnectionState() {
+  return state.quickSnapshot?.vehicle?.connection || state.vehicleSnapshot?.connection || {};
+}
+
+function roleButton(role) {
+  return {
+    can1: $("#can1BusButton"),
+    canb_bms: $("#canbBmsBusButton"),
+    canb_vehicle: $("#canbVehicleBusButton"),
+    simulation: $("#simulationBusButton"),
+  }[role];
+}
+
+async function toggleMainDockConnection(role) {
   if (!state.api) return toast("应用后端未就绪", true);
-  const option = $("#connectProfile").selectedOptions?.[0] || $("#connectProfile").options?.[0];
-  const mode = option?.dataset?.mode || (option?.value === "simulation" ? "simulation" : "pcan");
-  const profileVal = $("#connectProfile").value || "can1";
-  resetChargeTiming();
-  $("#doConnect").disabled = true; text("#doConnect", "连接中…");
-  $("#connectError").classList.add("hidden");
-  const result = await state.api.connect_can({
-    mode, bus_profile: mode === "simulation" ? "can1" : profileVal,
-    channel: mode === "simulation" ? null : $("#connectChannel").value,
-    bitrate: Number(option?.dataset?.bitrate || 500000),
-  });
-  $("#doConnect").disabled = false; text("#doConnect", "连接");
-  if (result.ok) {
-    $("#connectDialog").close();
-    toast(mode === "simulation" ? "BMS 模拟数据已启动（CAN1）" : "BMS 主连接已建立");
-    await poll();
-  } else {
-    text("#connectError", result.error || "连接失败");
-    $("#connectError").classList.remove("hidden");
+  if (roleButton(role)?.classList.contains("connecting")) return;
+  if (mainConnectionRole() === role) return disconnectCan();
+  const profileOption = $("#connectProfile")?.selectedOptions?.[0];
+  const profile = role === "can1" ? "can1" : (profileOption?.value || "canb");
+  const bitrate = role === "can1" ? 500000 : Number(profileOption?.dataset?.bitrate || 500000);
+  const vehicle = vehicleConnectionState();
+  if (vehicle.connected === true && vehicle.mode === "simulation") {
+    await state.api.disconnect_vehicle();
+    state.vehicleSnapshot = null;
   }
+  resetChargeTiming();
+  setBusConnecting(role, true);
+  let result;
+  try {
+    result = await state.api.connect_can({
+      mode: "pcan", bus_profile: profile,
+      channel: $("#connectChannel")?.value || "PCAN_USBBUS1", bitrate,
+    });
+  } catch (error) {
+    return toast(`连接失败：${error}`, true);
+  } finally {
+    setBusConnecting(role, false);
+  }
+  if (!result?.ok) return toast(result?.error || `${role === "can1" ? "CAN1" : "BMS CANB"} 连接失败`, true);
+  toast(`${role === "can1" ? "CAN1" : "BMS CANB"} 已连接`);
+  await poll();
+}
+
+async function toggleVehicleDockConnection() {
+  if (!state.api) return toast("应用后端未就绪", true);
+  if (roleButton("canb_vehicle")?.classList.contains("connecting")) return;
+  const vehicle = vehicleConnectionState();
+  if (vehicle.connected === true && vehicle.mode !== "simulation") return disconnectVehicle();
+  await connectVehicle();
+}
+
+function simulationServices() {
+  const services = [];
+  if (state.bootstrap?.simulation_enabled === true) services.push("main");
+  if (state.bootstrap?.vehicle_simulation_enabled === true) services.push("vehicle");
+  return services;
+}
+
+function simulationState() {
+  const services = simulationServices();
+  const main = state.snapshot?.connection || {};
+  const vehicle = vehicleConnectionState();
+  const running = services.filter(service => service === "main"
+    ? main.connected === true && main.mode === "simulation"
+    : vehicle.connected === true && vehicle.mode === "simulation");
+  return { services, running, complete: services.length > 0 && running.length === services.length };
+}
+
+async function toggleSimulationChannels() {
+  if (!state.api) return toast("应用后端未就绪", true);
+  if (roleButton("simulation")?.classList.contains("connecting")) return;
+  const sim = simulationState();
+  if (!sim.services.length) return toast("当前版本未启用模拟通道", true);
+  if (sim.complete) return disconnectSimulationChannels();
+  const main = state.snapshot?.connection || {};
+  const vehicle = vehicleConnectionState();
+  const realConnected = (main.connected === true && main.mode !== "simulation")
+    || (vehicle.connected === true && vehicle.mode !== "simulation");
+  if (realConnected) return toast("请先断开真实 CAN 连接，再启动模拟通道", true);
+
+  setBusConnecting("simulation", true);
+  const started = [];
+  try {
+    if (sim.services.includes("main") && !sim.running.includes("main")) {
+      const result = await state.api.connect_can({ mode: "simulation", bus_profile: "can1", channel: null, bitrate: 500000 });
+      if (!result.ok) throw new Error(result.error || "BMS 模拟通道启动失败");
+      started.push("main");
+    }
+    if (sim.services.includes("vehicle") && !sim.running.includes("vehicle")) {
+      const result = await state.api.connect_vehicle({ mode: "simulation", channel: null, bitrate: 500000, bus_profile: "canb" });
+      if (!result.ok) throw new Error(result.error || "整车模拟通道启动失败");
+      started.push("vehicle");
+    }
+  } catch (error) {
+    if (started.includes("main")) await state.api.disconnect_can();
+    if (started.includes("vehicle")) await state.api.disconnect_vehicle();
+    toast(String(error.message || error), true);
+    await poll();
+    return;
+  } finally {
+    setBusConnecting("simulation", false);
+  }
+  toast("开发模拟通道已启动");
+  await poll();
+}
+
+async function disconnectSimulationChannels() {
+  const main = state.snapshot?.connection || {};
+  const vehicle = vehicleConnectionState();
+  if (main.connected === true && main.mode === "simulation") await state.api.disconnect_can();
+  if (vehicle.connected === true && vehicle.mode === "simulation") await state.api.disconnect_vehicle();
+  state.vehicleSnapshot = null;
+  toast("开发模拟通道已停止");
+  await poll();
+}
+
+function setBusConnecting(role, active) {
+  const node = roleButton(role);
+  if (node) {
+    node.classList.toggle("connecting", active);
+    node.setAttribute("aria-busy", String(active));
+  }
+}
+
+function updateBusButtonsEnabled() {
+  const mainRole = mainConnectionRole();
+  const vehicle = vehicleConnectionState();
+  const sim = simulationState();
+  const states = {
+    can1: mainRole === "can1",
+    canb_bms: mainRole === "canb_bms",
+    canb_vehicle: vehicle.connected === true && vehicle.mode !== "simulation",
+    simulation: sim.complete,
+  };
+  Object.entries(states).forEach(([role, active]) => {
+    const button = roleButton(role);
+    if (!button) return;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const simulationButton = roleButton("simulation");
+  simulationButton?.classList.toggle("partial", sim.running.length > 0 && !sim.complete);
+  const titles = {
+    can1: states.can1 ? "CAN1 已连接，点击断开" : "按保存设置直接连接 CAN1",
+    canb_bms: states.canb_bms ? "BMS CANB 已连接，点击断开" : "按保存设置直接连接 BMS CANB（只读）",
+    canb_vehicle: states.canb_vehicle ? "整车 CANB 已连接，点击断开" : "按保存设置直接连接整车 CANB",
+    simulation: sim.complete ? "开发模拟通道已启动，点击停止" : sim.running.length ? "模拟通道未完整启动，点击重试" : "启动开发模拟通道",
+  };
+  Object.entries(titles).forEach(([role, title]) => roleButton(role)?.setAttribute("title", title));
 }
 
 async function disconnectCan() {
   if (!state.api) return;
+  const role = mainConnectionRole() || "can1";
   resetChargeTiming();
-  await state.api.disconnect_can();
-  $("#connectDialog").close();
-  toast("CAN 已断开");
+  setBusConnecting(role, true);
+  try { await state.api.disconnect_can(); }
+  catch (error) { return toast(`断开失败：${error}`, true); }
+  finally { setBusConnecting(role, false); }
+  toast("BMS 主连接已断开");
   await poll();
 }
 
@@ -383,6 +549,7 @@ function render() {
   renderTelemetryBadge();
   renderCellBadge();
   renderAlarmSummary();
+  renderBusDock();
   if (state.page === "overview") {
     renderOverview(); renderModules(); renderControls();
   } else if (state.page === "cells") {
@@ -407,55 +574,83 @@ function render() {
   }
 }
 
+function renderBusDock() {
+  const main = (state.snapshot || {}).connection || {};
+  const vehicle = state.quickSnapshot?.vehicle?.connection
+    || state.vehicleSnapshot?.connection || {};
+  updateScopeStrips(main, vehicle || {});
+  updateBusButtonsEnabled();
+}
+
+function updateScopeStrips(main, vehicle) {
+  const mainConnected = main.connected === true;
+  const vehicleConnected = vehicle.connected === true;
+  const framesStrip = $("#framesScopeStrip");
+  if (framesStrip) framesStrip.hidden = mainConnected || vehicleConnected;
+  let frameSource = state.frameSource || "main";
+  const selectedReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
+  if (!selectedReady && (mainConnected || vehicleConnected)) {
+    frameSource = mainConnected ? "main" : "vehicle";
+    state.frameSource = frameSource;
+    $$("#frameSource button").forEach(button => button.classList.toggle("active", button.dataset.source === frameSource));
+  }
+  const frameReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
+  $$("#frameSource button").forEach(button => {
+    button.disabled = button.dataset.source === "vehicle" ? !vehicleConnected : !mainConnected;
+  });
+
+  const can1Writable = mainConnected && main.bus_profile === "can1";
+  const controlStrip = $("#controlScopeStrip");
+  if (controlStrip) controlStrip.hidden = can1Writable;
+  document.body.classList.toggle("control-write-locked", !can1Writable);
+  $("#page-control")?.classList.toggle("scope-warning", !can1Writable && (mainConnected || vehicleConnected));
+
+  const fanWritable = vehicleConnected && vehicle.bus_profile !== "canb_legacy";
+  const fanStrip = $("#fanScopeStrip");
+  if (fanStrip) {
+    fanStrip.hidden = fanWritable;
+    text("#fanScopeDetail", fanWritable
+      ? ""
+      : vehicleConnected && vehicle.bus_profile === "canb_legacy"
+        ? "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s"
+        : "点击底部“整车 CANB”直接连接后，才能查看和命令风扇");
+  }
+  document.body.classList.toggle("fan-write-locked", !fanWritable);
+}
+
 function renderConnection(connection) {
   state.recording = !!connection.recording;
   text("#recordButton", state.recording ? "■ 停止记录" : "● 记录数据");
   setClass("#recordButton", "active", state.recording);
-  text("#rxCount", (connection.rx_count || 0).toLocaleString());
-  text("#txCount", (connection.tx_count || 0).toLocaleString());
-  setClass("#connectButton", "connected", connection.connected);
-  setClass("#connectButton", "simulation", connection.mode === "simulation");
-  setClass("#connectButton", "replay", connection.mode === "replay");
-  const profileNames = { can1: "CAN1 · F405", canb: "CANB · 500", canb_legacy: "CANB Legacy · 250" };
-  const modeName = connection.mode === "simulation" ? "BMS 模拟数据"
-    : connection.mode === "bench" ? "BMS 从控台架"
-    : connection.mode === "replay" ? "BMS 历史回放" : `BMS: ${connection.channel || "PCAN"}`;
-  $("#connectButton b").textContent = connection.connected ? modeName : "BMS 未连接";
-  $("#connectButton small").textContent = connection.connected
-    ? connection.mode === "simulation" ? "虚拟 CAN1 · 测试"
-      : `${profileNames[connection.bus_profile] || "CAN1"} · ${(connection.bitrate || 500000) / 1000} kbit/s`
-    : "选择 CAN1 总线";
-  $("#disconnectButton").classList.toggle("hidden", !connection.connected);
-
-  const vehicleConnection = state.quickSnapshot?.vehicle?.connection
-    || state.vehicleSnapshot?.connection || {};
-  const vehiclePill = $("#vehicleStatusPill");
-  if (vehiclePill) {
-    const connected = vehicleConnection.connected === true;
-    setClass(vehiclePill, "connected", connected);
-    setClass(vehiclePill, "simulation", vehicleConnection.mode === "simulation");
-    vehiclePill.querySelector("b").textContent = connected
-      ? (vehicleConnection.mode === "simulation" ? "整车模拟数据" : `整车: ${vehicleConnection.channel || "PCAN"}`)
-      : "整车未连接";
-    vehiclePill.querySelector("small").textContent = connected
-      ? vehicleConnection.mode === "simulation" ? "虚拟 CANB"
-        : `CANB · ${(vehicleConnection.bitrate || 500000) / 1000} kbit/s`
-      : "CANB · 500 kbit/s";
-  }
-
+  const vehicleConnection = vehicleConnectionState();
+  const mainRx = Number(connection.rx_count || 0), mainTx = Number(connection.tx_count || 0);
+  const vehicleRx = Number(vehicleConnection.rx_count || 0), vehicleTx = Number(vehicleConnection.tx_count || 0);
+  text("#rxCount", (mainRx + vehicleRx).toLocaleString());
+  text("#txCount", (mainTx + vehicleTx).toLocaleString());
+  const traffic = $(".traffic-group");
+  if (traffic) traffic.title = `BMS RX ${mainRx.toLocaleString()} / TX ${mainTx.toLocaleString()} · 整车 RX ${vehicleRx.toLocaleString()} / TX ${vehicleTx.toLocaleString()}`;
   const firmware = state.snapshot?.firmware || {};
   const firmwareText = [
     firmware.variant,
     firmware.charger_variant && firmware.charger_variant !== "Runtime" ? firmware.charger_variant : "",
     firmware.git,
     firmware.build_date ? `构建 ${firmware.build_date}` : "",
-  ].filter(Boolean).join(" · ") || "—";
+  ].filter(Boolean).join(" · ") || "等待数据";
   const firmwareNode = $("#firmwareIdentity");
   if (firmwareNode) {
     firmwareNode.textContent = firmwareText;
     firmwareNode.title = firmwareText;
   }
   renderQuickBar();
+}
+
+/** 确认弹窗顶部的主/总线/操作模式徽标；危险操作明确用红色，避免只说“确认发送”。 */
+function setConfirmModeBadge(label, mode) {
+  const badge = $("#confirmModeBadge");
+  if (badge) {
+    badge.textContent = label;
+    badge.className = "confirm-mode-badge" + (mode ? " " + mode : "");
+  }
 }
 
 /** Always-visible quick values: LV from the vehicle connection, HV/SOC from the
@@ -477,13 +672,16 @@ function renderQuickBar() {
   text("#quickLvI", lvFresh ? fmt(pdm.bus_current_a, 1) : "等待");
   text("#quickLvP", lvFresh ? fmt(pdm.bus_power_w, 0) : "等待");
 
-  const hvFresh = useMainHv || (vehiclePackFresh && vehiclePack.voltage_valid);
-  const hvSource = useMainHv ? overview : vehiclePack;
-  text("#quickHvV", hvFresh ? fmt(hvSource.voltage_v, 1) : "等待");
-  const hvCurrentFresh = (useMainHv && overview.current_valid) || (vehiclePackFresh && vehiclePack.current_valid);
-  text("#quickHvI", hvCurrentFresh ? fmt(hvSource.current_a, 1) : "等待");
-  const socFresh = useMainSoc || (vehiclePackFresh && vehiclePack.soc_valid);
-  text("#quickSoc", socFresh ? fmt(hvSource.soc_pct, 0) : "等待");
+  const vehicleVoltageFresh = vehiclePackFresh && vehiclePack.voltage_valid;
+  const voltageSource = useMainHv ? overview : vehicleVoltageFresh ? vehiclePack : null;
+  text("#quickHvV", voltageSource ? fmt(voltageSource.voltage_v, 1) : "等待");
+  const useMainCurrent = mainSummaryFresh && overview.current_valid;
+  const vehicleCurrentFresh = vehiclePackFresh && vehiclePack.current_valid;
+  const currentSource = useMainCurrent ? overview : vehicleCurrentFresh ? vehiclePack : null;
+  text("#quickHvI", currentSource ? fmt(currentSource.current_a, 1) : "等待");
+  const vehicleSocFresh = vehiclePackFresh && vehiclePack.soc_valid;
+  const socSource = useMainSoc ? overview : vehicleSocFresh ? vehiclePack : null;
+  text("#quickSoc", socSource ? fmt(socSource.soc_pct, 0) : "等待");
 
   const sop = quick?.sop || {};
   const sopFresh = isFresh(sop.age, 4.0);

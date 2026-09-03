@@ -86,6 +86,16 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertEqual(quick["fan_rpm_max"], 3400)
         self.assertFalse(quick["pack"]["voltage_valid"])
 
+    def test_service_quick_snapshot_keeps_vehicle_traffic_counts(self) -> None:
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.connection.update({"rx_count": 12, "tx_count": 3})
+            quick = service.quick_snapshot()
+            self.assertEqual(quick["connection"]["rx_count"], 12)
+            self.assertEqual(quick["connection"]["tx_count"], 3)
+        finally:
+            service.disconnect()
+
     def test_vehicle_trend_appends_when_fresh(self) -> None:
         clock = [0.0]
         protocol = VehicleProtocol(clock=lambda: clock[0])

@@ -249,6 +249,10 @@
         </section>
 
         <section class="page" id="page-control" aria-label="参数与命令">
+          <div class="scope-strip danger" id="controlScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="controlScopeTitle">CAN1 写命令不可用</b><small id="controlScopeDetail">只有 CAN1 主监视连接才能发送 F405 工具命令</small></div>
+          </div>
           <article class="panel interlock">
             <header class="panel-head">
               <h3>命令发送条件</h3>
@@ -605,6 +609,10 @@
         </section>
 
         <section class="page" id="page-fan" aria-label="整车风扇">
+          <div class="scope-strip" id="fanScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="fanScopeTitle">整车风扇需 CANB 整车遥测</b><small id="fanScopeDetail">CANB 只接 BMS 监视时无法向 FanController 发送命令</small></div>
+          </div>
           <div class="fan-workspace-grid">
             <div class="fan-telemetry-column">
               <article class="panel fan-telemetry-panel">
@@ -641,8 +649,8 @@
 
                   <!-- 0x5A8 供电状态与功率仲裁 -->
                   <div class="fan-power-arbitration-block">
-                    <div class="fan-power-head">
-                      <h5>供电状态与功率仲裁 (0x5A8)</h5>
+                    <div class="fan-sub-section-head">
+                      <b>供电状态与功率仲裁</b><span>0x5A8</span>
                       <span id="fanPowerStatusFresh" class="policy-reported-tag">等待数据</span>
                     </div>
                     <div class="fan-power-grid">
@@ -725,8 +733,8 @@
                   </div>
 
                   <div class="fan-diagnostics-section">
-                    <div class="fan-diag-head">
-                      <h5>自检与故障诊断</h5>
+                    <div class="fan-sub-section-head fan-diag-head">
+                      <b>自检与故障诊断</b>
                       <span id="fanDiagStatus" class="fan-diag-summary">等待数据</span>
                     </div>
                     <div class="fan-fault-grid">
@@ -761,6 +769,12 @@
                     <button class="danger-button" type="button" id="abortFanCalibButton" disabled>安全中止标定</button>
                     <button class="outline-button" type="button" id="exportFanCalibCsv">导出 CSV 记录</button>
                     <button class="outline-button" type="button" id="exportFanCalibJson">导出 JSON 记录</button>
+                  </div>
+                  <div class="fan-calib-progress-row">
+                    <div class="progress-track" role="progressbar" aria-label="自动阶梯扫频进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="fanCalibProgress">
+                      <i></i>
+                    </div>
+                    <span class="fan-calib-progress-label" id="fanCalibProgressLabel">尚未开始扫描</span>
                   </div>
                   <div class="field-grid fan-calib-fields">
                     <label class="field"><span class="field-label">电池档上限</span><span class="field-input"><input id="fanBatteryCapInput" type="number" min="5" max="100" value="15"><em>%</em></span></label>
@@ -801,6 +815,10 @@
                 </header>
                 <div class="panel-body">
                   <p id="batteryFanStatusText" class="fan-inline-note">发送查询后，F405 在限时窗口内回报状态。</p>
+                  <div class="fan-status-value-row">
+                    <div><small>当前实际占空比</small><b id="batteryFanStatusValue" class="battery-fan-status-value">等待</b><em>%</em></div>
+                    <div><small>保存状态</small><b id="batteryFanSaveState" class="fan-inline-note">—</b></div>
+                  </div>
                   <div class="field-grid fan-mode-fields">
                     <label class="field"><span class="field-label">目标模式</span><span class="field-input"><select id="batteryFanModeSelect"><option value="0">自动温控</option><option value="1">手动调速</option><option value="2">强制停机</option></select></span></label>
                     <label class="field"><span class="field-label">占空比</span><span class="field-input"><input id="batteryFanDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
@@ -810,7 +828,7 @@
                     <button class="outline-button" type="button" id="batteryFanQueryButton">查询状态</button>
                     <button class="action-button" type="button" id="batteryFanControlButton">下发控制</button>
                   </div>
-                  <h4>高压/DCDC 标定会话</h4>
+                  <div class="fan-sub-section-head"><b>高压/DCDC 标定会话</b><span>仅真高压稳定时</span></div>
                   <div class="field-grid fan-mode-fields">
                     <label class="field"><span class="field-label">稳态保持</span><span class="field-input"><input id="batteryFanAutoHoldInput" type="number" min="3" max="10" value="5"><em>s</em></span></label>
                     <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="batteryFanAutoCurrentInput" type="number" min="5" max="20" value="18"><em>A</em></span></label>
@@ -865,8 +883,8 @@
                 </header>
                 <div class="panel-body">
                   <div class="fan-policy-subblock">
-                    <div class="fan-policy-subhead">
-                      <h4>自动温控曲线</h4>
+                    <div class="fan-sub-section-head fan-policy-subhead">
+                      <b>自动温控曲线</b>
                       <span id="fanCurveReport" class="policy-reported-tag">当前值未读取</span>
                     </div>
                     <div class="field-grid" style="grid-template-columns: 1fr; margin-bottom: 8px;">
@@ -883,8 +901,8 @@
                   </div>
 
                   <div class="fan-policy-subblock">
-                    <div class="fan-policy-subhead">
-                      <h4>温度失联策略</h4>
+                    <div class="fan-sub-section-head fan-policy-subhead">
+                      <b>温度失联策略</b>
                       <span id="fanFailsafeReport" class="policy-reported-tag">当前值未读取</span>
                     </div>
                     <div class="field-grid five-col">
@@ -920,6 +938,10 @@
         </section>
 
         <section class="page" id="page-frames" aria-label="CAN 监视器">
+          <div class="scope-strip" id="framesScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="framesScopeTitle">未连接</b><small id="framesScopeDetail">点击底部 CAN1 / CANB 快速开关</small></div>
+          </div>
           <div class="toolbar">
             <label class="search">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6 20 20"/></svg>
@@ -1032,76 +1054,70 @@
       </div>
 
       <footer class="statusbar">
-        <button id="connectButton" class="connect-button" type="button" title="BMS 主监视连接（CAN1 / CANB / 模拟）">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span class="connect-copy"><b>BMS 未连接</b><small>选择 CAN1</small></span>
-        </button>
-        <button id="vehicleStatusPill" class="connect-button vehicle-connect-button" type="button" title="整车遥测连接（CANB）">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span class="connect-copy"><b>整车未连接</b><small>CANB · 500k</small></span>
-        </button>
-        <span class="status-divider" aria-hidden="true"></span>
-        <span class="status-group traffic-group">
-          <span class="status-pair"><span class="label">RX</span><b id="rxCount">0</b></span>
-          <span class="status-pair"><span class="label">TX</span><b id="txCount">0</b></span>
-        </span>
-        <span class="status-divider" aria-hidden="true"></span>
-        <span class="status-group firmware-item">
-          <span class="label">固件身份</span><b id="firmwareIdentity">—</b>
-        </span>
-        <span class="recording-status" id="recordingState"></span>
+        <div class="connection-dock" role="group" aria-label="CAN 连接">
+          <button class="bus-connect" id="can1BusButton" type="button" data-bus="can1" aria-pressed="false" title="按保存设置直接连接 CAN1">
+            <i class="bus-dot" aria-hidden="true"></i><b>CAN1</b>
+          </button>
+          <button class="bus-connect" id="canbBmsBusButton" type="button" data-bus="canb-bms" aria-pressed="false" title="按保存设置直接连接 BMS CANB（只读）">
+            <i class="bus-dot" aria-hidden="true"></i><b>BMS CANB</b>
+          </button>
+          <button class="bus-connect" id="canbVehicleBusButton" type="button" data-bus="canb-vehicle" aria-pressed="false" title="按保存设置直接连接整车 CANB">
+            <i class="bus-dot" aria-hidden="true"></i><b>整车 CANB</b>
+          </button>
+          <button class="bus-connect simulation-toggle" id="simulationBusButton" type="button" data-bus="simulation" aria-pressed="false" title="启动开发模拟通道">
+            <i class="bus-dot" aria-hidden="true"></i><b>模拟</b>
+          </button>
+        </div>
+        <div class="statusbar-meta" aria-label="CAN 运行信息">
+          <span class="status-divider" aria-hidden="true"></span>
+          <span class="status-group traffic-group">
+            <span class="status-pair"><span class="label">RX</span><b id="rxCount">0</b></span>
+            <span class="status-pair"><span class="label">TX</span><b id="txCount">0</b></span>
+          </span>
+          <span class="status-divider" aria-hidden="true"></span>
+          <span class="status-group firmware-item">
+            <span class="label">固件</span><b id="firmwareIdentity">等待数据</b>
+          </span>
+          <button class="connection-settings-button" id="connectionSettingsButton" type="button" aria-label="CAN 连接设置" title="CAN 连接设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M4 12h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="17" r="2"/></svg>
+          </button>
+        </div>
       </footer>
     </div>
   </div>
 
   <dialog id="connectDialog" class="modal">
     <form method="dialog">
-      <header><h2>BMS 主连接</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <header><h2 id="connectDialogTitle">CAN 连接设置</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
       <div class="modal-body">
         <label class="field">
-          <span class="field-label">监视总线</span>
-          <select id="connectProfile"></select>
-        </label>
-        <label class="field" id="channelField">
-          <span class="field-label">PCAN 通道</span>
+          <span class="field-label">BMS 主连接通道</span>
           <select id="connectChannel"></select>
         </label>
+        <label class="field">
+          <span class="field-label">BMS CANB 位率</span>
+          <select id="connectProfile"></select>
+        </label>
         <dl class="mini-facts spread boxed">
-          <div><dt>位速率</dt><dd id="connectBitrate">500 kbit/s</dd></div>
+          <div><dt>CAN1 位率</dt><dd>500 kbit/s（固定）</dd></div>
         </dl>
-        <p class="note tight">这是 BMS 主监视连接（CAN1/CANB/模拟）。整车遥测由独立的 CANB 整车连接管理，台架与 IVT 配置使用工具专属连接。</p>
-        <div id="connectError" class="modal-error hidden"></div>
-      </div>
-      <footer>
-        <button type="button" class="danger-outline hidden" id="disconnectButton">断开当前连接</button>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
-        <button type="button" class="action-button" id="doConnect">连接</button>
-      </footer>
-    </form>
-  </dialog>
-
-  <dialog id="vehicleConnectDialog" class="modal">
-    <form method="dialog">
-      <header><h2>整车 CANB 连接</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
-      <div class="modal-body">
+        <div class="connection-settings-divider"><span>整车 CANB</span></div>
         <label class="field" id="vehicleChannelField">
-          <span class="field-label">PCAN 通道</span>
+          <span class="field-label">整车连接通道</span>
           <select id="vehicleConnectChannel"></select>
         </label>
         <label class="field">
-          <span class="field-label">波特率 / 模式</span>
+          <span class="field-label">整车 CANB 位率</span>
           <select id="vehicleConnectBitrate">
             <option value="500000">500 kbit/s（标准整车 CANB）</option>
             <option value="250000">250 kbit/s（旧充电机 / 过渡）</option>
           </select>
         </label>
-        <p class="note tight">整车 CANB 独立通道，用于整车总览遥测（SOP、赛会能量计、PDM、ECU、胎温）与风扇控制。自有 IVT 已迁到 CAN1，可由 BMS 主监视连接查看。</p>
-        <div id="vehicleConnectError" class="modal-error hidden"></div>
+        <p class="note tight">设置只决定底部三个按钮下次连接时使用的通道和位率。日常连接、断开直接点击底部按钮；BMS 主连接与整车连接可以使用两个 PCAN 通道并行工作。</p>
       </div>
       <footer>
-        <button type="button" class="danger-outline hidden" id="disconnectVehicleButton">断开当前连接</button>
         <button value="cancel" class="outline-button" type="submit">取消</button>
-        <button type="button" class="action-button" id="connectVehicleButton">连接</button>
+        <button type="button" class="action-button" id="saveConnectionSettings">保存设置</button>
       </footer>
     </form>
   </dialog>
@@ -1151,6 +1167,7 @@
     <form method="dialog">
       <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
       <div class="modal-body">
+        <span class="confirm-mode-badge" id="confirmModeBadge">待确认</span>
         <p class="confirm-text" id="confirmMessage"></p>
         <pre id="confirmPayload" class="payload"></pre>
         <label class="checkbox">

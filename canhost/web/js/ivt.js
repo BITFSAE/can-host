@@ -175,6 +175,7 @@ function confirmIvtAction(kind, options, title, message, destructive = false) {
   const rspId = options.rsp_id ?? state.toolSnapshots.ivt.ivt_config?.response_id ?? 0x511;
   text("#confirmTitle", title);
   text("#confirmMessage", message);
+  setConfirmModeBadge(destructive ? "IVT 高危写入 · 需二次确认" : "IVT 配置操作", destructive ? "bad" : "");
   const operation = kind === "configure" ? "完整配置并重启 IVT"
     : "切换到 " + (options.target_bitrate / 1000) + " kbit/s";
   const periodText = kind === "configure"

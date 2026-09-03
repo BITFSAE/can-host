@@ -218,6 +218,7 @@ function confirmFanCommand(name, values, title, message, destructive = false) {
   const conn = state.vehicleSnapshot.connection;
   text("#confirmTitle", title);
   text("#confirmMessage", message);
+  setConfirmModeBadge(destructive ? "风扇高危操作 · 需二次确认" : "CANB 风扇命令", destructive ? "bad" : "");
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s\n`
     + `命令：${name}`);
@@ -240,6 +241,7 @@ function confirmFanAction(title, message, checkLabel, run, destructive = false) 
   const conn = state.vehicleSnapshot.connection;
   text("#confirmTitle", title);
   text("#confirmMessage", message);
+  setConfirmModeBadge(destructive ? "风扇高危操作 · 需二次确认" : "CANB 风扇动作", destructive ? "bad" : "");
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s\n`
     + `操作：${title}`);
@@ -458,6 +460,10 @@ function renderFan() {
     calibTag.className = `tag ${tagInfo.cls}`;
   }
 
+  // 标定会话进度：状态、当前步骤、当前/目标总电流与保护值集中在一行，避免
+  // 操作者只看到“扫描中”而不知道当前处于阶梯的哪一段。
+  renderFanCalibProgress(calibSession, calibRunning);
+
   const startBtn = $("#startFanCalibButton");
   if (startBtn) startBtn.disabled = !available || calibRunning;
   const abortBtn = $("#abortFanCalibButton");
@@ -490,13 +496,25 @@ function renderFan() {
   const batteryCalib = batteryFan.calibration || {};
   const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
   text("#batteryFanFreshTag", batteryFresh ? `0x5AA · ${fmt(batteryFan.status_age, 1)} s 前` : "等待查询");
+  const batteryNote = $("#batteryFanStatusText");
+  if (batteryNote) batteryNote.className = batteryFresh ? "fan-inline-note is-active" : "fan-inline-note";
   text("#batteryFanStatusText", batteryFresh
     ? `${batteryStatus.mode_name} · ${batteryStatus.power_source_name} · ${batteryStatus.actual_duty_pct}% / 上限 ${batteryStatus.active_limit_pct}% · ${batteryStatus.rpm} RPM`
     : "发送查询后，F405 在限时窗口内回报状态。");
-  if (isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S)) {
+  const batteryValue = $("#batteryFanStatusValue");
+  if (batteryValue) batteryValue.textContent = batteryFresh ? String(batteryStatus.actual_duty_pct) : "等待";
+  const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
+  if (batteryCalibFresh) {
     $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
     $("#batteryFanHvCapInput").value = batteryCalib.hv_cap_pct;
-    text("#batteryFanStatusText", `${$("#batteryFanStatusText").textContent} · ${batteryCalib.calibrated ? "已标定" : "未标定"}${batteryCalib.save_pending ? " · 等待Flash保存" : ""}`);
+  }
+  const saveNode = $("#batteryFanSaveState");
+  if (saveNode) {
+    saveNode.textContent = batteryCalibFresh
+      ? batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存"
+      : "等待回报";
+    saveNode.className = "battery-fan-save-state"
+      + (batteryCalibFresh && batteryCalib.save_pending ? " warn" : batteryCalibFresh && batteryCalib.calibrated ? " ok" : "");
   }
   const batterySession = batteryFan.calib_session || {};
   const batteryRecords = batterySession.records || [];
@@ -515,4 +533,30 @@ function renderFan() {
    "#commitFanCapsButton", "#clearFanCapsButton"].forEach(id => { if ($(id)) $(id).disabled = !available; });
   if ($("#batteryFanAutoStartButton")) $("#batteryFanAutoStartButton").disabled = !available || batterySession.status === "running";
   if ($("#batteryFanAutoStopButton")) $("#batteryFanAutoStopButton").disabled = batterySession.status !== "running";
+}
+
+function renderFanCalibProgress(session, running) {
+  const progress = $("#fanCalibProgress");
+  if (!progress) return;
+  const step = Number(session?.current_step || 0);
+  const total = Number(session?.total_steps || 0);
+  const status = session?.status || "idle";
+  const pct = status === "completed" ? 100
+    : total > 0 ? Math.max(0, Math.min(100, Math.round(step / total * 100))) : 0;
+  progress.setAttribute("aria-valuenow", String(pct));
+  const fill = progress.firstElementChild;
+  if (fill) fill.style.width = pct + "%";
+  progress.classList.toggle("running", running);
+  const label = $("#fanCalibProgressLabel");
+  if (!label) return;
+  if (running) {
+    const states = { running: "自动扫描中", aborted: "已安全中止", completed: "扫描完成" };
+    label.textContent = `${states[status] || "扫描中"} · 步骤 ${step}/${total} · ${pct}%`;
+  } else if (status === "aborted") {
+    label.textContent = `已中止：${session?.abort_reason || "未知原因"}`;
+  } else if (status === "completed") {
+    label.textContent = "扫描完成 · 核对下方推荐上限后再保存";
+  } else {
+    label.textContent = "尚未开始扫描";
+  }
 }

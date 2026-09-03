@@ -55,7 +55,7 @@ function bindBmsControls() {
   $("#sendSwitches").addEventListener("click", () => {
     const switches = {};
     $$("#switchList input").forEach(input => switches[input.dataset.key] = input.checked);
-    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的全部开关作为一组写入主控。基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。");
+    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的全部开关作为一组写入主控。基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。", true);
   });
   $("#sendChargeConfig").addEventListener("click", () => confirmCommand(
     "charge_config", { voltage_v: +$("#chargeVoltage").value, current_a: +$("#chargeCurrent").value },
@@ -132,6 +132,10 @@ function renderOverview() {
     stateNode.className = `machine-value ${!overviewFresh ? "stale" : MACHINE_STATE_CLASSES[o.state] || "unknown"}`;
     stateNode.title = overviewFresh ? `主控状态：${stateName}` : "等待主控状态";
   }
+  // 状态条本身保持普通卡片样式，只通过文本状态和下方卡片的确定性颜色表达。
+  setClass("#overviewStatus", "status-ok", false);
+  setClass("#overviewStatus", "status-warn", false);
+  setClass("#overviewStatus", "status-bad", false);
   const descriptions = { 2: "主控正在等待完整从控采样和 IVT U1。", 3: "高压未闭合，可以进行参数配置。", 4: "预充正在进行，配置命令将被主控忽略。", 5: "高压已闭合，优先监视电流、单体与告警。", 7: "故障已锁存，排除实时故障后再请求复位。" };
   text("#stateDescription", stale ? "主控周期状态帧缺失或已经超时。" : descriptions[o.state] || "正在读取主控状态。");
   text("#overviewClock", new Date().toLocaleTimeString("zh-CN", { hour12: false }));
@@ -548,6 +552,20 @@ function renderAlarms() {
     : `主控记录 ${logInfo.count} 条 · 丢弃 ${logInfo.dropped} 条 · 已显示 ${flashRecords.length} 条`);
 }
 
+function flashPersistenceState() {
+  const runtime = state.snapshot?.runtime_diag || {};
+  const fresh = runtime.age != null && runtime.age <= 1.5;
+  if (!fresh) return { available: false, reason: "等待主控回报 Flash 状态。" };
+  if (runtime.flash_ready !== true) return { available: false, reason: "外置 Flash 离线，当前不能保存配置。" };
+  return { available: true, reason: "" };
+}
+
+function setPersistentButtonState(selector, normallyDisabled, flashState) {
+  const node = $(selector);
+  node.disabled = normallyDisabled || !flashState.available;
+  node.title = flashState.available ? "" : flashState.reason;
+}
+
 function renderConfig() {
   const config = state.snapshot.config || {};
   const rawThresholds = config.thresholds || {};
@@ -561,6 +579,7 @@ function renderConfig() {
   const runtimeFresh = isFresh(config.runtime_age);
   const directionKnown = runtimeFresh && config.current_direction_inverted != null;
   const chargerTypeKnown = runtimeFresh && config.charger_type != null;
+  const flashState = flashPersistenceState();
 
   text("#displayOv", hasThresholdReport ? `${thresholds.ov_mv} mV` : "等待数据");
   text("#displayUv", hasThresholdReport ? `${thresholds.uv_mv} mV` : "等待数据");
@@ -578,7 +597,7 @@ function renderConfig() {
     $("#otInput").value = thresholds.ot_c; $("#utInput").value = thresholds.ut_c;
     state.inputsInitialized.thresholds = true;
   }
-  $("#sendThresholds").disabled = !hasThresholdReport && !state.dirty.thresholds;
+  setPersistentButtonState("#sendThresholds", !hasThresholdReport && !state.dirty.thresholds, flashState);
 
   text("#switchVersion", hasSwitchReport && config.switch_version != null
     ? `回报 V${config.switch_version}` : "等待数据");
@@ -605,7 +624,7 @@ function renderConfig() {
     state.inputsInitialized.switches = true;
   }
   $$("#switchList input").forEach(input => input.disabled = !hasSwitchReport && !state.dirty.switches);
-  $("#sendSwitches").disabled = !hasSwitchReport && !state.dirty.switches;
+  setPersistentButtonState("#sendSwitches", !hasSwitchReport && !state.dirty.switches, flashState);
   updateSwitchRowState();
   if (directionKnown && !state.dirty.direction && document.activeElement !== $("#currentDirection")) {
     $("#currentDirection").value = config.current_direction_inverted ? "1" : "0";
@@ -618,9 +637,9 @@ function renderConfig() {
     $("#chargerType").value = "";
   }
   $("#currentDirection").disabled = !directionKnown && !state.dirty.direction;
-  $("#sendCurrentDirection").disabled = !directionKnown && !state.dirty.direction;
+  setPersistentButtonState("#sendCurrentDirection", !directionKnown && !state.dirty.direction, flashState);
   $("#chargerType").disabled = !chargerTypeKnown && !state.dirty.chargerType;
-  $("#sendChargerType").disabled = !chargerTypeKnown && !state.dirty.chargerType;
+  setPersistentButtonState("#sendChargerType", !chargerTypeKnown && !state.dirty.chargerType, flashState);
 }
 
 function watchFlashSave(command, ack) {
@@ -714,6 +733,7 @@ function renderControls() {
   text("#chargeRequestEcho", requestText);
   const runtime = state.snapshot.runtime_diag || {};
   renderSaveStatus(runtime);
+  setPersistentButtonState("#sendChargeConfig", !requestFresh && !state.dirty.charge, flashPersistenceState());
   const config = state.snapshot.config || {};
   if (isFresh(config.runtime_age) && config.charger_type != null
       && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
@@ -837,8 +857,8 @@ function renderCellBadge() {
 function makeCellItem(label, unit) {
   const root = document.createElement("div");
   root.className = "cell-item";
-  root.innerHTML = `<small>${label}</small><b><span class="cell-value"></span><em>${unit}</em></b>`;
-  return { root, value: root.querySelector(".cell-value"), unit: root.querySelector("em") };
+  root.innerHTML = `<small>${label}</small><b><span class="cell-value"></span><em>${unit}</em></b><i class="cell-state-caption" aria-hidden="true"></i>`;
+  return { root, value: root.querySelector(".cell-value"), unit: root.querySelector("em"), stateCaption: root.querySelector(".cell-state-caption") };
 }
 
 function cellDisplayValue(item) {
@@ -864,6 +884,7 @@ function buildCellGrids() {
     section.className = "cell-module";
     section.innerHTML = `<div class="cell-module-head"><strong>BMU ${index + 1}</strong>`
       + `<span class="module-issue hidden"></span>`
+      + `<span class="module-state">等待</span>`
       + `<span class="module-stats"><span>电压 <b></b></span><span>压差 <b></b></span><span>温度 <b></b></span></span></div>`
       + `<div class="combined-module-body">`
       + `<div aria-label="BMU ${index + 1} 电压"><div class="cell-grid voltage-grid"></div></div>`
@@ -874,7 +895,8 @@ function buildCellGrids() {
     section.querySelector(".voltage-grid").append(...cells.map(item => item.root));
     section.querySelector(".temperature-grid").append(...temps.map(item => item.root));
     const statBs = [...section.querySelectorAll(".module-stats b")];
-    modules.push({ section, issue: section.querySelector(".module-issue"), statBs, cells, temps });
+    const stateNode = section.querySelector(".module-state");
+    modules.push({ section, issue: section.querySelector(".module-issue"), stateNode, statBs, cells, temps });
   }
   state.cellRefs = { placeholder, modules };
 }
@@ -886,6 +908,8 @@ function updateCellItem(item, ref, voltage, onlyAbnormal, thresholds) {
   ref.root.title = `${item.status} · 最近数据 ${item.age ?? "—"} s`;
   ref.value.textContent = cellDisplayValue(item);
   if (ref.unit) ref.unit.classList.toggle("hidden", item.value == null);
+  const captions = { low: voltage ? "欠压" : "低温", high: voltage ? "过压" : "过温", invalid: "失效 / 缺失" };
+  if (ref.stateCaption) ref.stateCaption.textContent = captions[status] || "";
 }
 
 function renderCells() {
@@ -942,6 +966,10 @@ function renderCells() {
     const missing = cellGroup.length - cellStats.valid + tempGroup.length - tempStats.valid;
     refs.issue.textContent = !module.online ? "通信中断" : missing > 0 ? `缺失 ${missing} 项` : "";
     refs.issue.classList.toggle("hidden", module.online && missing === 0);
+    if (refs.stateNode) {
+      refs.stateNode.textContent = !module.online ? "离线" : missing > 0 ? "部分缺失" : "在线";
+      refs.stateNode.className = `module-state ${!module.online ? "bad" : missing > 0 ? "warn" : "ok"}`;
+    }
     refs.statBs[0].textContent = `${cellStats.min ?? "—"}–${cellStats.max ?? "—"} mV`;
     refs.statBs[1].textContent = cellStats.max == null ? "—" : `${cellStats.max - cellStats.min} mV`;
     refs.statBs[2].textContent = `${tempStats.min == null ? "—" : fmt(tempStats.min, 1)}–${tempStats.max == null ? "—" : fmt(tempStats.max, 1)} °C`;
@@ -959,6 +987,7 @@ function confirmCommand(name, values, title, message, destructive = false) {
   state.pendingIvtAction = null;
   state.pendingFanCommand = null;
   text("#confirmTitle", title); text("#confirmMessage", message);
+  setConfirmModeBadge(destructive ? "危险操作 · 需二次确认" : "CAN1 工具命令", destructive ? "bad" : "");
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CAN1 · ${conn.bitrate ? conn.bitrate / 1000 : 500} kbit/s\n`
     + `主控状态：${state.snapshot.overview.state_name}\n`

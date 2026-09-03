@@ -16,7 +16,7 @@ from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
                   compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
-                           BmsProtocol, build_command, command_ack_matches)
+                           TOOL_PROTOCOL_VERSION, BmsProtocol, build_command, command_ack_matches)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
                        build_bms_fan_command, bms_fan_ack_matches)
 from .vehicle.protocol import VehicleProtocol
@@ -201,10 +201,15 @@ class CanService:
             charge_mode = bool(self.protocol.fault.get("flags", {}).get("charge_mode"))
             summary_seen = self.protocol.last_summary_monotonic
             summary_age = None if summary_seen is None else max(0.0, self.protocol.clock() - summary_seen)
+            runtime_protocol_version = self.protocol.runtime_diag.get("protocol_version")
         if profile != "can1":
             return {"ok": False, "error": "F405 工具命令只在 CAN1 接收；当前连接不是 CAN1"}
         if summary_age is None or summary_age > 1.5:
             return {"ok": False, "error": "主控总状态帧未收到或已经超时，暂不发送命令"}
+        if runtime_protocol_version is not None and int(runtime_protocol_version) != TOOL_PROTOCOL_VERSION:
+            return {"ok": False,
+                    "error": (f"主控工具协议版本为 {runtime_protocol_version}，"
+                              f"当前上位机要求版本 {TOOL_PROTOCOL_VERSION}；请烧录匹配固件或使用匹配的上位机")}
         if name in {"charge_config", "alarm_thresholds", "alarm_switches", "current_direction",
                     "charger_type", "log_info", "log_read", "log_clear"} and state not in {2, 3, 7}:
             return {"ok": False, "error": "主控仅在自检、待机或故障保持状态接受此命令"}
@@ -269,7 +274,16 @@ class CanService:
             if ack is None:
                 return {"ok": False, "error": f"命令 {frame.arbitration_id:#010x} 在 1.0s 内没有收到统一应答"}
             if not ack.get("accepted"):
-                return {"ok": False, "error": f"主控拒绝：{ack.get('result_name')}（detail={ack.get('detail')}）", "ack": ack}
+                ack_version = int(ack.get("protocol_version", -1))
+                if ack_version != TOOL_PROTOCOL_VERSION:
+                    error = (f"主控工具协议版本为 {ack_version}，当前上位机要求版本 "
+                             f"{TOOL_PROTOCOL_VERSION}")
+                elif int(ack.get("result", -1)) == 7:
+                    error = (f"主控拒绝：{ack.get('result_name')}"
+                             f"（Flash ID=0x{int(ack.get('detail', 0)) & 0xFFFF:04X}）")
+                else:
+                    error = f"主控拒绝：{ack.get('result_name')}（detail={ack.get('detail')}）"
+                return {"ok": False, "error": error, "ack": ack}
             return {"ok": True, "message": ack.get("result_name", "主控已接受"), "ack": ack}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -477,7 +491,8 @@ class CanService:
         """Small state polled by the always-visible quick-value strip."""
         with self.lock:
             return {"connection": {key: self.connection.get(key) for key in
-                                   ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error")},
+                                   ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error",
+                                    "rx_count", "tx_count")},
                     **self.protocol.quick_values()}
 
     def _start_bench(self, profile: str) -> None:

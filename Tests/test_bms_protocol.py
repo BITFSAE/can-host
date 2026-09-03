@@ -471,6 +471,14 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(protocol.command_acks[42]["accepted"])
         self.assertTrue(protocol.fault["flags"]["log_clear_pending"])
 
+    def test_old_protocol_command_ack_is_kept_for_diagnostics(self) -> None:
+        protocol = BmsProtocol()
+        protocol.ingest(CanFrame(0x18A650F4, bytes.fromhex("04 2A 03 04 03 00 00 05"), True))
+        ack = protocol.command_acks[0x2A]
+        self.assertEqual(ack["protocol_version"], 4)
+        self.assertEqual(ack["command"], 3)
+        self.assertFalse(ack["accepted"])
+
     def test_identity_decodes_fixed_legacy_charger_variant(self) -> None:
         protocol = BmsProtocol()
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 05 12 34 56 78 9A BC"), True))
@@ -595,6 +603,16 @@ class BmsProtocolTest(unittest.TestCase):
         result = service.send_command("charge_config", {"voltage_v": 570.0, "current_a": 3.0}, True)
         self.assertFalse(result["ok"])
         self.assertIn("总状态帧", result["error"])
+
+    def test_commands_report_runtime_protocol_mismatch_before_sending(self) -> None:
+        service = CanService()
+        service.connection.update({"connected": True, "mode": "pcan", "bus_profile": "can1"})
+        service.protocol.ingest(CanFrame(0x186050F4, bytes.fromhex("16 44 00 0A 4E 1F 32"), True))
+        service.protocol.ingest(CanFrame(0x186B50F4, bytes.fromhex("04 10 16 44 00 1E 00 00"), True))
+        result = service.send_command("alarm_switches", {"switches": {}}, True)
+        self.assertFalse(result["ok"])
+        self.assertIn("协议版本为 4", result["error"])
+        self.assertIn("要求版本 5", result["error"])
 
     def test_canb_command_rejection_names_bus_before_freshness(self) -> None:
         service = CanService()
@@ -727,9 +745,15 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("整车总览", html)
         self.assertIn('class="brand-title">CAN HOST</span>', html)
         self.assertNotIn('<strong>CAN</strong><small>HOST</small>', html)
-        self.assertIn('id="vehicleConnectDialog"', html)
-        self.assertIn('id="connectButton"', html)
-        self.assertIn('id="vehicleStatusPill"', html)
+        self.assertNotIn('id="overviewScopeStrip"', html)
+        self.assertIn('id="connectDialog"', html)
+        self.assertIn('id="connectionSettingsButton"', html)
+        self.assertIn('id="saveConnectionSettings"', html)
+        self.assertNotIn('id="vehicleConnectDialog"', html)
+        self.assertIn('id="can1BusButton"', html)
+        self.assertIn('id="canbBmsBusButton"', html)
+        self.assertIn('id="canbVehicleBusButton"', html)
+        self.assertIn('id="simulationBusButton"', html)
         self.assertIn('id="frameSource"', html)
         self.assertIn('id="page-telemetry"', html)
         self.assertIn('id="telemetryConnectDialog"', html)
@@ -739,6 +763,12 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertNotIn("真实 IVT-S", html)
         for obsolete in ("chargeExpectedAt", "chargeAverageCurrent", "chargeEstimateNote"):
             self.assertNotIn(obsolete, html)
+
+        core_js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        self.assertIn("toggleMainDockConnection", core_js)
+        self.assertIn("toggleVehicleDockConnection", core_js)
+        self.assertIn("toggleSimulationChannels", core_js)
+        self.assertIn("CONNECTION_PREFS_KEY", core_js)
 
     def test_fan_js_defines_receiving_used_for_fresh_tag(self) -> None:
         js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")

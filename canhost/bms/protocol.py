@@ -419,11 +419,16 @@ class BmsProtocol:
             self.last_rtc_reply_monotonic = now_mono
             if len(self.rtc_replies) > 64:
                 self.rtc_replies.pop(next(iter(self.rtc_replies)))
-        elif can_id == 0x18A650F4 and len(data) >= 8 and data[0] == TOOL_PROTOCOL_VERSION:
+        elif can_id == 0x18A650F4 and len(data) >= 8:
+            # Keep replies from an older/newer firmware visible. The command
+            # service matches sequence+command and can then report the actual
+            # protocol mismatch instead of turning a valid rejection into a
+            # misleading timeout.
             flags = data[5]
             ack = {"protocol_version": data[0], "sequence": data[1], "command": data[2],
                    "result": data[3], "result_name": COMMAND_RESULT_NAMES.get(data[3], f"未知 {data[3]}"),
-                   "accepted": data[3] in (0, 1), "bms_state": data[4],
+                   "accepted": data[0] == TOOL_PROTOCOL_VERSION and data[3] in (0, 1),
+                   "bms_state": data[4],
                    "flags": {"flash_ready": bool(flags & 0x01), "config_save_pending": bool(flags & 0x02),
                              "current_direction_save_pending": bool(flags & 0x04),
                              "log_clear_pending": bool(flags & 0x08), "error_log_write_pending": bool(flags & 0x10),

@@ -28,22 +28,12 @@ function vehicleConnectionAvailable() {
 }
 
 function bindVehicleControls() {
-  $("#connectVehicleButton")?.addEventListener("click", connectVehicle);
-  $("#disconnectVehicleButton")?.addEventListener("click", disconnectVehicle);
   $("#vehicleConnectBitrate")?.addEventListener("change", updateVehicleDialog);
 }
 
 function populateVehicleOptions() {
   const select = $("#vehicleConnectBitrate");
   if (!select) return;
-  if (state.bootstrap?.vehicle_simulation_enabled === true
-      && ![...select.options].some(option => option.value === "simulation")) {
-    const simOption = new Option("内置模拟数据 · CANB / 开发测试", "simulation");
-    select.insertBefore(simOption, select.firstChild);
-    if (!state.vehicleSnapshot?.connection?.connected) {
-      select.value = "simulation";
-    }
-  }
   updateVehicleDialog();
 }
 
@@ -61,34 +51,39 @@ async function connectVehicle() {
   const simulation = bitrateRaw === "simulation";
   const bitrate = simulation ? 500000 : Number(bitrateRaw);
   const channelSelect = $("#vehicleConnectChannel");
-  const button = $("#connectVehicleButton");
-  if (button) { button.disabled = true; button.textContent = "连接中…"; }
-  text("#vehicleConnectError", "");
-  $("#vehicleConnectError")?.classList.add("hidden");
-
-  const result = await state.api.connect_vehicle({
-    mode: simulation ? "simulation" : "pcan",
-    channel: simulation ? null : channelSelect?.value,
-    bitrate,
-    bus_profile: simulation || bitrate === 500000 ? "canb" : "canb_legacy",
-  });
-  if (button) { button.disabled = false; button.textContent = "连接"; }
-  if (!result.ok) {
-    text("#vehicleConnectError", result.error || "整车连接失败");
-    $("#vehicleConnectError")?.classList.remove("hidden");
-    return toast(result.error || "整车连接失败", true);
+  if (!simulation && state.snapshot?.connection?.connected === true
+      && state.snapshot.connection.mode === "simulation") {
+    await state.api.disconnect_can();
+    state.snapshot = await state.api.get_snapshot();
   }
-  $("#vehicleConnectDialog")?.close();
+  setBusConnecting("canb_vehicle", true);
+  let result;
+  try {
+    result = await state.api.connect_vehicle({
+      mode: simulation ? "simulation" : "pcan",
+      channel: simulation ? null : channelSelect?.value,
+      bitrate,
+      bus_profile: simulation || bitrate === 500000 ? "canb" : "canb_legacy",
+    });
+  } catch (error) {
+    return toast(`整车连接失败：${error}`, true);
+  } finally {
+    setBusConnecting("canb_vehicle", false);
+  }
+  if (!result?.ok) return toast(result?.error || "整车连接失败", true);
   toast(simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`);
+  if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
   await poll();
 }
 
 async function disconnectVehicle() {
   if (!state.api) return;
-  await state.api.disconnect_vehicle();
+  setBusConnecting("canb_vehicle", true);
+  try { await state.api.disconnect_vehicle(); }
+  catch (error) { return toast(`整车断开失败：${error}`, true); }
+  finally { setBusConnecting("canb_vehicle", false); }
   state.vehicleSnapshot = null;
-  $("#vehicleConnectDialog")?.close();
-  toast("整车连接已断开");
+  toast("整车 CANB 已断开");
   await poll();
 }
 
@@ -145,8 +140,6 @@ function renderVehicle() {
     const match = [...bitrateSelect.options].find(option => option.value === targetValue);
     if (match) bitrateSelect.value = match.value;
   }
-  $("#disconnectVehicleButton")?.classList.toggle("hidden", connection.connected !== true);
-
   // -- SOP ---------------------------------------------------------------
   const sop = snapshot.sop || {};
   const limits = sop.limits || {};
