@@ -1,4 +1,4 @@
-param(
+﻿param(
     # 发布产物命名标签：默认取 canhost/__init__.py 的 __version__，
     # CI 打标签构建时传入 v 标签（如 v0.8.3），手动触发时传短 SHA。
     [string]$Label = "",

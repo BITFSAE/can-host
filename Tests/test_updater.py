@@ -175,6 +175,12 @@ class InstallerPackagingTest(unittest.TestCase):
         self.assertIn("unins000.dat", INSTALLER_SCRIPT)
         self.assertIn("Copy-Item", INSTALLER_SCRIPT)
 
+    def test_install_helper_script_is_pure_ascii(self) -> None:
+        # install-helper.ps1 由 Windows PowerShell 5.1 按 -File 执行，且以无
+        # BOM UTF-8 落盘；任何非 ASCII 字符在 ANSI 误读下可能变成弯引号并
+        # 提前终止字符串，直接破坏安装助手解析。
+        self.assertTrue(INSTALLER_SCRIPT.isascii())
+
     def test_inno_setup_uses_updater_folder_layout(self) -> None:
         iss = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "canhost.iss"
         text = iss.read_text(encoding="utf-8")

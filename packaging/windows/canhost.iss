@@ -1,4 +1,4 @@
-; BITFSAE CAN HOST Windows 安装包（Inno Setup 6）。
+﻿; BITFSAE CAN HOST Windows 安装包（Inno Setup 6）。
 ; 与软件内更新器（canhost/updater.py）的耦合约束：
 ; - 安装目录名必须等于 APP_FOLDER_NAME（BITFSAE_CAN_Host）：更新器整目录替换后
 ;   开始菜单/桌面快捷方式的绝对路径保持不变；
