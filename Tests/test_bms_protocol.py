@@ -40,8 +40,8 @@ class BmsProtocolTest(unittest.TestCase):
         alarm_bytes = bytearray(8)
         alarm_bytes[0] = 0b00001001  # index 0=1, index 1=2
         protocol.ingest(CanFrame(0x187850F4, bytes(alarm_bytes), True))
-        protocol.ingest(CanFrame(0x187750F4, bytes.fromhex("10 5E 0C 1C 5A 1E"), True))
-        protocol.ingest(CanFrame(0x187F50F4, bytes.fromhex("FF FF FE 06"), True))
+        protocol.ingest(CanFrame(0x187750F4, bytes.fromhex("10 CC 0C 1C 5A 1E"), True))
+        protocol.ingest(CanFrame(0x187F50F4, bytes.fromhex("FF FF FE 07"), True))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["overview"]["voltage_v"], 570.0)
         self.assertEqual(snapshot["overview"]["current_a"], 1.0)
@@ -54,12 +54,12 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["alarms"][25]["name"], "从控 1 离线")
         self.assertEqual(snapshot["alarms"][0]["level"], 1)
         self.assertEqual(snapshot["alarms"][1]["level"], 2)
-        self.assertEqual(snapshot["config"]["thresholds"]["ov_mv"], 4190)
+        self.assertEqual(snapshot["config"]["thresholds"]["ov_mv"], 4300)
         self.assertEqual(snapshot["config"]["thresholds"]["ot_c"], 60)
-        self.assertEqual(snapshot["config"]["switch_version"], 6)
+        self.assertEqual(snapshot["config"]["switch_version"], 7)
         self.assertTrue(snapshot["config"]["switches"]["ivt_voltage_loss"])
-        self.assertTrue(snapshot["config"]["switches"]["bsu_not_ready_hv"])
-        self.assertTrue(snapshot["config"]["switches"]["bsu_offline_hv"])
+        self.assertTrue(snapshot["config"]["switches"]["bsu_not_ready"])
+        self.assertTrue(snapshot["config"]["switches"]["bsu_offline"])
         self.assertTrue(snapshot["config"]["switches"]["cell_lbk"])
         self.assertTrue(snapshot["config"]["switches"]["cell_tbk"])
 
@@ -125,7 +125,7 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(snapshot["config"]["switches_age"], 2.5)
         self.assertEqual(snapshot["config"]["runtime_age"], 2.5)
 
-    def test_identity_uses_debug_bringup_slave_timeout_600ms(self) -> None:
+    def test_identity_keeps_debug_bringup_slave_timeout_350ms(self) -> None:
         clock = [0.0]
         protocol = BmsProtocol(clock=lambda: clock[0])
         cell_frame = CanFrame(0x180050F3, b"\x00\x00\x74\x0E\x75\x0E\x76\x0E", True)
@@ -139,10 +139,10 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 02 00 00 00 00 00 00"), True))
         clock[0] = 0.0
         protocol.ingest(cell_frame)
-        self.assertEqual(protocol.slave_sample_timeout_s, 0.6)
-        clock[0] = 0.59
+        self.assertEqual(protocol.slave_sample_timeout_s, 0.35)
+        clock[0] = 0.34
         self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
-        clock[0] = 0.61
+        clock[0] = 0.36
         self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
 
     def test_canb_snapshot_does_not_invent_slave_data(self) -> None:
@@ -426,6 +426,8 @@ class BmsProtocolTest(unittest.TestCase):
             self.assertEqual(len(snapshot["temps"]), 48)
             self.assertTrue(all(module["online"] for module in snapshot["modules"]))
             self.assertEqual(snapshot["overview"]["state"], 3)
+            self.assertEqual(snapshot["config"]["thresholds"]["ov_mv"], 4300)
+            self.assertTrue(snapshot["config"]["current_direction_inverted"])
             response = service.send_command("alarm_thresholds", {"ov_mv": 4180, "uv_mv": 3110, "ot_c": 59, "ut_c": 1}, True)
             self.assertTrue(response["ok"])
             self.assertEqual(response["ack"]["result"], 1)
@@ -501,9 +503,9 @@ class BmsProtocolTest(unittest.TestCase):
         ov = next(item for item in catalog if item["key"] == "cell_ov")
         self.assertEqual(ov["code"], "ov")
         self.assertEqual(ov["variable"], "ALM_CELL_OV_SWITCH")
-        not_ready = next(item for item in catalog if item["key"] == "bsu_not_ready_hv")
+        not_ready = next(item for item in catalog if item["key"] == "bsu_not_ready")
         self.assertEqual(not_ready["code"], "bsunrdy")
-        self.assertEqual(not_ready["variable"], "ALM_BSU_NOT_READY_HV_SWITCH")
+        self.assertEqual(not_ready["variable"], "ALM_BSU_NOT_READY_SWITCH")
         lbk = next(item for item in catalog if item["key"] == "cell_lbk")
         self.assertEqual(lbk["code"], "lbk")
         self.assertEqual(lbk["variable"], "ALM_CELL_LBK_SWITCH")
@@ -514,8 +516,8 @@ class BmsProtocolTest(unittest.TestCase):
     def test_alarm_switch_command_starts_all_enabled_for_v5(self) -> None:
         frame = build_command("alarm_switches", {
             "switches": {
-                "bsu_not_ready_hv": False,
-                "bsu_offline_hv": False,
+                "bsu_not_ready": False,
+                "bsu_offline": False,
                 "current_sensor": False,
                 "ivt_voltage_loss": False,
             },
@@ -557,8 +559,8 @@ class BmsProtocolTest(unittest.TestCase):
                 "pack_ov": False,
                 "pack_uv": False,
                 "soc_low": False,
-                "bsu_not_ready_hv": False,
-                "bsu_offline_hv": False,
+                "bsu_not_ready": False,
+                "bsu_offline": False,
                 "current_sensor": False,
                 "ivt_voltage_loss": False,
             },
@@ -569,7 +571,7 @@ class BmsProtocolTest(unittest.TestCase):
         simulator._emit_summary()
         switches = next(frame for frame in frames if frame.arbitration_id == 0x187F50F4)
         self.assertEqual(switches.data[:3], bytes.fromhex("0C C2 66"))
-        self.assertEqual(switches.data[3], 6)
+        self.assertEqual(switches.data[3], 7)
 
     def test_simulator_reports_flash_save_pending_then_clear(self) -> None:
         frames: list[CanFrame] = []

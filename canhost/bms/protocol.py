@@ -99,8 +99,8 @@ SWITCH_DEFS = [
     ("ivt_voltage_loss", "IVT 包电压失联", "ivtloss", "ALM_IVT_VOLT_LOSS_SWITCH", 2, 7),
     ("lv1_blocked", "一级故障全部受阻", "lv1blk", "ALM_LV1_ALL_BLOCKED_SWITCH", 2, 6),
     ("lv2_blocked", "二级告警全部受阻", "lv2blk", "ALM_LV2_ALL_BLOCKED_SWITCH", 2, 5),
-    ("bsu_not_ready_hv", "从控未就绪（HV_ON动作）", "bsunrdy", "ALM_BSU_NOT_READY_HV_SWITCH", 2, 4),
-    ("bsu_offline_hv", "从控离线（HV_ON动作）", "bsuoff", "ALM_BSU_OFFLINE_HV_SWITCH", 2, 3),
+    ("bsu_not_ready", "从控未就绪", "bsunrdy", "ALM_BSU_NOT_READY_SWITCH", 2, 4),
+    ("bsu_offline", "从控离线", "bsuoff", "ALM_BSU_OFFLINE_SWITCH", 2, 3),
     ("cell_lbk", "电压采样线断线", "lbk", "ALM_CELL_LBK_SWITCH", 2, 2),
     ("cell_tbk", "温度采样线断线", "tbk", "ALM_CELL_TBK_SWITCH", 2, 1),
 ]
@@ -216,7 +216,7 @@ class BmsProtocol:
         self.last_runtime_diag_monotonic: float | None = None
         self.last_thresholds_monotonic: float | None = None
         self.last_switches_monotonic: float | None = None
-        # 默认正式窗口 350ms；收到身份帧后按变体刷新，Debug-Bringup 为 600ms。
+        # 所有固件统一按350ms判断从控逐帧新鲜度。
         self.slave_sample_timeout_s = 0.35
         self.trends: deque[dict[str, Any]] = deque(maxlen=240)
         self._last_trend = 0.0
@@ -332,9 +332,7 @@ class BmsProtocol:
             charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
             charger_variant_code = (data[1] >> 2) & 0x03
-            # Debug-Bringup 从控原始数据窗口放宽到 600ms；正式 Debug/Release
-            # （含 Release-Legacy 身份码 1）保持 350ms。
-            self.slave_sample_timeout_s = 0.6 if variant == 2 else 0.35
+            self.slave_sample_timeout_s = 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),

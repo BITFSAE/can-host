@@ -12,8 +12,8 @@ from datetime import datetime
 from ..decoders import CanFrame
 from .protocol import CAN1_COMMAND_REQ_EXT_ID, TOOL_PROTOCOL_VERSION
 # 告警开关位图布局版本，与固件 CAN1_ALARM_SWITCH_FRAME_VERSION 一致：
-# 0x06 起开关帧 Byte2 bit2/bit1 为电压/温度采样线断线开关。
-ALARM_SWITCH_FRAME_VERSION = 6
+# 0x07 起从控未就绪/离线位表示全状态动作开关；位位置不变。
+ALARM_SWITCH_FRAME_VERSION = 7
 
 
 class BmsSimulator:
@@ -24,11 +24,11 @@ class BmsSimulator:
         self.bus_profile = bus_profile
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self.thresholds = [4190, 3100, 90, 30]
+        self.thresholds = [4300, 3100, 90, 30]
         self.switch_bytes = [0xFF, 0xFF, 0xFE]
         self.request_voltage = 5700
         self.request_current = 30
-        self.current_inverted = False
+        self.current_inverted = True
         self.charger_type = 1
         self.tick = 0
         self.log_clear_pending_cycles = 0
