@@ -83,7 +83,7 @@ begin
   // 软件内更新的旧版本备份（BITFSAE_CAN_Host.old-*）在安装目录的上一级，
   // 不在卸载记录里；卸载时一并清掉，避免残留占磁盘。
   if CurUninstallStep = usUninstall then
-    DelTree(ExtractFilePath(ExcludeTrailingBackslash(ExpandConstant('{app}'))) +
-      'BITFSAE_CAN_Host.old-*', True, True, True);
+    // ExtractFilePath 返回带尾部反斜杠的父目录。
+    DelTree(ExtractFilePath(ExpandConstant('{app}')) + 'BITFSAE_CAN_Host.old-*', True, True, True);
 end;
 
