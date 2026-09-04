@@ -12,7 +12,7 @@ from . import __version__, __version_date__
 from .transport import CanService
 from .bms.protocol import switch_catalog
 from .telemetry import TelemetryService
-from .updater import DEFAULT_REPO, HostUpdater, install_ready
+from .updater import DEFAULT_REPO, HostUpdater, install_ready, startup_cleanup
 from .updater import _read_settings, settings_path
 
 
@@ -314,12 +314,29 @@ class Api:
         self._telemetry_service.disconnect()
 
 
+def _run_startup_update_cleanup() -> None:
+    """Delete old-version backups and update temp dirs once the app runs.
+
+    The updated build itself proves the update worked by reaching this point,
+    so backups past the rollback window are no longer needed.  Runs in a daemon
+    thread; removal is best effort and never blocks or breaks startup.
+    """
+    try:
+        startup_cleanup(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+
+
 def main() -> None:
     try:
         import webview
     except ImportError:
         raise SystemExit("缺少 pywebview。请先执行：pip install -r requirements.txt")
     api = Api()
+    if install_ready():
+        cleanup_thread = threading.Thread(target=_run_startup_update_cleanup,
+                                          name="canhost-startup-cleanup", daemon=True)
+        cleanup_thread.start()
     window = webview.create_window(
         "BITFSAE · CAN HOST", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
         width=1460, height=920, min_size=(1120, 720), background_color="#0D0E0F",

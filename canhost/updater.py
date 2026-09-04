@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
@@ -26,6 +28,13 @@ SHA256_LINE = re.compile(r"(?m)^\s*([0-9a-fA-F]{64})")
 
 SETTINGS_DIR_NAME = "BITFSAE"
 SETTINGS_SUBDIR_NAME = "CAN Host"
+
+# ``BITFSAE_CAN_Host.old-<yyyyMMddHHmmss>`` written by the install helper.
+BACKUP_DIR_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}\.old-(\d{{14}})$")
+# The helper waits up to 90 s for the old process and validates the new one for
+# about 8 s; backups younger than this may still be a rollback target, so the
+# startup cleanup must leave them alone.
+BACKUP_KEEP_SECONDS = 15 * 60
 
 
 def _user_settings_dir() -> Path:
@@ -135,6 +144,21 @@ try {
     Write-Log "old renamed $backup"
     Move-Item -LiteralPath $StagedDir -Destination $AppDir
     Write-Log "new moved"
+
+    # The Inno Setup uninstaller (unins000.exe/.dat) is not part of the update
+    # ZIP.  Copy it back from the backup so "Apps & Features" keeps working.
+    # Best effort only: a portable zip install has no uninstaller to preserve.
+    foreach ($unins in @("unins000.exe", "unins000.dat")) {
+        $src = Join-Path $backup $unins
+        if (Test-Path -LiteralPath $src -PathType Leaf) {
+            try {
+                Copy-Item -LiteralPath $src -Destination (Join-Path $AppDir $unins) -Force
+                Write-Log "uninstaller preserved $unins"
+            } catch {
+                Write-Log "uninstaller copy failed ${unins}: $_"
+            }
+        }
+    }
 
     $newExe = Join-Path $AppDir $ExeName
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -368,6 +392,48 @@ def cleanup_update_dirs(parent: Path, keep: set[Path] | None = None) -> int:
     except OSError:
         pass
     return removed
+
+
+def cleanup_old_backups(parent: Path, now: float | None = None, keep_seconds: int = BACKUP_KEEP_SECONDS) -> int:
+    """Delete ``BITFSAE_CAN_Host.old-<timestamp>`` backups past the rollback window.
+
+    The install helper deliberately keeps the newest backup for manual rollback;
+    the updated build deletes it on its next startup, once it has demonstrably
+    been able to run.  Best effort: unreadable or busy directories are skipped.
+    """
+    current = time.time() if now is None else now
+    removed = 0
+    try:
+        children = sorted(parent.iterdir())
+    except OSError:
+        return 0
+    for child in children:
+        match = BACKUP_DIR_PATTERN.match(child.name)
+        if not match or not child.is_dir():
+            continue
+        try:
+            stamp = datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if current - stamp.timestamp() < keep_seconds:
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+        if not child.exists():
+            removed += 1
+    return removed
+
+
+def startup_cleanup(app_dir: Path, now: float | None = None) -> dict[str, int]:
+    """Remove update leftovers when the frozen app starts.
+
+    Deletes sibling old-version backups past the rollback window and stale
+    ``canhost-update-*`` temp directories so old versions do not accumulate.
+    """
+    removed_backups = cleanup_old_backups(app_dir.parent, now=now)
+    temp_parent = Path(os.environ.get("TEMP") or tempfile.gettempdir())
+    removed_temp = cleanup_update_dirs(temp_parent)
+    return {"old_backups": removed_backups, "temp_dirs": removed_temp}
+
 
 class HostUpdater:
     """Background check/download state machine for GitHub releases."""

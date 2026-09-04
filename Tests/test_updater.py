@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import urllib.error
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,12 +16,15 @@ from canhost.updater import (
     APP_EXE_NAME,
     APP_FOLDER_NAME,
     DEFAULT_REPO,
+    INSTALLER_SCRIPT,
     HostUpdater,
+    cleanup_old_backups,
     extract_update_archive,
     find_checksum_asset,
     find_zip_asset,
     read_sha256_digest,
     release_is_newer,
+    startup_cleanup,
     version_key,
 )
 
@@ -124,6 +128,62 @@ class SafeArchiveTest(unittest.TestCase):
                 archive.writestr(f"{APP_FOLDER_NAME}/{APP_EXE_NAME}", b"exe")
             with self.assertRaises(ValueError):
                 extract_update_archive(zip_path, root / "stage")
+
+
+class BackupCleanupTest(unittest.TestCase):
+    def test_cleanup_deletes_old_backups_keeps_fresh_and_unrelated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            now = datetime(2026, 9, 4, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+            stale = parent / f"{APP_FOLDER_NAME}.old-20260901120000"
+            fresh = parent / f"{APP_FOLDER_NAME}.old-20260904115930"
+            malformed = parent / f"{APP_FOLDER_NAME}.old-notadate"
+            current = parent / APP_FOLDER_NAME
+            for item in (stale, fresh, malformed, current):
+                item.mkdir()
+                (item / "payload.bin").write_bytes(b"x")
+            removed = cleanup_old_backups(parent, now=now)
+            self.assertEqual(removed, 1)
+            self.assertFalse(stale.exists())
+            # 回退窗口内的备份、正在使用的安装目录和无法识别的目录都必须保留。
+            self.assertTrue(fresh.exists())
+            self.assertTrue(malformed.exists())
+            self.assertTrue(current.exists())
+
+    def test_startup_cleanup_counts_backups_and_temp_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / APP_FOLDER_NAME
+            app_dir.mkdir()
+            now = datetime(2026, 9, 4, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+            stale = app_dir.parent / f"{APP_FOLDER_NAME}.old-20260901120000"
+            stale.mkdir()
+            with patch("canhost.updater.cleanup_update_dirs", return_value=2) as temp_cleanup:
+                result = startup_cleanup(app_dir, now=now)
+            self.assertEqual(result, {"old_backups": 1, "temp_dirs": 2})
+            temp_cleanup.assert_called_once()
+            self.assertFalse(stale.exists())
+
+
+class InstallerPackagingTest(unittest.TestCase):
+    """Anchor the Inno Setup installer to the updater's directory-swap assumptions."""
+
+    def test_install_helper_preserves_inno_uninstaller(self) -> None:
+        # The update ZIP has no unins000.*; without a copy-back from the old
+        # backup, a setup.exe install would lose its "Apps & Features" entry
+        # after the first in-app update.
+        self.assertIn("unins000.exe", INSTALLER_SCRIPT)
+        self.assertIn("unins000.dat", INSTALLER_SCRIPT)
+        self.assertIn("Copy-Item", INSTALLER_SCRIPT)
+
+    def test_inno_setup_uses_updater_folder_layout(self) -> None:
+        iss = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "canhost.iss"
+        text = iss.read_text(encoding="utf-8")
+        # 整目录替换要求安装目录名与 APP_FOLDER_NAME 一致，且每用户可写（无需管理员）。
+        self.assertIn(r"DefaultDirName={localappdata}\Programs\BITFSAE_CAN_Host", text)
+        self.assertIn("PrivilegesRequired=lowest", text)
+        self.assertIn(APP_EXE_NAME, text)
+        # 卸载必须连带清理安装目录上一级的旧版本备份目录。
+        self.assertIn("BITFSAE_CAN_Host.old-*", text)
 
 
 class HostUpdaterTest(unittest.TestCase):

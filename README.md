@@ -11,6 +11,17 @@ BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度
 - 实体 CAN：PCAN-USB 和正确的总线位率；源码中保留 BMS 与整车两套内置模拟数据供开发测试，Windows 发布版不打包模拟器。
 - 遥测订阅：可访问 MQTT Broker 的网络和只读 `fsae/telemetry` 账号；密码不保存在上位机页面设置中。
 
+## Windows 安装（发布版）
+
+从 [GitHub Releases](https://github.com/BITFSAE/can-host/releases) 下载 `BITFSAE_CAN_Host_vX.Y.Z_setup.exe` 双击安装：
+
+- 每用户安装，不需要管理员权限；默认目录 `%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`。
+- 自动创建开始菜单快捷方式，安装向导可选桌面快捷方式；在 Windows「设置 - 应用」中可卸载。
+- 之后的版本升级不需要重新运行安装包：软件内更新会下载新版本、自动替换并重启（见下文「软件内更新」）。
+- 安装前目标电脑需要装好 PEAK PCAN-USB 驱动（含 PCAN-Basic）和 Microsoft Edge WebView2 Runtime。
+
+同名的 `BITFSAE_CAN_Host_vX.Y.Z.zip` 保留作便携方式：解压后复制整个 `BITFSAE_CAN_Host` 文件夹到目标电脑运行其中的 exe，不能只复制 exe。软件内更新使用的就是这个 ZIP。
+
 ## Windows 源码运行
 
 ```powershell
@@ -38,19 +49,24 @@ macOS 主要用于界面开发和内置模拟数据调试（BMS 主连接与整�
 powershell -ExecutionPolicy Bypass -File build_windows.ps1
 ```
 
-产物位于 `dist\BITFSAE_CAN_Host\`，采用 one-folder 形式。发布版只支持真实 PCAN；复制整个文件夹到目标电脑，不能只复制 exe。exe 图标取自根目录 `app_icon.ico`（由 `canhost/web/assets/shark-mark.svg` 生成），换图标时替换该文件后重新构建。
+脚本依次完成：全部单元测试 → PyInstaller 打包（`can_host.spec`，产物 `dist\BITFSAE_CAN_Host\`）→ 在 `release\` 生成发布产物：
 
-目标电脑仍需安装：
+| 产物 | 用途 |
+|---|---|
+| `BITFSAE_CAN_Host_v<版本>.zip` | 便携发布与软件内更新下载源（内层必须保持 `BITFSAE_CAN_Host/` 目录） |
+| `BITFSAE_CAN_Host_v<版本>.zip.sha256` | ZIP 的 SHA256 校验文件，软件内更新强制校验 |
+| `BITFSAE_CAN_Host_v<版本>_setup.exe` | Inno Setup 安装包（`packaging/windows/canhost.iss`） |
 
-1. PEAK PCAN-USB 驱动及 PCAN-Basic 运行组件；
-2. Microsoft Edge WebView2 Runtime。
+本地机器未安装 Inno Setup 6 时跳过安装包并给出警告，仍输出 ZIP；加 `-RequireInstaller` 参数改为直接失败（CI 使用）。可用 `-Label v0.8.3` 指定产物命名标签，默认取 `canhost/__init__.py` 的 `__version__`。exe 图标取自根目录 `app_icon.ico`（由 `canhost/web/assets/shark-mark.svg` 生成），换图标时替换该文件后重新构建。
+
+安装包默认安装到 `%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`（每用户、无需管理员）；目录名与软件内更新器的整目录替换约定一致，不能随意改名。
 
 ## CI 自动构建与发布
 
 仓库在 `.github/workflows/` 下提供两条 GitHub Actions 工作流，都在 windows-latest 上运行：
 
 - `tests.yml`：main 分支推送和 Pull Request 时自动运行全部上位机单元测试。
-- `release.yml`：推送 `v*` 标签（如 `v0.2.0`）时触发。先核对标签版本与 `canhost/__init__.py` 的 `__version__` 一致，再执行 `build_windows.ps1`（测试 + PyInstaller 打包），把 `dist\BITFSAE_CAN_Host\` 压缩为 `BITFSAE_CAN_Host_v0.2.0.zip` 并创建 GitHub Release 附上该 zip。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供 zip 产物下载，不创建 Release。
+- `release.yml`：推送 `v*` 标签（如 `v0.2.0`）时触发。先核对标签版本与 `canhost/__init__.py` 的 `__version__` 一致，再执行 `build_windows.ps1`（测试 + PyInstaller 打包 + 生成 `release\` 发布产物），并把 ZIP、`.sha256` 和 `setup.exe` 一并附加到创建的 GitHub Release。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供产物下载，不创建 Release。
 - 标签版本号后带后缀（如 `v0.2.0-rc1`）时创建的是 GitHub 预发布（Pre-release），版本号主体仍须与 `__version__` 一致；不带后缀的 `vX.Y.Z` 创建正式 Release。
 
 发布新版本的操作：
@@ -62,7 +78,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-Release 同时附上 `BITFSAE_CAN_Host_vX.Y.Z.zip` 和同名 `.sha256` 校验文件（软件内更新也会使用同样附件）。ZIP 是完整 one-folder 目录的压缩包，目标电脑安装要求与上一节相同。
+Release 同时附上 `BITFSAE_CAN_Host_vX.Y.Z.zip`、同名 `.sha256` 校验文件（软件内更新也会使用同样附件）和 `BITFSAE_CAN_Host_vX.Y.Z_setup.exe` 安装包。ZIP 是完整 one-folder 目录的压缩包；用安装包安装的用户直接走软件内更新，无需重新下载安装包。
 
 ## 软件内更新
 
@@ -70,7 +86,10 @@ Windows 发布版左下角版本信息可点击，会打开“软件内更新”
 
 1. 启动时自动检查一次 `BITFSAE/can-host` 的正式 Release；需要手动检查时点击“检查更新”，勾选“包含预发布版（Pre-release）”可列出 `-rc1` 等预发布。
 2. 点击“下载更新”后自动下载 ZIP 和 `.sha256`，先校验 SHA256，再校验 ZIP 只包含预期的 `BITFSAE_CAN_Host/` 目录（拒绝绝对路径、`..` 和符号链接）。
-3. 点击“退出并安装”后应用退出，由隐藏 PowerShell 助手等待旧进程结束、备份旧目录为 `.old-<时间戳>`、替换为新目录并重新启动；启动新版本失败时自动恢复旧目录。成功替换后才能删除备份。
+3. 点击“退出并安装”后应用退出，由隐藏 PowerShell 助手等待旧进程结束、备份旧目录为 `.old-<时间戳>`、替换为新目录并重新启动；启动新版本失败时自动恢复旧目录。
+4. 旧版本清理：新版本成功启动后，下一次启动时自动删除超过 15 分钟回退窗口的旧版本备份和更新临时目录；安装包卸载也会一并删除旧版本备份。回退窗口内如需手动回退，备份位于安装目录的上一级，名字形如 `BITFSAE_CAN_Host.old-<时间戳>`；更早的历史版本可随时从 GitHub Release 重新下载。
+
+安装包（setup.exe）安装的版本与软件内更新完全兼容：更新替换目录后会保留卸载器文件，Windows「设置 - 应用」的卸载入口和开始菜单、桌面快捷方式继续有效；用新版 setup.exe 覆盖安装时会先清空旧目录再安装，不会残留旧文件。成功替换后才能删除备份。
 
 公开仓库的 Release 无需任何凭据即可检查、下载。若仓库保持私有，使用者在更新窗口保存有 `repo:contents:read` 的只读 GitHub PAT；令牌只保存在本机 `%APPDATA%\BITFSAE\CAN Host\settings.json`，不返回前端、不写入日志。源码运行只能检查更新，不能替换安装目录。
 

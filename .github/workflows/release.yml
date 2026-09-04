@@ -25,38 +25,33 @@ jobs:
         shell: pwsh
         run: |
           $tagVersion = "$env:GITHUB_REF_NAME".Substring('v'.Length)
-          $baseVersion = "$tagVersion".Split('-')[0]
+          $baseVersion = $tagVersion.Split('-')[0]
           $appVersion = python -c "from canhost import __version__; print(__version__)"
           if ($baseVersion -ne $appVersion) {
             throw "标签 $env:GITHUB_REF_NAME 的版本 $baseVersion 与 canhost/__init__.py 的 __version__ = $appVersion 不一致，先更新版本号再打标签。"
           }
 
-      - name: 运行测试并 PyInstaller 打包
-        run: powershell -ExecutionPolicy Bypass -File build_windows.ps1
-
-      - name: 压缩发布目录
-        id: zip
+      - name: 计算产物标签
+        id: label
         shell: pwsh
         run: |
           if ("$env:GITHUB_REF".StartsWith('refs/tags/')) {
-            $base = "BITFSAE_CAN_Host_$($env:GITHUB_REF_NAME)"
+            $label = "$env:GITHUB_REF_NAME"
           } else {
-            $base = "BITFSAE_CAN_Host_$("$env:GITHUB_SHA".Substring(0, 7))"
+            $label = "$env:GITHUB_SHA".Substring(0, 7)
           }
-          Compress-Archive -Path dist/BITFSAE_CAN_Host -DestinationPath "$base.zip"
-          $hash = (Get-FileHash -Algorithm SHA256 -Path "$base.zip").Hash
-          "$hash  $base.zip" | Set-Content -Encoding ascii "$base.zip.sha256"
-          "base=$base" >> $env:GITHUB_OUTPUT
-          "path=$base.zip" >> $env:GITHUB_OUTPUT
-          "checksum=$base.zip.sha256" >> $env:GITHUB_OUTPUT
+          "label=$label" >> $env:GITHUB_OUTPUT
+
+      - name: 运行测试、打包并生成发布产物
+        # build_windows.ps1 统一生成 release\ 下的 ZIP、.sha256 和 Setup 安装包，
+        # 与软件内更新器使用的附件命名保持一致；CI 要求 Inno Setup 必须存在。
+        run: powershell -ExecutionPolicy Bypass -File build_windows.ps1 -Label "${{ steps.label.outputs.label }}" -RequireInstaller
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.zip.outputs.base }}
-          path: |
-            ${{ steps.zip.outputs.path }}
-            ${{ steps.zip.outputs.checksum }}
+          name: BITFSAE_CAN_Host_${{ steps.label.outputs.label }}
+          path: release/*
           if-no-files-found: error
 
       - name: 创建 GitHub Release
@@ -66,10 +61,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "$env:GITHUB_REF_NAME"
-          $zip = "${{ steps.zip.outputs.path }}"
-          $checksum = "${{ steps.zip.outputs.checksum }}"
+          $zip = "release/BITFSAE_CAN_Host_$tag.zip"
+          $checksum = "release/BITFSAE_CAN_Host_$tag.zip.sha256"
+          $setup = "release/BITFSAE_CAN_Host_${tag}_setup.exe"
           $notes = @"
-          解压后复制整个 BITFSAE_CAN_Host 文件夹到目标电脑，运行其中的 BITFSAE_CAN_Host.exe，不能只复制 exe。
+          首次安装：下载 BITFSAE_CAN_Host_${tag}_setup.exe 双击安装。每用户安装、无需管理员，自动创建开始菜单和桌面快捷方式，可在 Windows「设置-应用」中卸载。
+
+          已安装旧版本：直接在上位机左下角版本入口检查更新，下载校验后一键重启安装新版本，无需重新运行安装包。
+
+          便携方式：解压 BITFSAE_CAN_Host_${tag}.zip 后复制整个 BITFSAE_CAN_Host 文件夹到目标电脑，运行其中的 BITFSAE_CAN_Host.exe，不能只复制 exe；软件内更新使用同一 ZIP。
 
           目标电脑需要先安装：
 
@@ -77,15 +77,12 @@ jobs:
           - Microsoft Edge WebView2 Runtime
 
           发布版只支持真实 PCAN，不包含源码运行用的内置模拟器。
-
-          软件内更新会通过 GitHub Release 下载 ZIP 包并校验附件 SHA256（.zip.sha256），
-          校验通过后可一键退出、备份旧目录、替换并自动启动新版本。
           "@
           if (gh release view $tag) {
-            gh release upload $tag $zip $checksum --clobber
+            gh release upload $tag $zip $checksum $setup --clobber
           } else {
             # 版本号后带 -rc1 / -pre 等后缀的标签创建为 GitHub 预发布（Pre-release）。
             $extra = @()
             if ($tag.Substring('v'.Length).Contains('-')) { $extra += '--prerelease' }
-            gh release create $tag $zip $checksum --title $tag --notes "$notes" @extra
+            gh release create $tag $zip $checksum $setup --title $tag --notes "$notes" @extra
           }
