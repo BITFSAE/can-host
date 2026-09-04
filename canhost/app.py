@@ -139,7 +139,8 @@ class Api:
         return self._updater.clear_token()
 
     def connect_can(self, config: dict[str, Any]) -> dict[str, Any]:
-        return self._service.connect(config)
+        result = self._service.connect(config)
+        return self._start_auto_trace(self._service, config, result, "CONN1")
 
     def disconnect_can(self) -> dict[str, Any]:
         return self._service.disconnect()
@@ -174,10 +175,11 @@ class Api:
         mode = "simulation" if config.get("mode") == "simulation" else "pcan"
         profile = str(config.get("bus_profile") or "canb")
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
-        return self._vehicle_service.connect({
+        result = self._vehicle_service.connect({
             "mode": mode, "bus_profile": profile,
             "channel": config.get("channel"), "bitrate": bitrate,
         })
+        return self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
 
     def disconnect_vehicle(self) -> dict[str, Any]:
         return self._vehicle_service.disconnect()
@@ -267,25 +269,86 @@ class Api:
     def bench_command(self, command: str) -> dict[str, Any]:
         return self._bench_service.bench_command(command)
 
-    def choose_record_file(self) -> dict[str, Any]:
+    def _monitor_service(self, source: str = "main") -> CanService:
+        return self._vehicle_service if source == "vehicle" else self._service
+
+    def _auto_trace_path(self, service: CanService, prefix: str) -> Path:
+        trace_dir = settings_path().parent / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        connection = service.connection
+        profile = str(connection.get("bus_profile") or "CAN").upper()
+        channel = str(connection.get("channel") or "PCAN").replace("/", "_").replace("\\", "_")
+        return trace_dir / f"{prefix}_{profile}_{channel}_{datetime.now():%Y%m%d_%H%M%S_%f}.bmslog"
+
+    def _start_auto_trace(self, service: CanService, config: dict[str, Any],
+                          result: dict[str, Any], prefix: str) -> dict[str, Any]:
+        if not result.get("ok") or config.get("mode", "pcan") != "pcan" or config.get("auto_record", True) is False:
+            return result
+        recording = service.start_recording(str(self._auto_trace_path(service, prefix)), auto=True)
+        result["recording"] = recording
+        if not recording.get("ok"):
+            result["warning"] = f"PCAN 已连接，但自动留档未启动：{recording.get('error', '未知错误')}"
+        return result
+
+    def choose_record_file(self, source: str = "main") -> dict[str, Any]:
         if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
             import webview
-            default = f"BMS_CAN_{datetime.now():%Y%m%d_%H%M%S}.bmslog"
+            source_label = "1" if source == "main" else "2"
+            default = f"CAN_{source_label}_{datetime.now():%Y%m%d_%H%M%S}.bmslog"
             selected = self._window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=default,
-                file_types=("BMS 数据记录 (*.bmslog)", "CSV 文件 (*.csv)"),
+                file_types=("CAN 数据记录 (*.bmslog)", "CSV 文件 (*.csv)"),
             )
             if not selected:
                 return {"ok": False, "cancelled": True}
             path = selected if isinstance(selected, str) else selected[0]
-            return self._service.start_recording(path)
+            return self._monitor_service(source).start_recording(path)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def stop_recording(self) -> dict[str, Any]:
-        return self._service.stop_recording()
+    def stop_recording(self, source: str = "main") -> dict[str, Any]:
+        return self._monitor_service(source).stop_recording()
+
+    def set_monitor_auto_record(self, source: str, enabled: bool) -> dict[str, Any]:
+        service = self._monitor_service(source)
+        if not enabled:
+            if service.record_auto:
+                return service.stop_recording()
+            return {"ok": True, "unchanged": True}
+        if service.record_kind:
+            return {"ok": True, "unchanged": True, "path": service.record_path}
+        if not service.connection.get("connected") or service.connection.get("mode") != "pcan":
+            return {"ok": False, "error": "连接真实 PCAN 后才能自动留档"}
+        prefix = "CONN2" if source == "vehicle" else "CONN1"
+        return service.start_recording(str(self._auto_trace_path(service, prefix)), auto=True)
+
+    def choose_export_monitor_csv(self, source: str = "main") -> dict[str, Any]:
+        if not self._window:
+            return {"ok": False, "error": "窗口尚未就绪"}
+        try:
+            import webview
+            selected = self._window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=f"CAN_{'2' if source == 'vehicle' else '1'}_{datetime.now():%Y%m%d_%H%M%S}.csv",
+                file_types=("CSV 文件 (*.csv)",),
+            )
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            path = selected if isinstance(selected, str) else selected[0]
+            return self._monitor_service(source).export_recording_csv(path)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def send_monitor_frame(self, source: str, spec: dict[str, Any],
+                           acknowledged: bool = False) -> dict[str, Any]:
+        return self._monitor_service(source).send_monitor_frame(spec, acknowledged)
+
+    def configure_monitor_periodic(self, source: str, task_id: str, spec: dict[str, Any],
+                                   active: bool, acknowledged: bool = False) -> dict[str, Any]:
+        return self._monitor_service(source).configure_monitor_periodic(
+            task_id, spec, active, acknowledged)
 
     def choose_replay_file(self) -> dict[str, Any]:
         if not self._window:

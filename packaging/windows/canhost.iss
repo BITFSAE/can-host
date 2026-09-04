@@ -7,7 +7,7 @@
 ; - 软件内更新换目录后会从旧目录备份复制回 unins000.exe/.dat，
 ;   保证 Windows「应用和功能」的卸载入口不丢失。
 ; 命令行编译（build_windows.ps1 / CI 传入全部 define）：
-;   ISCC.exe /DMyAppVersion=0.8.3 /DMyAppVersionLabel=0.8.3 ^
+;   ISCC.exe /DMyAppVersion=0.9.0 /DMyAppVersionLabel=0.9.0 ^
 ;            /DSourceDir=...\dist\BITFSAE_CAN_Host /DOutputDir=...\release ^
 ;            /DIconFile=...\app_icon.ico packaging\windows\canhost.iss
 
@@ -86,4 +86,3 @@ begin
     // ExtractFilePath 返回带尾部反斜杠的父目录。
     DelTree(ExtractFilePath(ExpandConstant('{app}')) + 'BITFSAE_CAN_Host.old-*', True, True, True);
 end;
-

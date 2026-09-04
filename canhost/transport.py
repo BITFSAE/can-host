@@ -6,6 +6,7 @@ import csv
 from datetime import datetime
 import math
 from pathlib import Path
+import shutil
 import sqlite3
 import threading
 import time
@@ -16,9 +17,12 @@ from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
                   compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
-                           TOOL_PROTOCOL_VERSION, BmsProtocol, build_command, command_ack_matches)
+                           TOOL_PROTOCOL_VERSION, BmsProtocol, build_command, command_ack_matches,
+                           frame_name)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
-                       build_bms_fan_command, bms_fan_ack_matches)
+                       build_bms_fan_command, bms_fan_ack_matches, canb_frame_name,
+                       FAN_COMMAND_ID, BMS_FAN_COMMAND_ID)
+from .monitor import CanMonitor, normalize_message_spec
 from .vehicle.protocol import VehicleProtocol
 from .vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSession
 
@@ -45,6 +49,8 @@ class CanService:
         self.record_path: str | None = None
         self.record_pending = 0
         self.record_last_commit = 0.0
+        self.record_auto = False
+        self.last_record_path: str | None = None
         self.replay_frames: list[CanFrame] = []
         self.replay_relative: list[float] = []
         self.replay_index = 0
@@ -73,6 +79,10 @@ class CanService:
         self.bench_last_tx_error = ""
         self.bench_last_tx_error_time = 0.0
         self.protocol = self._new_protocol()
+        self.monitor = CanMonitor(self._monitor_frame_name)
+        self.monitor_tx_tasks: dict[str, dict[str, Any]] = {}
+        self.monitor_tx_stop = threading.Event()
+        self.monitor_tx_thread: threading.Thread | None = None
         self.fan_calib_session = FanCalibrationSession(
             send_fn=self.send_fan_command,
             snapshot_fn=self.vehicle_snapshot
@@ -85,6 +95,11 @@ class CanService:
     def _new_protocol(self, clock=None) -> BmsProtocol | VehicleProtocol:
         protocol_class = VehicleProtocol if self.protocol_kind == "vehicle" else BmsProtocol
         return protocol_class(clock) if clock is not None else protocol_class()
+
+    def _monitor_frame_name(self, arbitration_id: int, extended: bool) -> str:
+        if self.protocol_kind == "vehicle":
+            return "扩展帧（未登记）" if extended else canb_frame_name(arbitration_id)
+        return frame_name(arbitration_id, extended)
 
     def connect(self, config: dict[str, Any]) -> dict[str, Any]:
         self.disconnect()
@@ -100,6 +115,7 @@ class CanService:
             return {"ok": False, "error": "整车连接只在 CANB 上工作；请选择 CANB 或 Legacy 位率"}
         with self.lock:
             self.protocol = self._new_protocol()
+            self.monitor.clear()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
             self.connection.update({"connected": False, "mode": mode, "channel": channel,
@@ -140,6 +156,7 @@ class CanService:
     def disconnect(self) -> dict[str, Any]:
         self.stop_event.set()
         self.bench_stop_event.set()
+        self._stop_all_monitor_periodic()
         if self.bench_thread and self.bench_thread.is_alive():
             self.bench_thread.join(timeout=1.2)
         self.bench_thread = None
@@ -179,12 +196,123 @@ class CanService:
             # RTC replies, fault history, or measurements from the previous
             # device survive into the next connection.
             self.protocol = self._new_protocol()
+            self.monitor.clear()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
             self.ivt_rx_condition.notify_all()
             self.connection.pop("bench_target", None)
             self.connection.update({"connected": False, "status": "未连接"})
         return {"ok": True}
+
+    def send_monitor_frame(self, spec: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
+        """Send one operator-authored Classic CAN frame on the selected PCAN.
+
+        Known F405 and IVT command IDs stay behind their dedicated, stricter APIs.
+        Other IDs are deliberately bus-role agnostic: the physical connection
+        selected by the operator may be used for a bench or another CAN network.
+        """
+        if not acknowledged:
+            return {"ok": False, "error": "发送前必须确认本次原始 CAN 写操作"}
+        try:
+            normalized = normalize_message_spec(spec)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        arbitration_id = int(normalized["arbitration_id"])
+        extended = bool(normalized["extended"])
+        protected = self._monitor_id_is_protected(arbitration_id, extended)
+        if protected:
+            return {"ok": False, "error": "该 ID 属于受保护命令；请使用对应专用页面发送"}
+        with self.lock:
+            connection = dict(self.connection)
+            bus = self.bus
+        if not connection.get("connected"):
+            return {"ok": False, "error": "CAN 尚未连接"}
+        if connection.get("mode") != "pcan" or bus is None:
+            return {"ok": False, "error": "原始发送只允许当前真实 PCAN 连接；模拟和回放不可写"}
+        try:
+            import can
+            payload = bytes(normalized["data_bytes"])
+            bus.send(can.Message(arbitration_id=arbitration_id, data=payload,
+                                 is_extended_id=extended, is_fd=False), timeout=0.2)
+            frame = CanFrame(arbitration_id, payload, extended, time.time(), "tx")
+            self._ingest(frame)
+            return {"ok": True, "id": normalized["id"], "data": normalized["data"]}
+        except Exception as exc:
+            return {"ok": False, "error": f"CAN 发送失败：{exc}"}
+
+    def configure_monitor_periodic(self, task_id: str, spec: dict[str, Any], active: bool,
+                                   acknowledged: bool = False) -> dict[str, Any]:
+        key = str(task_id or "").strip()[:96]
+        if not key:
+            return {"ok": False, "error": "发送项标识无效"}
+        if not active:
+            with self.lock:
+                self.monitor_tx_tasks.pop(key, None)
+            return {"ok": True, "active": False}
+        if not acknowledged:
+            return {"ok": False, "error": "启用周期发送前必须确认"}
+        # Run the same validation and safety checks before arming, without
+        # emitting a probe frame merely to validate the row.
+        try:
+            normalized = normalize_message_spec(spec)
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        arbitration_id = int(normalized["arbitration_id"])
+        if self._monitor_id_is_protected(arbitration_id, bool(normalized["extended"])):
+            return {"ok": False, "error": "该 ID 属于受保护命令，不能从周期发送器下发"}
+        with self.lock:
+            if (not self.connection.get("connected") or self.connection.get("mode") != "pcan"
+                    or self.bus is None):
+                return {"ok": False, "error": "周期发送只允许当前真实 PCAN 连接"}
+            self.monitor_tx_tasks[key] = {
+                "id": key, "spec": normalized, "active": True, "count": 0,
+                "next_at": time.monotonic(), "last_error": None,
+            }
+            if self.monitor_tx_thread is None or not self.monitor_tx_thread.is_alive():
+                self.monitor_tx_stop.clear()
+                self.monitor_tx_thread = threading.Thread(
+                    target=self._monitor_tx_loop, name="can-monitor-periodic", daemon=True)
+                self.monitor_tx_thread.start()
+        return {"ok": True, "active": True}
+
+    @staticmethod
+    def _monitor_id_is_protected(arbitration_id: int, extended: bool) -> bool:
+        if extended:
+            return arbitration_id in CAN1_TOOL_IDS
+        return arbitration_id in {
+            BMS_CAN1_CMD_ID, DEFAULT_CMD_ID, FAN_COMMAND_ID, BMS_FAN_COMMAND_ID,
+        }
+
+    def _monitor_tx_loop(self) -> None:
+        while not self.monitor_tx_stop.wait(0.005):
+            now = time.monotonic()
+            due: list[tuple[str, dict[str, Any]]] = []
+            with self.lock:
+                for key, task in self.monitor_tx_tasks.items():
+                    if task.get("active") and now >= float(task["next_at"]):
+                        due.append((key, dict(task["spec"])))
+                        task["next_at"] = now + int(task["spec"]["cycle_ms"]) / 1000.0
+            for key, spec in due:
+                result = self.send_monitor_frame(spec, True)
+                with self.lock:
+                    task = self.monitor_tx_tasks.get(key)
+                    if task is None:
+                        continue
+                    if result.get("ok"):
+                        task["count"] += 1
+                        task["last_error"] = None
+                    else:
+                        task["active"] = False
+                        task["last_error"] = result.get("error") or "周期发送失败"
+
+    def _stop_all_monitor_periodic(self) -> None:
+        self.monitor_tx_stop.set()
+        thread = self.monitor_tx_thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        self.monitor_tx_thread = None
+        with self.lock:
+            self.monitor_tx_tasks.clear()
 
     def send_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
         if not acknowledged:
@@ -239,8 +367,7 @@ class CanService:
                                       is_extended_id=frame.is_extended_id, is_fd=False)
                 self.bus.send(message, timeout=0.2)
             with self.lock:
-                self.protocol.ingest(frame)
-                self._record(frame)
+                self._accept_frame_locked(frame)
             if not expects_unified_ack:
                 # RTC replies echo the request sequence. Wait for this exact
                 # sequence instead of treating whichever old reply is visible
@@ -312,8 +439,7 @@ class CanService:
                                   is_extended_id=frame.is_extended_id, is_fd=False)
             self.bus.send(message, timeout=0.2)
             with self.lock:
-                self.protocol.ingest(frame)
-                self._record(frame)
+                self._accept_frame_locked(frame)
             deadline = time.monotonic() + 1.0
             ack = None
             while time.monotonic() < deadline:
@@ -353,8 +479,7 @@ class CanService:
             self.bus.send(can.Message(arbitration_id=frame.arbitration_id, data=frame.data,
                                       is_extended_id=False, is_fd=False), timeout=0.2)
             with self.lock:
-                self.protocol.ingest(frame)
-                self._record(frame)
+                self._accept_frame_locked(frame)
             deadline = time.monotonic() + 1.0
             ack = None
             while time.monotonic() < deadline:
@@ -416,16 +541,9 @@ class CanService:
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
-            connection = dict(self.connection)
-            if connection.get("mode") == "replay":
-                connection["replay"] = {
-                    "position": round(self.replay_position, 3), "duration": round(self.replay_duration, 3),
-                    "speed": self.replay_speed, "paused": self.replay_paused,
-                    "index": self.replay_index, "total": self.replay_total,
-                }
-            if self.record_kind:
-                connection["recording"] = {"format": self.record_kind, "path": self.record_path}
+            connection = self._connection_snapshot_locked()
             snapshot = self.protocol.snapshot(connection)
+            snapshot["monitor"] = self._monitor_snapshot_locked()
             snapshot["ivt_config"] = dict(self.ivt_config) if self.ivt_config else None
             snapshot["bench"] = self._bench_snapshot_locked()
             return snapshot
@@ -444,12 +562,38 @@ class CanService:
     def vehicle_snapshot(self) -> dict[str, Any]:
         """Return the full vehicle-page state for the dedicated CANB connection."""
         with self.lock:
-            snap = self.protocol.snapshot(dict(self.connection))
+            snap = self.protocol.snapshot(self._connection_snapshot_locked())
+            snap["monitor"] = self._monitor_snapshot_locked()
             if self.fan_calib_session:
                 snap["fan"]["calib_session"] = self.fan_calib_session.get_snapshot()
             if self.battery_fan_calib_session:
                 snap["battery_fan"]["calib_session"] = self.battery_fan_calib_session.get_snapshot()
             return snap
+
+    def _connection_snapshot_locked(self) -> dict[str, Any]:
+        connection = dict(self.connection)
+        if connection.get("mode") == "replay":
+            connection["replay"] = {
+                "position": round(self.replay_position, 3), "duration": round(self.replay_duration, 3),
+                "speed": self.replay_speed, "paused": self.replay_paused,
+                "index": self.replay_index, "total": self.replay_total,
+            }
+        if self.record_kind:
+            connection["recording"] = {
+                "format": self.record_kind, "path": self.record_path, "auto": self.record_auto,
+            }
+        elif self.last_record_path:
+            connection["last_recording"] = {"path": self.last_record_path}
+        return connection
+
+    def _monitor_snapshot_locked(self) -> dict[str, Any]:
+        snapshot = self.monitor.snapshot()
+        snapshot["periodic"] = [
+            {"id": key, "active": bool(task.get("active")), "count": int(task.get("count", 0)),
+             "last_error": task.get("last_error")}
+            for key, task in self.monitor_tx_tasks.items()
+        ]
+        return snapshot
 
     def start_fan_calibration(self, channel: int = 1, steps: list[int] | None = None,
                               hold_s: float = 4.0, max_current_a: float = 18.0,
@@ -549,8 +693,7 @@ class CanService:
             frame = CanFrame(int(message.arbitration_id), bytes(message.data), bool(message.is_extended_id),
                              time.time(), "tx")
             with self.lock:
-                self.protocol.ingest(frame)
-                self._record(frame)
+                self._accept_frame_locked(frame)
         except Exception as exc:
             now = time.monotonic()
             if str(exc) != self.bench_last_tx_error or now - self.bench_last_tx_error_time >= 1.0:
@@ -648,8 +791,7 @@ class CanService:
                                   is_extended_id=False, is_fd=False)
             self.bus.send(message, timeout=0.2)
             frame = CanFrame(arbitration_id, payload, False, time.time(), "tx")
-            self.protocol.ingest(frame)
-            self._record(frame)
+            self._accept_frame_locked(frame)
 
     def _reopen_pcan(self, bitrate: int) -> None:
         """Reopen the isolated IVT configuration connection after restart."""
@@ -930,15 +1072,15 @@ class CanService:
                 return {"ok": False, "error": "未知回放操作"}
             return {"ok": True}
 
-    def start_recording(self, path: str) -> dict[str, Any]:
+    def start_recording(self, path: str, *, auto: bool = False) -> dict[str, Any]:
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "连接 CAN 或启动模拟数据后才能记录"}
             if self.connection.get("mode") == "replay":
                 return {"ok": False, "error": "历史回放期间不能开始新的数据记录"}
-            return self._start_recording_locked(path)
+            return self._start_recording_locked(path, auto=auto)
 
-    def _start_recording_locked(self, path: str) -> dict[str, Any]:
+    def _start_recording_locked(self, path: str, *, auto: bool = False) -> dict[str, Any]:
         try:
             target = Path(path).expanduser()
             if target.suffix.lower() not in {".csv", ".bmslog"}:
@@ -946,6 +1088,8 @@ class CanService:
             target.parent.mkdir(parents=True, exist_ok=True)
             self.stop_recording()
             self.record_path = str(target)
+            self.record_auto = bool(auto)
+            self.last_record_path = str(target)
             if target.suffix.lower() == ".csv":
                 self.record_kind = "csv"
                 self.record_file = target.open("w", newline="", encoding="utf-8-sig")
@@ -981,7 +1125,8 @@ class CanService:
                 self.record_db.commit()
                 self.record_last_commit = time.monotonic()
                 self.record_pending = 0
-            return {"ok": True, "path": str(target), "format": self.record_kind}
+            return {"ok": True, "path": str(target), "format": self.record_kind,
+                    "auto": self.record_auto}
         except Exception as exc:
             self.stop_recording()
             return {"ok": False, "error": str(exc)}
@@ -991,6 +1136,7 @@ class CanService:
             return self._stop_recording_locked()
 
     def _stop_recording_locked(self) -> dict[str, Any]:
+        stopped_path = self.record_path
         if self.record_file:
             try:
                 self.record_file.close()
@@ -1008,7 +1154,56 @@ class CanService:
         self.record_kind = None
         self.record_path = None
         self.record_pending = 0
-        return {"ok": True}
+        self.record_auto = False
+        if stopped_path:
+            self.last_record_path = stopped_path
+        return {"ok": True, "path": stopped_path}
+
+    def export_recording_csv(self, path: str) -> dict[str, Any]:
+        """Export the active or most recent trace while keeping live capture running."""
+        with self.lock:
+            source_text = self.record_path or self.last_record_path
+            if not source_text:
+                return {"ok": False, "error": "当前连接还没有可导出的记录"}
+            source = Path(source_text)
+            target = Path(path).expanduser()
+            if target.suffix.lower() != ".csv":
+                target = target.with_suffix(".csv")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if self.record_file:
+                    self.record_file.flush()
+                if self.record_db:
+                    self.record_db.commit()
+                if source.suffix.lower() == ".csv":
+                    if source.resolve() != target.resolve():
+                        shutil.copyfile(source, target)
+                    return {"ok": True, "path": str(target), "source": str(source)}
+                database = sqlite3.connect(
+                    f"{source.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False)
+                try:
+                    rows = database.execute(
+                        "SELECT timestamp, direction, arbitration_id, extended, data "
+                        "FROM frames ORDER BY seq")
+                    with target.open("w", newline="", encoding="utf-8-sig") as handle:
+                        writer = csv.writer(handle)
+                        writer.writerow(["本地时间", "方向", "ID", "帧类型", "DLC", "数据", "说明"])
+                        count = 0
+                        for timestamp, direction, arbitration_id, extended, data in rows:
+                            payload = bytes(data)
+                            writer.writerow([
+                                datetime.fromtimestamp(float(timestamp)).isoformat(timespec="milliseconds"),
+                                direction, f"0x{int(arbitration_id):08X}" if extended else f"0x{int(arbitration_id):03X}",
+                                "扩展" if extended else "标准", len(payload),
+                                " ".join(f"{byte:02X}" for byte in payload),
+                                self._monitor_frame_name(int(arbitration_id), bool(extended)),
+                            ])
+                            count += 1
+                finally:
+                    database.close()
+                return {"ok": True, "path": str(target), "source": str(source), "frames": count}
+            except Exception as exc:
+                return {"ok": False, "error": f"导出失败：{exc}"}
 
     @staticmethod
     def _frame_from_message(message: Any) -> CanFrame:
@@ -1054,7 +1249,7 @@ class CanService:
                     else:
                         while (self.replay_index < len(self.replay_frames)
                                and self.replay_relative[self.replay_index] <= self.replay_position):
-                            self.protocol.ingest(self.replay_frames[self.replay_index])
+                            self._accept_frame_locked(self.replay_frames[self.replay_index], record=False)
                             self.replay_index += 1
                     if self.replay_index >= self.replay_total:
                         self.replay_paused = True
@@ -1071,11 +1266,12 @@ class CanService:
             return
         self.replay_position = 0.0
         self.protocol = self._new_protocol(clock=lambda: self.replay_position)
+        self.monitor.clear()
         self.replay_index = 0
         while (self.replay_index < len(self.replay_frames)
                and self.replay_relative[self.replay_index] <= position):
             self.replay_position = self.replay_relative[self.replay_index]
-            self.protocol.ingest(self.replay_frames[self.replay_index])
+            self._accept_frame_locked(self.replay_frames[self.replay_index], record=False)
             self.replay_index += 1
         self.replay_position = position
 
@@ -1160,7 +1356,7 @@ class CanService:
         target = self.replay_first_timestamp + self.replay_position
         while self.replay_db_buffer and float(self.replay_db_buffer[0][1]) <= target:
             seq, frame = self._frame_from_db_row(self.replay_db_buffer.popleft())
-            self.protocol.ingest(frame)
+            self._accept_frame_locked(frame, record=False)
             self.replay_next_seq = seq + 1
             self.replay_index += 1
             if not self.replay_db_buffer:
@@ -1173,6 +1369,7 @@ class CanService:
         recent_start = max(self.replay_first_timestamp, target - 130.0)
         self.replay_position = 0.0
         self.protocol = self._new_protocol(clock=lambda: self.replay_position)
+        self.monitor.clear()
 
         fault_rows = self.replay_db.execute(
             "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
@@ -1182,7 +1379,7 @@ class CanService:
         for row in fault_rows:
             _, frame = self._frame_from_db_row(row)
             self.replay_position = max(0.0, frame.timestamp - self.replay_first_timestamp)
-            self.protocol.ingest(frame)
+            self._accept_frame_locked(frame, record=False)
 
         for can_id in (0x186B50F4, 0x186C50F4, 0x186C51F4, 0x186D50F4, 0x18A450F4):
             prior = self.replay_db.execute(
@@ -1193,7 +1390,7 @@ class CanService:
             if prior is not None:
                 _, frame = self._frame_from_db_row(prior)
                 self.replay_position = max(0.0, frame.timestamp - self.replay_first_timestamp)
-                self.protocol.ingest(frame)
+                self._accept_frame_locked(frame, record=False)
 
         recent_rows = self.replay_db.execute(
             "SELECT seq, timestamp, direction, arbitration_id, extended, data FROM frames "
@@ -1203,7 +1400,7 @@ class CanService:
         for row in recent_rows:
             _, frame = self._frame_from_db_row(row)
             self.replay_position = max(0.0, frame.timestamp - self.replay_first_timestamp)
-            self.protocol.ingest(frame)
+            self._accept_frame_locked(frame, record=False)
 
         self.replay_index = int(self.replay_db.execute(
             "SELECT COUNT(*) FROM frames WHERE timestamp <= ?", (target,)
@@ -1222,7 +1419,12 @@ class CanService:
 
     def _ingest(self, frame: CanFrame) -> None:
         with self.lock:
-            self.protocol.ingest(frame)
+            self._accept_frame_locked(frame)
+
+    def _accept_frame_locked(self, frame: CanFrame, *, record: bool = True) -> None:
+        self.protocol.ingest(frame)
+        self.monitor.ingest(frame)
+        if record:
             self._record(frame)
 
     def _record(self, frame: CanFrame) -> None:
@@ -1240,11 +1442,10 @@ class CanService:
             return
         if not self.record_writer:
             return
-        from .bms.protocol import frame_name
         self.record_writer.writerow([
             datetime.fromtimestamp(frame.timestamp).isoformat(timespec="milliseconds"), frame.direction,
             f"0x{frame.arbitration_id:08X}" if frame.is_extended_id else f"0x{frame.arbitration_id:03X}",
             "扩展" if frame.is_extended_id else "标准", len(frame.data),
-            " ".join(f"{byte:02X}" for byte in frame.data), frame_name(frame.arbitration_id, frame.is_extended_id),
+            " ".join(f"{byte:02X}" for byte in frame.data), self._monitor_frame_name(frame.arbitration_id, frame.is_extended_id),
         ])
         self.record_file.flush()

@@ -64,6 +64,7 @@ async function connectVehicle() {
       channel: simulation ? null : channelSelect?.value,
       bitrate,
       bus_profile: simulation || bitrate === 500000 ? "canb" : "canb_legacy",
+      auto_record: !simulation && (typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true),
     });
   } catch (error) {
     return toast(`整车连接失败：${error}`, true);
@@ -71,8 +72,12 @@ async function connectVehicle() {
     setBusConnecting("canb_vehicle", false);
   }
   if (!result?.ok) return toast(result?.error || "整车连接失败", true);
-  toast(simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`);
+  toast(result.warning || (simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`), !!result.warning);
   if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
+  if (!simulation) {
+    state.frameSource = "vehicle";
+    showPage("frames");
+  }
   await poll();
 }
 

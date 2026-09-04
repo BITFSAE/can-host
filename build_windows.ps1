@@ -1,6 +1,6 @@
 ﻿param(
     # 发布产物命名标签：默认取 canhost/__init__.py 的 __version__，
-    # CI 打标签构建时传入 v 标签（如 v0.8.3），手动触发时传短 SHA。
+    # CI 打标签构建时传入 v 标签（如 v0.9.0），手动触发时传短 SHA。
     [string]$Label = "",
     # CI 传入：缺少 Inno Setup 时直接失败；本地构建缺 ISCC 只警告并跳过安装包。
     [switch]$RequireInstaller
@@ -37,7 +37,7 @@ try {
             exit 1
         }
     }
-    # 统一去掉开头的 v（CI 传标签 v0.8.3，__version__ 是 0.8.3），
+    # 统一去掉开头的 v（CI 传标签 v0.9.0，__version__ 是 0.9.0），
     # 产物命名统一为 BITFSAE_CAN_Host_v<版本>.*，与软件内更新器附件约定一致。
     if ($Label.StartsWith("v") -or $Label.StartsWith("V")) { $Label = $Label.Substring(1) }
 

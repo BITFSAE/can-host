@@ -938,32 +938,43 @@
         </section>
 
         <section class="page" id="page-frames" aria-label="CAN 监视器">
-          <div class="scope-strip" id="framesScopeStrip" hidden>
-            <span class="scope-strip-icon" aria-hidden="true"></span>
-            <div><b id="framesScopeTitle">未连接</b><small id="framesScopeDetail">点击底部 CAN1 / CANB 快速开关</small></div>
-          </div>
           <div class="toolbar">
             <label class="search">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6 20 20"/></svg>
               <input id="frameSearch" placeholder="按 CAN ID、帧名称或数据筛选" aria-label="筛选报文">
             </label>
             <div class="segmented small" id="frameSource" role="group" aria-label="数据源">
-              <button class="active" type="button" data-source="main">主连接</button>
-              <button type="button" data-source="vehicle">整车连接</button>
+              <button class="active" type="button" data-source="main" title="上位机连接 1 的数据流">连接 1</button>
+              <button type="button" data-source="vehicle" title="上位机连接 2 的数据流">连接 2</button>
             </div>
             <div class="segmented small" id="frameType" role="group" aria-label="方向筛选">
               <button class="active" type="button" data-kind="all">全部</button>
               <button type="button" data-kind="rx">接收</button>
               <button type="button" data-kind="tx">发送</button>
             </div>
+            <label class="monitor-sort" title="排序方式">
+              <select id="frameSort" aria-label="报文排序">
+                <option value="id">CAN ID</option>
+                <option value="latest">最近更新</option>
+                <option value="count">帧数</option>
+                <option value="cycle">周期</option>
+              </select>
+            </label>
+            <span class="monitor-inline-stats" aria-live="polite"><b id="monitorIdCount">0</b> IDs · <b id="monitorRate">0</b> 帧/s</span>
             <label class="switch">
               <input id="pauseFrames" type="checkbox">
               <i class="switch-track" aria-hidden="true"></i>
-              <span>暂停列表</span>
+              <span>冻结</span>
+            </label>
+            <label class="switch monitor-auto-record" title="真实 PCAN 连接成功后自动保存原始帧">
+              <input id="monitorAutoRecord" type="checkbox" checked>
+              <i class="switch-track" aria-hidden="true"></i>
+              <span>自动留档</span>
             </label>
             <span class="toolbar-actions">
-              <button class="outline-button" type="button" id="replayButton">打开历史</button>
-              <button class="outline-button record" type="button" id="recordButton">● 记录数据</button>
+              <button class="outline-button" type="button" id="replayButton">历史</button>
+              <button class="outline-button" type="button" id="exportFramesButton">导出 CSV</button>
+              <button class="outline-button record" type="button" id="recordButton"><i aria-hidden="true"></i><span>记录</span></button>
             </span>
           </div>
 
@@ -977,12 +988,32 @@
             </label>
           </div>
 
-          <div class="table-wrap">
-            <table class="frame-table">
-              <thead><tr><th>时间</th><th>方向</th><th>CAN ID</th><th>类型</th><th>DLC</th><th>数据</th><th>说明</th></tr></thead>
-              <tbody id="frameRows"></tbody>
-            </table>
-            <div id="frameEmpty" class="empty-state large">连接设备后，这里显示最近 320 帧。</div>
+          <div class="monitor-workspace">
+            <div class="table-wrap monitor-table-wrap">
+              <table class="frame-table monitor-frame-table">
+                <thead><tr><th aria-label="展开内容变体"></th><th>CAN ID</th><th>方向</th><th>类型</th><th>长度</th><th>最新数据</th><th>周期</th><th>帧数</th><th>注释</th></tr></thead>
+                <tbody id="frameRows"></tbody>
+              </table>
+              <div id="frameEmpty" class="empty-state large">等待当前数据源的 CAN 帧。相同 ID 会汇总为一行；存在多种内容时可展开查看。</div>
+            </div>
+
+            <section class="transmit-dock" aria-labelledby="transmitDockTitle">
+              <header>
+                <div>
+                  <h2 id="transmitDockTitle">发送</h2>
+                  <small id="monitorTxGate">不可发送</small>
+                </div>
+                <div class="transmit-actions">
+                  <button class="action-button" type="button" id="addTxRow">新增发送项</button>
+                </div>
+              </header>
+              <div class="transmit-table-wrap">
+                <table class="transmit-table">
+                  <thead><tr><th>循环</th><th>名称</th><th>CAN ID</th><th>类型</th><th>长度</th><th>数据</th><th>间隔 ms</th><th>次数</th><th>操作</th></tr></thead>
+                  <tbody id="monitorTxRows"></tbody>
+                </table>
+              </div>
+            </section>
           </div>
         </section>
 
@@ -1273,6 +1304,7 @@
 
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <script src="js/core.js"></script>
+  <script src="js/monitor.js"></script>
   <script src="js/bms.js"></script>
   <script src="js/vehicle.js"></script>
   <script src="js/fan.js"></script>

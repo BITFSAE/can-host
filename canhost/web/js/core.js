@@ -1,5 +1,5 @@
-/* 框架层：状态、轮询、导航、确认弹窗、状态栏与快捷栏、CAN 监视器、回放。
- * 页面模块（bms/vehicle/fan/bench/ivt）在其后加载，函数在调用时解析。 */
+/* 框架层：状态、轮询、导航、确认弹窗、状态栏与快捷栏。
+ * 页面模块（bms/vehicle/fan/bench/ivt/monitor/telemetry）在其后加载。 */
 
 var $ = (selector) => document.querySelector(selector);
 var $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -19,23 +19,21 @@ var state = {
   frameKind: "all",
   frameSource: "main",
   framePaused: false,
-  pausedFrames: [],
   pollTimer: null,
   pollInFlight: false,
   pendingCommand: null,
   pendingIvtAction: null,
   pendingFanCommand: null,
   pendingFanAction: null,
+  pendingMonitorAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false, chargerType: false, fan: false },
-  recording: false,
   onlyActiveAlarms: false,
   uiScale: 1,
   lastZoomWheelAt: 0,
   chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0, connectionKey: null },
   saveWatch: null,
   cellRefs: null,
-  frameRowPool: [],
 };
 window.state = state;
 
@@ -130,6 +128,7 @@ async function init() {
   restoreUiScale();
   bindNavigation();
   bindCoreControls();
+  bindMonitorControls();
   bindBmsControls();
   bindVehicleControls();
   bindFanControls();
@@ -198,46 +197,18 @@ function bindCoreControls() {
   $("#simulationBusButton")?.addEventListener("click", toggleSimulationChannels);
   $("#connectionSettingsButton")?.addEventListener("click", () => $("#connectDialog")?.showModal());
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
-  $("#frameType").addEventListener("click", event => {
-    const button = event.target.closest("button"); if (!button) return;
-    state.frameKind = button.dataset.kind;
-    $$("#frameType button").forEach(node => node.classList.toggle("active", node === button));
-    renderFrames();
-  });
-  $("#frameSource").addEventListener("click", event => {
-    const button = event.target.closest("button"); if (!button) return;
-    state.frameSource = button.dataset.source;
-    state.framePaused = false;
-    $("#pauseFrames").checked = false;
-    $$("#frameSource button").forEach(node => node.classList.toggle("active", node === button));
-    schedulePoll(0);
-    renderFrames();
-  });
-  $("#frameSearch").addEventListener("input", renderFrames);
-  $("#pauseFrames").addEventListener("change", event => {
-    state.framePaused = event.target.checked;
-    if (state.framePaused) state.pausedFrames = activeFrameList();
-    renderFrames();
-  });
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#confirmDialog").addEventListener("close", () => {
     state.pendingCommand = null;
     state.pendingIvtAction = null;
     state.pendingFanCommand = null;
     state.pendingFanAction = null;
+    state.pendingMonitorAction = null;
     $("#confirmCheck").checked = false;
     $("#doConfirm").disabled = true;
     setConfirmModeBadge("待确认");
   });
   $("#doConfirm").addEventListener("click", sendPendingCommand);
-  $("#recordButton").addEventListener("click", toggleRecording);
-  $("#replayButton").addEventListener("click", openReplay);
-  $("#replayPlay").addEventListener("click", toggleReplay);
-  $("#replaySpeed").addEventListener("change", event => state.api?.replay_control("speed", +event.target.value));
-  $("#replaySeek").addEventListener("change", event => {
-    const replay = state.snapshot?.connection?.replay; if (!replay) return;
-    state.api?.replay_control("seek", replay.duration * (+event.target.value / 1000));
-  });
   document.addEventListener("visibilitychange", () => schedulePoll(document.hidden ? 1000 : 0));
   window.addEventListener("resize", () => {
     if (state.page === "overview") drawTrend();
@@ -356,6 +327,7 @@ async function toggleMainDockConnection(role) {
     result = await state.api.connect_can({
       mode: "pcan", bus_profile: profile,
       channel: $("#connectChannel")?.value || "PCAN_USBBUS1", bitrate,
+      auto_record: typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true,
     });
   } catch (error) {
     return toast(`连接失败：${error}`, true);
@@ -363,7 +335,9 @@ async function toggleMainDockConnection(role) {
     setBusConnecting(role, false);
   }
   if (!result?.ok) return toast(result?.error || `${role === "can1" ? "CAN1" : "BMS CANB"} 连接失败`, true);
-  toast(`${role === "can1" ? "CAN1" : "BMS CANB"} 已连接`);
+  toast(result.warning || `${role === "can1" ? "CAN1" : "BMS CANB"} 已连接`, !!result.warning);
+  state.frameSource = "main";
+  showPage("frames");
   await poll();
 }
 
@@ -568,7 +542,7 @@ function render() {
     renderFan();
   } else if (state.page === "frames") {
     renderReplay();
-    if (!state.framePaused) renderFrames();
+    renderFrames();
   } else if (state.page === "telemetry") {
     renderTelemetry();
   }
@@ -585,8 +559,6 @@ function renderBusDock() {
 function updateScopeStrips(main, vehicle) {
   const mainConnected = main.connected === true;
   const vehicleConnected = vehicle.connected === true;
-  const framesStrip = $("#framesScopeStrip");
-  if (framesStrip) framesStrip.hidden = mainConnected || vehicleConnected;
   let frameSource = state.frameSource || "main";
   const selectedReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
   if (!selectedReady && (mainConnected || vehicleConnected)) {
@@ -594,7 +566,6 @@ function updateScopeStrips(main, vehicle) {
     state.frameSource = frameSource;
     $$("#frameSource button").forEach(button => button.classList.toggle("active", button.dataset.source === frameSource));
   }
-  const frameReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
   $$("#frameSource button").forEach(button => {
     button.disabled = button.dataset.source === "vehicle" ? !vehicleConnected : !mainConnected;
   });
@@ -619,9 +590,6 @@ function updateScopeStrips(main, vehicle) {
 }
 
 function renderConnection(connection) {
-  state.recording = !!connection.recording;
-  text("#recordButton", state.recording ? "■ 停止记录" : "● 记录数据");
-  setClass("#recordButton", "active", state.recording);
   const vehicleConnection = vehicleConnectionState();
   const mainRx = Number(connection.rx_count || 0), mainTx = Number(connection.tx_count || 0);
   const vehicleRx = Number(vehicleConnection.rx_count || 0), vehicleTx = Number(vehicleConnection.tx_count || 0);
@@ -692,87 +660,28 @@ function renderQuickBar() {
   text("#quickFanRpm", fanFresh && quick.fan_rpm_max != null ? String(quick.fan_rpm_max) : "等待");
 }
 
-/* ---------------- CAN monitor + replay ---------------- */
-
-function activeFrameList() {
-  return state.frameSource === "vehicle"
-    ? (state.vehicleSnapshot?.raw_frames || [])
-    : (state.snapshot?.raw_frames || []);
-}
-
-function fillFrameRow(row, frame) {
-  row.className = frame.direction;
-  row.innerHTML = `<td>${frame.time}</td>`
-    + `<td><span class="dir-tag ${frame.direction}">${frame.direction.toUpperCase()}</span></td>`
-    + `<td>${frame.id}</td><td>${frame.extended ? "扩展" : "标准"}</td><td>${frame.dlc}</td>`
-    + `<td title="${frame.data}">${frame.data}</td><td title="${frame.name}">${frame.name}</td>`;
-}
-
-function frameKey(frame) {
-  return `${frame.time}|${frame.direction}|${frame.id}|${frame.extended}|${frame.dlc}|${frame.data}|${frame.name}`;
-}
-
-/** Reuse table rows keyed by their full content so unchanged rows keep their DOM node
- *  and the native title tooltips on data/name cells stay visible while polling. */
-function renderFrames() {
-  if (!state.snapshot) return;
-  const frames = state.framePaused ? state.pausedFrames : activeFrameList();
-  const query = $("#frameSearch").value.trim().toLowerCase();
-  const filtered = frames.filter(frame => (state.frameKind === "all" || frame.direction === state.frameKind) && (!query || `${frame.id} ${frame.name} ${frame.data}`.toLowerCase().includes(query))).slice(0, 180);
-  const tbody = $("#frameRows");
-  const pooled = state.frameRowPool.filter(row => row.isConnected);
-  const freeByKey = new Map();
-  pooled.forEach(row => {
-    const key = row.dataset.key;
-    if (!freeByKey.has(key)) freeByKey.set(key, []);
-    freeByKey.get(key).push(row);
-  });
-  const used = new Set();
-  const next = filtered.map(frame => {
-    const key = frameKey(frame);
-    const pool = freeByKey.get(key);
-    let row = null;
-    if (pool) {
-      const candidate = pool.find(item => !used.has(item));
-      if (candidate) { row = candidate; used.add(candidate); }
-    }
-    if (!row) {
-      row = document.createElement("tr");
-      row.dataset.key = key;
-      fillFrameRow(row, frame);
-    }
-    return row;
-  });
-  const current = [...tbody.children];
-  const sameOrder = current.length === next.length && current.every((row, i) => row === next[i]);
-  if (!sameOrder) {
-    pooled.forEach(row => { if (!used.has(row)) row.remove(); });
-    next.forEach(row => tbody.appendChild(row));
-  }
-  state.frameRowPool = next;
-  $("#frameEmpty").classList.toggle("hidden", filtered.length > 0);
-}
-
-function timeLabel(seconds) {
-  const value = Math.max(0, Math.floor(seconds || 0));
-  const hours = Math.floor(value / 3600), minutes = Math.floor(value % 3600 / 60), secs = value % 60;
-  return hours ? `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")}` : `${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
-}
-
-function renderReplay() {
-  const connection = state.snapshot?.connection, replay = connection?.replay;
-  $("#replayBar").classList.toggle("hidden", !replay);
-  if (!replay) return;
-  text("#replayFile", connection.channel); text("#replayPosition", `${timeLabel(replay.position)} / ${timeLabel(replay.duration)}`);
-  $("#replaySeek").value = replay.duration ? Math.round(replay.position / replay.duration * 1000) : 0;
-  $("#replayPlay").textContent = replay.paused ? "▶" : "Ⅱ";
-  $("#replaySpeed").value = String(replay.speed);
-}
-
 /* ---------------- shared confirm dialog ---------------- */
 
 async function sendPendingCommand() {
   if (!state.api) return;
+  if (state.pendingMonitorAction) {
+    const pending = state.pendingMonitorAction;
+    $("#doConfirm").disabled = true;
+    try {
+      const result = await pending.run();
+      if (!result?.ok) throw new Error(result?.error || "CAN 发送失败");
+      $("#confirmDialog").close();
+      state.pendingMonitorAction = null;
+      toast(pending.success || "CAN 发送已执行");
+      await poll();
+    } catch (error) {
+      toast(String(error.message || error), true);
+      $("#doConfirm").disabled = false;
+      monitorUi.lastTxSignature = "";
+      renderMonitorTransmitRows();
+    }
+    return;
+  }
   if (state.pendingIvtAction) {
     const pending = state.pendingIvtAction;
     $("#doConfirm").disabled = true;
@@ -836,30 +745,6 @@ async function sendPendingCommand() {
     await poll();
   }
   else { toast(result.error || "发送失败", true); $("#doConfirm").disabled = false; }
-}
-
-async function toggleRecording() {
-  if (!state.api) return;
-  if (state.recording) {
-    await state.api.stop_recording(); state.recording = false; text("#recordButton", "● 记录数据"); toast("CAN 数据记录已停止");
-  } else {
-    const result = await state.api.choose_record_file();
-    if (result.ok) { state.recording = true; text("#recordButton", "■ 停止记录"); toast(`正在记录 ${result.format === "bmslog" ? "BMSLOG" : "CSV"}：${result.path}`); }
-    else if (!result.cancelled) toast(result.error || "无法开始记录", true);
-  }
-}
-
-async function openReplay() {
-  if (!state.api) return;
-  if (state.recording) return toast("请先停止当前数据记录", true);
-  const result = await state.api.choose_replay_file();
-  if (result.ok) { toast(`已载入 ${result.frames.toLocaleString()} 帧历史记录`); showPage("frames"); await poll(); }
-  else if (!result.cancelled) toast(result.error || "历史记录载入失败", true);
-}
-
-async function toggleReplay() {
-  const replay = state.snapshot?.connection?.replay; if (!replay || !state.api) return;
-  await state.api.replay_control(replay.paused ? "play" : "pause"); await poll();
 }
 
 /** Shared canvas trend helper: widen a min/max window to a minimum span. */
