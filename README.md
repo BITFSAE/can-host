@@ -74,6 +74,13 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1
 
 CNB 镜像需要仓库 Actions secret `CNB_TOKEN`：CNB 访问令牌（用户名固定 `cnb`，令牌需包含仓库读写与发布读写权限），镜像目标仓库写在两条工作流的 `CNB_REPO` 环境变量里（当前 `totok22/can-host`）。令牌缺失或同步失败会让发布流水线直接失败，避免镜像落后导致国内用户检查不到新版本。
 
+仓库另有 CNB 云原生构建配置 `.cnb.yml`，作为国内侧的 CI 与补镜像入口。CNB 官方公共构建节点只有 Linux 容器，所以它不构建 Windows 发布包，只做两件事：
+
+- 分支/标签推送到 CNB 时跑全套上位机单元测试（Linux，覆盖协议、解码、更新器和镜像工具等与平台无关的逻辑）；
+- 在 CNB 分支详情页点「补做发布镜像」按钮（配置在 `.cnb/web_trigger.yml`），手工填写发布标签，把该 GitHub Release 的产物补传到 CNB 发布并刷新更新频道；同一任务也提供 API 入口（`POST /{repo}/-/build/start`，`event` 为 `api_trigger_mirror_release`，`env.TAG` 传标签）。这条路径使用 CNB 流水线内置的 `CNB_TOKEN`，不需要在 GitHub 保存 CNB 令牌。
+
+要在 CNB 上直接打 Windows 包，需要先在根组织的「组织设置 → 构建节点」接入一台 Windows 自托管 Runner，再用 `runner.namespace: group` + `runner.tags` 把发布流水线调度到它上面；那是另一件事，现有 CI 仍以 GitHub Actions 的 windows-latest 为准。
+
 发布新版本的操作：
 
 ```powershell
@@ -125,5 +132,6 @@ git push origin v0.9.0
 | `canhost/web/` | 无网络依赖的 HTML/CSS/JavaScript 界面（`js/` 按页面模块拆分） |
 | `cli/` | 独立命令行工具 `pcan_bms_bench.py`、`pcan_ivt_tool.py` |
 | `scripts/cnb_publish.py` | 把发布产物上传 CNB 并维护国内更新频道（CI 与本地补镜像共用） |
+| `.cnb.yml` | CNB 云原生构建：Linux 单元测试 + 手工补做发布镜像（公共节点无 Windows） |
 | `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / monitor / telemetry / updater / cnb_publish） |
 | `todo.md` | 上位机待办、风险、验证和变更摘要 |
