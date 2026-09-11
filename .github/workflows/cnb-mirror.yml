@@ -21,6 +21,9 @@ permissions:
 
 env:
   CNB_REPO: totok22/can-host
+  # 必须与 scripts/cnb_publish.py 的 DEFAULT_CHANNEL_BRANCH 一致：这个分支只存在于 CNB，
+  # 下面的清理逻辑要跳过它。
+  CHANNEL_BRANCH: cnb-update
 
 jobs:
   code:
@@ -43,10 +46,31 @@ jobs:
           fi
           git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*"
           git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}"
-          # 不用 --mirror/--prune：CNB 上还有更新频道分支，不能被本地 refspec 删掉。
+          # 不用 --mirror/--prune：--prune 会连带删掉只存在于 CNB 的更新频道分支。
           git push cnb --force \
             "+refs/remotes/origin/*:refs/heads/*" \
             "+refs/tags/*:refs/tags/*"
+
+      - name: 清理 CNB 上已不存在的分支
+        # 与上一步配套：镜像不 prune，所以这里显式删除 GitHub 上已删除的分支，
+        # 但保留更新频道分支（CHANNEL_BRANCH），避免镜像仓库越积越乱。
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t cnb_branches < <(git ls-remote --heads cnb | sed 's#.*refs/heads/##')
+          mapfile -t github_branches < <(git ls-remote --heads origin | sed 's#.*refs/heads/##')
+          for branch in "${cnb_branches[@]}"; do
+            if [ "$branch" = "${CHANNEL_BRANCH}" ]; then
+              echo "保留更新频道分支 $branch"
+              continue
+            fi
+            if printf '%s\n' "${github_branches[@]}" | grep -qx "$branch"; then
+              continue
+            fi
+            echo "删除 CNB 上已不存在的分支：$branch"
+            git push cnb --delete "$branch"
+          done
 
   release:
     name: 同步发布产物
