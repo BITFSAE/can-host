@@ -7,12 +7,14 @@
 # 若要改成在 CNB 上直接打 Windows 包，需要先在根组织的「构建节点」里接入一台
 # Windows 自托管 Runner，再用 runner.namespace/tags 调度。
 #
-# 本文件提供两条流水线：
-# 1. push：在任何分支/标签推送时跑全套上位机单元测试（Linux，验证与平台无关的协议、
+# 本文件提供三条流水线：
+# 1. push：任何分支/标签推送时跑全套上位机单元测试（Linux，覆盖与平台无关的协议、
 #    解码、更新器和镜像工具逻辑）；
-# 2. web_trigger_mirror_release：在 CNB 网页分支详情页点「补做发布镜像」按钮，
-#    把指定 GitHub Release 的产物补传到 CNB 发布并刷新国内更新频道。
-#    使用 CNB 流水线内置的 CNB_TOKEN，不需要在 GitHub 存 CNB 令牌。
+# 2. web_trigger_mirror_release：在 CNB 分支详情页点「补做发布镜像」按钮，
+#    把指定 GitHub Release 的产物补传到 CNB 发布并刷新国内更新频道；
+# 3. api_trigger_mirror_release：同一件事的 API 触发入口（OpenAPI
+#    `POST /{repo}/-/build/start` 的 event 必须以 api_trigger 开头）。
+# 后两条都使用流水线内置的 CNB_TOKEN，不需要在 GitHub 保存 CNB 令牌。
 
 "**":
   push:
@@ -29,7 +31,8 @@
             set -e
             python -m unittest discover -s Tests -p "test_*.py" -v
 
-  web_trigger_mirror_release:
+  # 网页按钮与 API 触发共用这一段任务定义。
+  web_trigger_mirror_release: &mirror_release
     - name: 补做 GitHub 发布镜像
       docker:
         image: python:3.11-slim
@@ -68,3 +71,5 @@
               --tag "${TAG}" \
               --metadata-json cnb-assets/github-release.json \
               ${asset_args}
+
+  api_trigger_mirror_release: *mirror_release
