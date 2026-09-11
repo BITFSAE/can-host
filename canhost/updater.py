@@ -1,4 +1,9 @@
-"""GitHub Release-based updater for the frozen Windows build."""
+"""CNB 镜像优先、GitHub 回退的发布更新器（冻结版 Windows 上位机使用）。
+
+国内网络直连 GitHub 不可靠，发布产物因此同时镜像到 CNB（cnb.cool）：
+检查更新先读 CNB 上匿名可读的更新频道，失败才回退 GitHub API；
+下载地址由所选发布自带的附件地址决定，因此不需要代理，也不需要任何令牌。
+"""
 from __future__ import annotations
 
 import hashlib
@@ -12,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -20,6 +26,20 @@ from typing import Any, Callable, Iterable
 
 
 DEFAULT_REPO = "BITFSAE/can-host"
+# 国内镜像仓库：cnb.cool 的公开仓库，发布附件与更新频道都允许匿名读取。
+DEFAULT_CNB_REPO = "totok22/can-host"
+CNB_WEB_BASE = "https://cnb.cool"
+# 更新频道由 CI 写在独立分支上，避免与 GitHub main 的代码镜像互相覆盖。
+CNB_CHANNEL_BRANCH = "cnb-update"
+CNB_CHANNEL_PATH = "latest.json"
+SOURCE_CNB = "cnb"
+SOURCE_GITHUB = "github"
+# 顺序即优先级：CNB 镜像优先，失败回退 GitHub。
+DEFAULT_SOURCES = (SOURCE_CNB, SOURCE_GITHUB)
+SOURCE_LABELS = {SOURCE_CNB: "CNB 镜像", SOURCE_GITHUB: "GitHub"}
+# 只向这些域名发送已保存的 GitHub 令牌，其余（含 CNB 与预签名地址）一律匿名。
+GITHUB_HOSTS = ("github.com", "githubusercontent.com")
+
 APP_FOLDER_NAME = "BITFSAE_CAN_Host"
 APP_EXE_NAME = f"{APP_FOLDER_NAME}.exe"
 ASSET_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}_v.+\\.zip$", re.IGNORECASE)
@@ -35,6 +55,29 @@ BACKUP_DIR_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}\.old-(\d{{14}})$")
 # about 8 s; backups younger than this may still be a rollback target, so the
 # startup cleanup must leave them alone.
 BACKUP_KEEP_SECONDS = 15 * 60
+
+
+def is_github_url(url: str) -> bool:
+    """True only for GitHub-hosted URLs, the sole place the saved token may go."""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if not host:
+        return False
+    return any(host == item or host.endswith("." + item) for item in GITHUB_HOSTS)
+
+
+def cnb_channel_url(
+    repo: str = DEFAULT_CNB_REPO,
+    base: str = CNB_WEB_BASE,
+    branch: str = CNB_CHANNEL_BRANCH,
+    path: str = CNB_CHANNEL_PATH,
+) -> str:
+    """Anonymous raw address of the CNB update channel written by CI."""
+    return "{}/{}/-/git/raw/{}/{}".format(
+        base.rstrip("/"),
+        repo.strip("/"),
+        urllib.parse.quote(branch, safe=""),
+        urllib.parse.quote(path, safe=""),
+    )
 
 
 def _user_settings_dir() -> Path:
@@ -436,7 +479,7 @@ def startup_cleanup(app_dir: Path, now: float | None = None) -> dict[str, int]:
 
 
 class HostUpdater:
-    """Background check/download state machine for GitHub releases."""
+    """Background check/download state machine for CNB and GitHub releases."""
 
     def __init__(
         self,
@@ -444,8 +487,12 @@ class HostUpdater:
         current_version: str = "0.0.0",
         token_provider: Callable[[], str | None] | None = None,
         timeout: float = 20.0,
+        cnb_repo: str = DEFAULT_CNB_REPO,
+        sources: Iterable[str] = DEFAULT_SOURCES,
     ) -> None:
         self.repo = repo
+        self.cnb_repo = cnb_repo
+        self.sources = tuple(sources) or DEFAULT_SOURCES
         self.current_version = current_version
         self._token_provider = token_provider or (lambda: None)
         self.timeout = timeout
@@ -457,6 +504,7 @@ class HostUpdater:
             "error": None,
             "progress": 0.0,
             "latest": None,
+            "source": None,
             "downloaded_zip": "",
             "stage_dir": "",
             "checked_at": None,
@@ -507,10 +555,11 @@ class HostUpdater:
                 return {"ok": False, "state": self._state["state"], "error": "已有更新任务正在执行"}
             self._state.update({
                 "state": "checking",
-                "message": "正在检查 GitHub Release…",
+                "message": f"正在检查更新（{SOURCE_LABELS.get(self.sources[0], self.sources[0])} 优先）…",
                 "error": None,
                 "progress": 0.0,
                 "latest": None,
+                "source": None,
                 "include_prerelease": bool(include_prerelease),
             })
             thread = threading.Thread(
@@ -591,6 +640,7 @@ class HostUpdater:
             self._state.update(changes)
 
     def _headers(self, accept: str) -> dict[str, str]:
+        """GitHub request headers, including the optional read-only token."""
         headers = {
             "User-Agent": "BITFSAE-CAN-Host-Updater/1.0",
             "Accept": accept,
@@ -601,17 +651,74 @@ class HostUpdater:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def _request(self, url: str, accept: str = "application/vnd.github+json") -> Any:
-        request = urllib.request.Request(url, headers=self._headers(accept))
+    @staticmethod
+    def _cnb_headers(accept: str = "application/json") -> dict[str, str]:
+        """CNB mirror headers: the channel and assets are readable anonymously."""
+        return {"User-Agent": "BITFSAE-CAN-Host-Updater/1.0", "Accept": accept}
+
+    def _source_headers(self, source: str, accept: str = "application/json") -> dict[str, str]:
+        return self._headers(accept) if source == SOURCE_GITHUB else self._cnb_headers(accept)
+
+    def _request(
+        self,
+        url: str,
+        accept: str = "application/vnd.github+json",
+        source: str = SOURCE_GITHUB,
+    ) -> Any:
+        headers = self._source_headers(source, accept)
+        request = urllib.request.Request(url, headers=headers)
         return urllib.request.urlopen(request, timeout=self.timeout)
 
-    def _fetch_json(self, url: str) -> Any:
-        with self._request(url) as response:
+    def _fetch_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
+        request = urllib.request.Request(
+            url, headers=headers if headers is not None else self._headers("application/json")
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def _github_releases(self) -> list[dict[str, Any]]:
+        payload = self._fetch_json(
+            f"https://api.github.com/repos/{self.repo}/releases?per_page=10",
+            self._source_headers(SOURCE_GITHUB, "application/vnd.github+json"),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("GitHub Release 返回格式不正确")
+        return [item for item in payload if isinstance(item, dict)]
+
+    def _cnb_releases(self) -> list[dict[str, Any]]:
+        """Read the CNB update channel: an anonymously readable JSON release list."""
+        payload = self._fetch_json(cnb_channel_url(self.cnb_repo), self._source_headers(SOURCE_CNB))
+        if not isinstance(payload, dict):
+            raise RuntimeError("CNB 更新频道返回格式不正确")
+        releases = payload.get("releases")
+        if not isinstance(releases, list):
+            raise RuntimeError("CNB 更新频道缺少 releases 列表")
+        return [item for item in releases if isinstance(item, dict)]
+
+    def _releases_from(self, source: str) -> list[dict[str, Any]]:
+        if source == SOURCE_CNB:
+            return self._cnb_releases()
+        if source == SOURCE_GITHUB:
+            return self._github_releases()
+        raise ValueError(f"未知的更新源：{source}")
+
     @staticmethod
-    def _http_error_message(exc: urllib.error.HTTPError) -> str:
+    def _select_release(releases: Iterable[dict[str, Any]], include_prerelease: bool) -> dict[str, Any] | None:
+        candidates = (release for release in releases if not release.get("draft"))
+        return next(
+            (release for release in candidates if include_prerelease or not release.get("prerelease")),
+            None,
+        )
+
+    @staticmethod
+    def _http_error_message(exc: urllib.error.HTTPError, source: str = SOURCE_GITHUB) -> str:
         code = exc.code
+        if source == SOURCE_CNB:
+            if code == 404:
+                return "CNB 镜像上还没有更新频道（HTTP 404），等待发布同步完成。"
+            if code in (401, 403):
+                return f"CNB 镜像拒绝访问（HTTP {code}），请稍后重试。"
+            return f"CNB 镜像请求失败（HTTP {code}）。"
         if code in (401, 403):
             return (f"GitHub 拒绝访问（HTTP {code}）。仓库可能是私有仓库且未配置只读令牌；"
                     f"请在更新窗口“私有仓库访问令牌”中保存可下载 Release 的令牌。")
@@ -621,40 +728,49 @@ class HostUpdater:
 
     def _check_worker(self, include_prerelease: bool) -> None:
         thread = threading.current_thread()
+        problems: list[str] = []
         try:
-            releases = self._fetch_json(f"https://api.github.com/repos/{self.repo}/releases?per_page=10")
-            if not isinstance(releases, list):
-                raise RuntimeError("GitHub Release 返回格式不正确")
-            candidates: Iterable[dict[str, Any]] = (
-                release for release in releases if isinstance(release, dict) and not release.get("draft")
-            )
-            selected = next(
-                (release for release in candidates if include_prerelease or not release.get("prerelease")),
-                None,
-            )
-            if selected is None:
-                raise RuntimeError("没有可用的正式发布版本，请稍后再试。")
-            tag = str(selected.get("tag_name") or "")
-            summary = _release_summary(selected)
-            if release_is_newer(tag, self.current_version):
-                self._set(
-                    state="update_available",
-                    message=f"发现新版本 {tag}",
-                    error=None,
-                    latest=summary,
-                    checked_at=time.time(),
-                )
-            else:
-                self._set(
-                    state="up_to_date",
-                    message=f"当前已是 {self.current_version}，无需更新",
-                    error=None,
-                    latest=summary,
-                    checked_at=time.time(),
-                )
-        except urllib.error.HTTPError as exc:
-            self._set(state="check_failed", message="检查更新失败",
-                      error=self._http_error_message(exc), checked_at=time.time())
+            for source in self.sources:
+                label = SOURCE_LABELS.get(source, source)
+                try:
+                    releases = self._releases_from(source)
+                except urllib.error.HTTPError as exc:
+                    problems.append(f"{label}：{self._http_error_message(exc, source)}")
+                    continue
+                except Exception as exc:
+                    problems.append(f"{label}：{exc}")
+                    continue
+                selected = self._select_release(releases, include_prerelease)
+                if selected is None:
+                    problems.append(f"{label}：没有可用的正式发布版本，请稍后再试。")
+                    continue
+                tag = str(selected.get("tag_name") or "")
+                summary = _release_summary(selected)
+                try:
+                    newer = release_is_newer(tag, self.current_version)
+                except ValueError as exc:
+                    problems.append(f"{label}：{exc}")
+                    continue
+                if newer:
+                    self._set(
+                        state="update_available",
+                        message=f"发现新版本 {tag}（{label}）",
+                        error=None,
+                        latest=summary,
+                        source=source,
+                        checked_at=time.time(),
+                    )
+                else:
+                    self._set(
+                        state="up_to_date",
+                        message=f"当前已是 {self.current_version}，无需更新",
+                        error=None,
+                        latest=summary,
+                        source=source,
+                        checked_at=time.time(),
+                    )
+                return
+            raise RuntimeError("；".join(problems) if problems else "没有可用的更新源")
         except Exception as exc:
             self._set(state="check_failed", message="检查更新失败",
                       error=str(exc), checked_at=time.time())
@@ -663,11 +779,17 @@ class HostUpdater:
                 if self._thread is thread:
                     self._thread = None
 
+    def _download_headers(self, url: str, accept: str = "application/octet-stream") -> dict[str, str]:
+        """Token only for GitHub hosts; CNB mirror and signed URLs stay anonymous."""
+        if is_github_url(url):
+            return self._headers(accept)
+        return self._cnb_headers(accept)
+
     def _download_payload(self, asset: dict[str, Any], target: Path, progress: bool = False) -> None:
         url = str(asset.get("url") or "")
         if not url:
             raise ValueError(f"发布资产 {asset.get('name')} 缺少下载地址")
-        request = urllib.request.Request(url, headers=self._headers("application/octet-stream"))
+        request = urllib.request.Request(url, headers=self._download_headers(url))
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -717,8 +839,9 @@ class HostUpdater:
                 install_error=None,
             )
         except urllib.error.HTTPError as exc:
+            source = str(self._state.get("source") or SOURCE_GITHUB)
             self._set(state="download_failed", message="下载更新失败",
-                      error=self._http_error_message(exc), progress=0.0)
+                      error=self._http_error_message(exc, source), progress=0.0)
         except Exception as exc:
             self._set(state="download_failed", message="下载更新失败",
                       error=str(exc), progress=0.0)

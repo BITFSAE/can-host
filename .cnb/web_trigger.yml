@@ -1,0 +1,15 @@
+# CNB 分支详情页的自定义按钮：手工触发 .cnb.yml 里的 web_trigger 事件。
+# 只在分支详情页显示，需要有仓库写权限。
+branch:
+  - buttons:
+      - name: 补做发布镜像
+        description: 把 GitHub Release ${TAG} 的产物补镜像到 CNB 发布并刷新更新频道
+        event: web_trigger_mirror_release
+        groupName: CNB 镜像
+        inputs:
+          TAG:
+            name: 发布标签
+            description: GitHub Release 的标签，产物名按 BITFSAE_CAN_Host_<标签>.* 约定
+            type: input
+            required: true
+            placeholder: 例如 v0.9.0

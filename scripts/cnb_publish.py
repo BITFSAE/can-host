@@ -216,6 +216,19 @@ class CnbClient:
         except urllib.error.URLError as exc:
             raise CnbError(f"CNB 网络不可达 {method} {url}: {exc.reason}") from exc
 
+    @staticmethod
+    def _decode(body: bytes, context: str, required: bool = True) -> Any:
+        """解析响应体；CNB 的更新接口可能返回空体，因此只有必需时才报错。"""
+        text = body.decode("utf-8", "replace").strip()
+        if not text:
+            if required:
+                raise CnbError(f"CNB {context} 返回空响应")
+            return {}
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            raise CnbError(f"CNB {context} 返回的不是 JSON：{text[:200]!r}") from exc
+
     def get_release_by_tag(self, tag: str) -> dict[str, Any] | None:
         url = self._url(f"releases/tags/{urllib.parse.quote(tag, safe='')}")
         try:
@@ -224,13 +237,13 @@ class CnbClient:
             if "HTTP 404" in str(exc):
                 return None
             raise
-        payload = json.loads(body.decode("utf-8"))
+        payload = self._decode(body, f"发布查询 {tag}")
         return payload if isinstance(payload, dict) else None
 
     def create_release(self, form: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(form, ensure_ascii=False).encode("utf-8")
         _, body = self._request("POST", self._url("releases"), data, ACCEPT_JSON)
-        payload = json.loads(body.decode("utf-8"))
+        payload = self._decode(body, "创建发布")
         if not isinstance(payload, dict) or not payload.get("id"):
             raise CnbError(f"CNB 创建发布返回格式不正确：{body[:300]!r}")
         return payload
@@ -238,13 +251,13 @@ class CnbClient:
     def patch_release(self, release_id: str, form: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(form, ensure_ascii=False).encode("utf-8")
         _, body = self._request("PATCH", self._url(f"releases/{release_id}"), data, ACCEPT_JSON)
-        payload = json.loads(body.decode("utf-8"))
+        payload = self._decode(body, "更新发布", required=False)
         return payload if isinstance(payload, dict) else {}
 
     def list_releases(self, page_size: int = DEFAULT_CHANNEL_LIMIT) -> list[dict[str, Any]]:
         url = self._url(f"releases?page=1&page_size={max(1, int(page_size))}")
         _, body = self._request("GET", url)
-        payload = json.loads(body.decode("utf-8"))
+        payload = self._decode(body, "发布列表")
         if not isinstance(payload, list):
             raise CnbError(f"CNB 发布列表返回格式不正确：{body[:300]!r}")
         return [item for item in payload if isinstance(item, dict)]
@@ -259,7 +272,7 @@ class CnbClient:
         _, body = self._request(
             "POST", self._url(f"releases/{release_id}/asset-upload-url"), form, ACCEPT_JSON
         )
-        ticket = json.loads(body.decode("utf-8"))
+        ticket = self._decode(body, "附件上传地址")
         upload_url = _text(ticket.get("upload_url"))
         verify_url = _text(ticket.get("verify_url"))
         if not upload_url or not verify_url:

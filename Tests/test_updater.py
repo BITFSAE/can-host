@@ -15,13 +15,18 @@ from unittest.mock import patch
 from canhost.updater import (
     APP_EXE_NAME,
     APP_FOLDER_NAME,
+    DEFAULT_CNB_REPO,
     DEFAULT_REPO,
     INSTALLER_SCRIPT,
+    SOURCE_CNB,
+    SOURCE_GITHUB,
     HostUpdater,
     cleanup_old_backups,
+    cnb_channel_url,
     extract_update_archive,
     find_checksum_asset,
     find_zip_asset,
+    is_github_url,
     read_sha256_digest,
     release_is_newer,
     startup_cleanup,
@@ -317,6 +322,136 @@ class HostUpdaterTest(unittest.TestCase):
 
     def test_default_repo_is_github_org_repo(self) -> None:
         self.assertEqual(DEFAULT_REPO, "BITFSAE/can-host")
+        self.assertEqual(DEFAULT_CNB_REPO, "totok22/can-host")
+
+
+def _cnb_channel(tag: str = "v0.3.0", prerelease: bool = False) -> dict:
+    zip_name = f"{APP_FOLDER_NAME}_{tag}.zip"
+    base = f"https://cnb.cool/{DEFAULT_CNB_REPO}/-/releases/download/{tag}"
+    return {
+        "schema": 1,
+        "repo": DEFAULT_CNB_REPO,
+        "updated_at": "2026-09-12T00:00:00Z",
+        "releases": [{
+            "tag_name": tag,
+            "name": tag,
+            "prerelease": prerelease,
+            "draft": False,
+            "published_at": "2026-09-04T10:01:22Z",
+            "body": "release notes",
+            "assets": [
+                {"id": "1", "name": zip_name, "size": 1024,
+                 "url": f"{base}/{zip_name}", "browser_download_url": f"{base}/{zip_name}"},
+                {"id": "2", "name": f"{zip_name}.sha256", "size": 95,
+                 "url": f"{base}/{zip_name}.sha256",
+                 "browser_download_url": f"{base}/{zip_name}.sha256"},
+            ],
+        }],
+    }
+
+
+class CnbMirrorSourceTest(unittest.TestCase):
+    """国内镜像优先、GitHub 回退的检查与下载路径。"""
+
+    def test_channel_url_is_anonymous_cnb_raw(self) -> None:
+        self.assertEqual(
+            cnb_channel_url(DEFAULT_CNB_REPO),
+            f"https://cnb.cool/{DEFAULT_CNB_REPO}/-/git/raw/cnb-update/latest.json",
+        )
+
+    def test_github_url_detection_is_host_scoped(self) -> None:
+        self.assertTrue(is_github_url("https://api.github.com/repos/a/b/releases"))
+        self.assertTrue(is_github_url("https://objects.githubusercontent.com/x"))
+        self.assertFalse(is_github_url("https://cnb.cool/totok22/can-host/-/releases/download/v1/a.zip"))
+        self.assertFalse(is_github_url("https://asset.cnb.cool/assets/x"))
+
+    def test_check_uses_cnb_channel_and_never_calls_github(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+        urls: list[str] = []
+
+        def fake_fetch(url, headers=None):
+            urls.append(url)
+            if "cnb.cool" not in url:
+                raise AssertionError(f"CNB 可用时不应访问 {url}")
+            self.assertNotIn("Authorization", headers or {})
+            return _cnb_channel("v0.3.0")
+
+        with patch.object(updater, "_fetch_json", side_effect=fake_fetch):
+            updater._check_worker(False)
+        status = updater.status()
+        self.assertEqual(status["state"], "update_available")
+        self.assertEqual(status["source"], SOURCE_CNB)
+        self.assertEqual(status["latest"]["tag_name"], "v0.3.0")
+        self.assertTrue(status["latest"]["assets"][0]["url"].startswith("https://cnb.cool/"))
+        zip_asset = find_zip_asset(status["latest"])
+        self.assertIsNotNone(zip_asset)
+        self.assertIn(DEFAULT_CNB_REPO, zip_asset["url"])
+        self.assertEqual(len(urls), 1)
+
+    def test_check_falls_back_to_github_when_mirror_unreachable(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        def fake_fetch(url, headers=None):
+            if "cnb.cool" in url:
+                raise urllib.error.URLError("timed out")
+            return [_release("v0.3.0")]
+
+        with patch.object(updater, "_fetch_json", side_effect=fake_fetch):
+            updater._check_worker(False)
+        status = updater.status()
+        self.assertEqual(status["state"], "update_available")
+        self.assertEqual(status["source"], SOURCE_GITHUB)
+
+    def test_check_reports_both_sources_when_all_fail(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        def fake_fetch(url, headers=None):
+            raise urllib.error.URLError("网络不可达")
+
+        with patch.object(updater, "_fetch_json", side_effect=fake_fetch):
+            updater._check_worker(False)
+        status = updater.status()
+        self.assertEqual(status["state"], "check_failed")
+        self.assertIn("CNB 镜像", status["error"])
+        self.assertIn("GitHub", status["error"])
+
+    def test_saved_github_token_never_goes_to_cnb(self) -> None:
+        updater = HostUpdater(token_provider=lambda: "gho_read_only")
+        self.assertNotIn("Authorization", updater._cnb_headers())
+        cnb_url = f"https://cnb.cool/{DEFAULT_CNB_REPO}/-/releases/download/v0.3.0/a.zip"
+        self.assertNotIn("Authorization", updater._download_headers(cnb_url))
+        github_url = "https://api.github.com/repos/BITFSAE/can-host/releases/assets/1"
+        self.assertIn("Authorization", updater._download_headers(github_url))
+
+    def test_download_uses_cnb_asset_urls_from_channel(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+        with patch.object(updater, "_fetch_json", return_value=_cnb_channel("v0.3.0")):
+            updater._check_worker(False)
+        summary = updater.status()["latest"]
+        downloaded: list[str] = []
+
+        def fake_download(asset, target, progress=False):
+            downloaded.append(str(asset["url"]))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if str(asset["name"]).endswith(".sha256"):
+                target.write_text(f"{hashlib.sha256(b'').hexdigest()}  {asset['name']}\n", encoding="utf-8")
+            else:
+                target.write_bytes(b"")
+
+        def fake_extract(zip_path, work_dir, exe_name=APP_EXE_NAME):
+            return work_dir / APP_FOLDER_NAME
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            with patch("canhost.updater.cleanup_update_dirs", return_value=0), \
+                 patch("canhost.updater.update_temp_dir", return_value=work / "canhost-update-test"), \
+                 patch("canhost.updater.extract_update_archive", side_effect=fake_extract), \
+                 patch.object(updater, "_download_payload", side_effect=fake_download):
+                updater._download_worker(summary)
+        self.assertEqual(updater.status()["state"], "ready")
+        self.assertEqual(len(downloaded), 2)
+        for url in downloaded:
+            self.assertTrue(url.startswith("https://cnb.cool/"), url)
 
 
 if __name__ == "__main__":

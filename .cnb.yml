@@ -1,0 +1,70 @@
+# CNB 云原生构建（cnb.cool）配置。
+#
+# 定位：国内侧的 CI 与发布补镜像，不替代 GitHub Actions 的 Windows 构建。
+# CNB 官方公共构建节点只提供 Linux Docker 容器，PyInstaller + Inno Setup 的
+# Windows 发布包仍在 `.github/workflows/release.yml` 的 windows-latest 上产出，
+# 由该工作流把同一批附件推送成 CNB 发布（见 `scripts/cnb_publish.py`）。
+# 若要改成在 CNB 上直接打 Windows 包，需要先在根组织的「构建节点」里接入一台
+# Windows 自托管 Runner，再用 runner.namespace/tags 调度。
+#
+# 本文件提供两条流水线：
+# 1. push：在任何分支/标签推送时跑全套上位机单元测试（Linux，验证与平台无关的协议、
+#    解码、更新器和镜像工具逻辑）；
+# 2. web_trigger_mirror_release：在 CNB 网页分支详情页点「补做发布镜像」按钮，
+#    把指定 GitHub Release 的产物补传到 CNB 发布并刷新国内更新频道。
+#    使用 CNB 流水线内置的 CNB_TOKEN，不需要在 GitHub 存 CNB 令牌。
+
+"**":
+  push:
+    - name: 上位机单元测试（Linux）
+      docker:
+        image: python:3.11-slim
+      stages:
+        - name: 安装依赖
+          script: |
+            set -e
+            python -m pip install --no-cache-dir -r requirements.txt
+        - name: 运行单元测试
+          script: |
+            set -e
+            python -m unittest discover -s Tests -p "test_*.py" -v
+
+  web_trigger_mirror_release:
+    - name: 补做 GitHub 发布镜像
+      docker:
+        image: python:3.11-slim
+      stages:
+        - name: 准备工具
+          script: |
+            set -e
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl
+        - name: 下载 GitHub 发布产物
+          script: |
+            set -e
+            tag="${TAG:?补做发布镜像需要在按钮里填写发布标签，例如 v0.9.0}"
+            base="https://github.com/BITFSAE/can-host/releases/download/${tag}"
+            mkdir -p cnb-assets
+            for name in \
+              "BITFSAE_CAN_Host_${tag}.zip" \
+              "BITFSAE_CAN_Host_${tag}.zip.sha256" \
+              "BITFSAE_CAN_Host_${tag}_setup.exe"
+            do
+              echo "下载 ${name}"
+              curl -fsSL --retry 3 --retry-delay 2 -o "cnb-assets/${name}" "${base}/${name}"
+            done
+            curl -fsSL --retry 3 --retry-delay 2 -o cnb-assets/github-release.json \
+              "https://api.github.com/repos/BITFSAE/can-host/releases/tags/${tag}"
+            ls -l cnb-assets
+        - name: 上传 CNB 发布并刷新更新频道
+          script: |
+            set -e
+            asset_args=""
+            for file in cnb-assets/BITFSAE_CAN_Host_*; do
+              asset_args="${asset_args} --asset ${file}"
+            done
+            python scripts/cnb_publish.py publish \
+              --repo "${CNB_REPO_SLUG}" \
+              --tag "${TAG}" \
+              --metadata-json cnb-assets/github-release.json \
+              ${asset_args}

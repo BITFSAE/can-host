@@ -226,10 +226,12 @@ function updaterRenderUpdaterStatus() {
   if (prerelease) prerelease.disabled = ["checking", "downloading", "installing"].includes(stateName);
   const autoNote = $("#updaterAutoNote");
   if (autoNote) autoNote.textContent = installSupported
-    ? "公开仓库默认方案：启动时自动检查一次正式版；发现更新不会自动下载。"
-    : "当前为源码运行，只能检查 GitHub Release，不能替换安装目录。";
+    ? "公开仓库默认方案：启动时自动检查一次正式版；优先 CNB 国内镜像，失败回退 GitHub；发现更新不会自动下载。"
+    : "当前为源码运行，只能检查发布（优先 CNB 国内镜像），不能替换安装目录。";
   const repoNode = $("#updaterRepo");
   if (repoNode) repoNode.textContent = state.bootstrap?.updater_repo || "BITFSAE/can-host";
+  const sourceNode = $("#updaterSource");
+  if (sourceNode) sourceNode.textContent = updaterSourceText(status);
   const pathNode = $("#updaterSettingsPath");
   if (pathNode) pathNode.textContent = state.bootstrap?.updater_settings_path || "—";
 
@@ -253,7 +255,22 @@ function updaterHeadline(status) {
   if (stateName === "ready") return "更新包已准备好";
   if (stateName === "installing") return "正在交接安装任务";
   if (["check_failed", "download_failed", "install_failed"].includes(stateName)) return "更新流程需要处理";
-  return "检查官方 Release";
+  return "检查官方发布";
+}
+
+function updaterSourceLabel(source) {
+  if (source === "cnb") return "CNB 镜像";
+  if (source === "github") return "GitHub";
+  return "";
+}
+
+function updaterSourceText(status) {
+  const repo = state.bootstrap?.updater_repo || "BITFSAE/can-host";
+  const cnb = state.bootstrap?.updater_cnb_repo;
+  const label = updaterSourceLabel(status?.source);
+  if (label === "CNB 镜像") return cnb ? "CNB 镜像 · " + cnb : "CNB 镜像";
+  if (label === "GitHub") return "GitHub · " + repo;
+  return cnb ? "CNB 镜像优先（" + cnb + "），失败回退 GitHub" : repo;
 }
 
 function updaterBadgeText(status) {
@@ -277,9 +294,11 @@ function updaterBadgeClass(stateName) {
 
 function updaterStatusText(status) {
   const stateName = status.state || "idle";
-  if (stateName === "checking") return "正在检查 GitHub Release…";
-  if (stateName === "update_available") return "发现新版本 " + (status.latest?.tag_name || "");
-  if (stateName === "up_to_date") return "当前已是最新版本";
+  const label = updaterSourceLabel(status.source);
+  const suffix = label ? "（" + label + "）" : "";
+  if (stateName === "checking") return "正在检查更新…";
+  if (stateName === "update_available") return "发现新版本 " + (status.latest?.tag_name || "") + suffix;
+  if (stateName === "up_to_date") return "当前已是最新版本" + suffix;
   if (stateName === "check_failed") return "检查更新失败";
   if (stateName === "downloading") return "正在下载 " + (status.latest?.tag_name || status.downloaded_zip || "") + "…";
   if (stateName === "download_failed") return "下载更新失败";

@@ -12,7 +12,7 @@ from . import __version__, __version_date__
 from .transport import CanService
 from .bms.protocol import switch_catalog
 from .telemetry import TelemetryService
-from .updater import DEFAULT_REPO, HostUpdater, install_ready, startup_cleanup
+from .updater import DEFAULT_CNB_REPO, DEFAULT_REPO, HostUpdater, install_ready, startup_cleanup
 from .updater import _read_settings, settings_path
 
 
@@ -40,7 +40,8 @@ class Api:
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()
-        self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token)
+        self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
+                                    cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
         self._window: Any = None
 
@@ -75,6 +76,7 @@ class Api:
             "telemetry_enabled": True,
             "updater_enabled": install_ready(),
             "updater_repo": DEFAULT_REPO,
+            "updater_cnb_repo": DEFAULT_CNB_REPO,
             "updater_has_token": self._updater.has_token(),
             "updater_settings_path": str(settings_path()),
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
