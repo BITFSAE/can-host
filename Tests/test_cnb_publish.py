@@ -98,6 +98,46 @@ class ChannelTest(unittest.TestCase):
         self.assertEqual(channel["releases"], [])
 
 
+class MirrorStateTest(unittest.TestCase):
+    """`sync` 依赖的"已是最新镜像"判断，决定定时任务会不会重复上传。"""
+
+    def _github_release(self) -> dict:
+        return {
+            "tag_name": "v0.9.0",
+            "assets": [
+                {"name": "BITFSAE_CAN_Host_v0.9.0.zip", "size": 17188170,
+                 "browser_download_url": "https://github.com/x.zip"},
+                {"name": "BITFSAE_CAN_Host_v0.9.0.zip.sha256", "size": 95,
+                 "browser_download_url": "https://github.com/x.zip.sha256"},
+            ],
+        }
+
+    def _cnb_release(self, sizes: dict) -> dict:
+        return {"id": "1", "tag_name": "v0.9.0",
+                "assets": [{"name": name, "size": size} for name, size in sizes.items()]}
+
+    def test_assets_are_taken_from_github_release(self) -> None:
+        assets = cnb_publish.github_assets(self._github_release())
+        self.assertEqual([item["name"] for item in assets],
+                         ["BITFSAE_CAN_Host_v0.9.0.zip", "BITFSAE_CAN_Host_v0.9.0.zip.sha256"])
+        self.assertEqual(assets[0]["size"], 17188170)
+
+    def test_mirror_is_current_only_when_every_asset_matches(self) -> None:
+        github = self._github_release()
+        self.assertTrue(cnb_publish.mirror_is_current(
+            self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 17188170,
+                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), github))
+        self.assertFalse(cnb_publish.mirror_is_current(None, github), "CNB 上没有该发布")
+        self.assertFalse(cnb_publish.mirror_is_current(
+            self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 17188170}), github), "缺少校验文件")
+        self.assertFalse(cnb_publish.mirror_is_current(
+            self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 123,
+                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), github), "大小不一致")
+
+    def test_mirror_is_never_current_without_github_assets(self) -> None:
+        self.assertFalse(cnb_publish.mirror_is_current(self._cnb_release({}), {"tag_name": "v0.9.0"}))
+
+
 class UploadFlowTest(unittest.TestCase):
     def test_upload_asset_runs_presign_put_and_json_confirmation(self) -> None:
         calls: list[tuple] = []

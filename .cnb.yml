@@ -1,20 +1,18 @@
-# CNB 云原生构建（cnb.cool）配置。
+# CNB 云原生构建（cnb.cool）配置：国内侧 CI + 发布镜像的自动兜底。
 #
-# 定位：国内侧的 CI 与发布补镜像，不替代 GitHub Actions 的 Windows 构建。
-# CNB 官方公共构建节点只提供 Linux Docker 容器，PyInstaller + Inno Setup 的
-# Windows 发布包仍在 `.github/workflows/release.yml` 的 windows-latest 上产出，
-# 由该工作流把同一批附件推送成 CNB 发布（见 `scripts/cnb_publish.py`）。
-# 若要改成在 CNB 上直接打 Windows 包，需要先在根组织的「构建节点」里接入一台
-# Windows 自托管 Runner，再用 runner.namespace/tags 调度。
+# 发布镜像的主路径在 GitHub Actions：`.github/workflows/release.yml` 打完包后
+# 直接调 `scripts/cnb_publish.py publish` 把同一批附件传成 CNB 发布。
+# 下面的定时任务与 API 入口用同一个 `sync` 子命令兜底：即使 GitHub Actions
+# 某次失败或被跳过，CNB 每天也会自己把 GitHub 上最新的正式发布补齐，
+# 已是最新镜像时只做几次 API 调用就退出。
 #
-# 本文件提供三条流水线：
-# 1. push：任何分支/标签推送时跑全套上位机单元测试（Linux，覆盖与平台无关的协议、
-#    解码、更新器和镜像工具逻辑）；
-# 2. web_trigger_mirror_release：在 CNB 分支详情页点「补做发布镜像」按钮，
-#    把指定 GitHub Release 的产物补传到 CNB 发布并刷新国内更新频道；
-# 3. api_trigger_mirror_release：同一件事的 API 触发入口（OpenAPI
-#    `POST /{repo}/-/build/start` 的 event 必须以 api_trigger 开头）。
-# 后两条都使用流水线内置的 CNB_TOKEN，不需要在 GitHub 保存 CNB 令牌。
+# 目录：
+# - `"**"` / push：任何分支或标签被推到 CNB 时跑全套上位机单元测试。
+# - `"**"` / api_trigger_mirror_release：需要立刻补镜像时的 API 入口
+#   （`POST /{repo}/-/build/start`，event 必须以 api_trigger 开头，env.TAG 可指定标签）。
+# - `main` / crontab：每天自动补做最新 GitHub 正式发布的镜像。
+#
+# 令牌：镜像相关流水线使用 CNB 流水线内置的 CNB_TOKEN，不必配置任何密钥。
 
 "**":
   push:
@@ -31,45 +29,30 @@
             set -e
             python -m unittest discover -s Tests -p "test_*.py" -v
 
-  # 网页按钮与 API 触发共用这一段任务定义。
-  web_trigger_mirror_release: &mirror_release
+  # 手动/API 触发的补镜像；不传 TAG 时同步 GitHub 上最新的正式发布。
+  api_trigger_mirror_release:
     - name: 补做 GitHub 发布镜像
       docker:
         image: python:3.11-slim
-      stages:
+      stages: &mirror_stages
         - name: 准备工具
           script: |
             set -e
             apt-get update
             apt-get install -y --no-install-recommends git ca-certificates curl
-        - name: 下载 GitHub 发布产物
+        - name: 同步 GitHub 发布到 CNB
           script: |
             set -e
-            tag="${TAG:?补做发布镜像需要在按钮里填写发布标签，例如 v0.9.0}"
-            base="https://github.com/BITFSAE/can-host/releases/download/${tag}"
-            mkdir -p cnb-assets
-            for name in \
-              "BITFSAE_CAN_Host_${tag}.zip" \
-              "BITFSAE_CAN_Host_${tag}.zip.sha256" \
-              "BITFSAE_CAN_Host_${tag}_setup.exe"
-            do
-              echo "下载 ${name}"
-              curl -fsSL --retry 3 --retry-delay 2 -o "cnb-assets/${name}" "${base}/${name}"
-            done
-            curl -fsSL --retry 3 --retry-delay 2 -o cnb-assets/github-release.json \
-              "https://api.github.com/repos/BITFSAE/can-host/releases/tags/${tag}"
-            ls -l cnb-assets
-        - name: 上传 CNB 发布并刷新更新频道
-          script: |
-            set -e
-            asset_args=""
-            for file in cnb-assets/BITFSAE_CAN_Host_*; do
-              asset_args="${asset_args} --asset ${file}"
-            done
-            python scripts/cnb_publish.py publish \
+            python scripts/cnb_publish.py sync \
               --repo "${CNB_REPO_SLUG}" \
-              --tag "${TAG}" \
-              --metadata-json cnb-assets/github-release.json \
-              ${asset_args}
+              --github-repo BITFSAE/can-host \
+              --tag "${TAG:-}" \
+              --download-dir cnb-assets
 
-  api_trigger_mirror_release: *mirror_release
+# 定时任务只支持单一明确分支名，因此单独写在 main 下；时区为 Asia/Shanghai。
+main:
+  "crontab: 20 3 * * *":
+    - name: 每日补做最新 GitHub 发布镜像
+      docker:
+        image: python:3.11-slim
+      stages: *mirror_stages
