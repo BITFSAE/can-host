@@ -106,7 +106,7 @@
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
-| 2026-09-11 | 国内镜像链路接入并跑通：`cnb.cool/totok22/can-host` 已镜像 main 与全部 14 个标签，v0.9.0 的 ZIP/`.sha256`/setup.exe 已上传为 CNB 发布（哈希与 GitHub 侧 digest 逐一核对一致），更新频道 `cnb-update:latest.json` 匿名可读且三个附件匿名下载全部成功；真实更新器逻辑对 CNB 频道检查 0.92 s 命中 `source=cnb`，下载校验文件返回的 SHA256 与 GitHub 一致。CI 侧：`cnb-mirror.yml`（push 镜像分支标签、手工触发调用 `sync` 补做发布）与 CNB `.cnb.yml`（174 项单测全绿、`sync` 在已是最新镜像时跳过上传、API 触发入口可用）均实跑通过，`release.yml` 在创建 GitHub Release 后用同一批附件同步 CNB 并刷新频道。新增 13 项 `cnb_publish` 测试与 6 项镜像源测试（含令牌不外发 CNB），更新器 28 项全绿 | `release.yml` 的 CNB 步骤要在下一次 `v*` 发布才实跑；Windows 发布版走 CNB 源实机更新仍待验证 |
+| 2026-09-11 | 国内镜像链路接入并跑通：`cnb.cool/totok22/can-host` 已镜像 main 与全部 14 个标签，v0.9.0 的 ZIP/`.sha256`/setup.exe 已上传为 CNB 发布（哈希与 GitHub 侧 digest 逐一核对一致），更新频道 `cnb-update:latest.json` 匿名可读且三个附件匿名下载全部成功；真实更新器逻辑对 CNB 频道检查 0.92 s 命中 `source=cnb`，下载校验文件返回的 SHA256 与 GitHub 一致。CI 侧：`cnb-mirror.yml`（push 镜像分支标签、手工触发调用 `sync` 补做发布）与 CNB `.cnb.yml` 均实跑通过——CNB 侧单测 174 项全绿、API 触发的补镜像构建为 success；`release.yml` 在创建 GitHub Release 后用同一批附件同步 CNB 并刷新频道。CNB 构建节点实测会被 GitHub API 限流（共享出口 IP，HTTP 403），`sync` 已按标签与附件名约定兜底并跑通（"已是最新镜像，跳过下载与上传"）。新增 18 项 `cnb_publish` 测试与 6 项镜像源测试（含令牌不外发 CNB），更新器 28 项全绿，GitHub 与 CNB 上的 182 项全量测试通过 | `release.yml` 的 CNB 步骤要在下一次 `v*` 发布才实跑；CNB 每日定时任务待首次自动触发；Windows 发布版走 CNB 源实机更新仍待验证 |
 | 2026-09-04 | 发布 v0.9.0：CAN 监视器完成通用化重构，按 ID 汇总、内容变体、周期/帧数/注释、自动留档、CSV 导出、历史回放和持久化单发/周期发送已接入；页面内部移除 CAN1/CANB 角色硬编码和 Python 清单入口，短标签强制单行；通用发送允许当前选择的任意真实 PCAN，同时拦截项目已知命令 ID。全套 157 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过 | 实体双 PCAN、Windows PyWebView 中的视觉和交互、长时间高负载记录、非默认物理总线发送 |
 | 2026-09-04 | 发布 v0.8.3 并打通安装包链路：`packaging/windows/canhost.iss` 每用户安装（`%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`、快捷方式、卸载器、安装/卸载均清空目录，卸载连带删 `.old-*`）；更新助手换目录后从备份复制回 `unins000.exe/.dat` 保住卸载入口；`startup_cleanup` 在新版下次启动时自动删除超 15 分钟回退窗口的备份与临时目录；`build_windows.ps1` 与 `release.yml` 统一产出 ZIP+SHA256+setup.exe。修复两次 CI 失败：无 BOM 的中文 ps1 被 Windows PowerShell 5.1 按 ANSI 误读出弯引号导致解析错误（ps1/iss 加 UTF-8 BOM，嵌入安装助手测试锚定纯 ASCII）；Inno [Code] 不支持 `ExcludeTrailingBackslash` 改用 `ExtractFilePath`。全套 148 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过；GitHub Actions 1m29s 构建成功，v0.8.3 正式 Release 附 ZIP（17.2 MB）、`.sha256` 与 setup.exe（15.4 MB），GitHub 资产 digest 与 `.sha256` 附件一致 | 干净 Windows 上的安装/覆盖安装/软件内更新/卸载全链路实机验证 |
 | 2026-09-04 | v0.8.2发布复核：同步F405告警开关帧版本7、23个动作位规范、从控全状态动作命名、4300mV默认过压、默认反转电流方向和统一350ms从控窗口；内置模拟器与页面提示同步。全套143项测试、Python编译、全部JavaScript语法和差异格式检查通过 | 实体PCAN写入降级动作开关并核对周期回报、Flash断电保存和F405实际保护动作 |
@@ -155,6 +155,8 @@
 - 新增测试：`Tests/test_cnb_publish.py`（URL 改写、频道生成、草稿与条数、上传三步流程与 406 回归、令牌缺失）和 `Tests/test_updater.py` 的镜像源用例（CNB 命中时不访问 GitHub、镜像不可达回退、双源都失败时报两个源、令牌不外发、下载使用频道附件地址）。
 - `v0.9.0` 已补做镜像：三个附件的 SHA256 与 GitHub API 给出的 digest 逐一核对一致，频道匿名校验与真实更新器检查（`source=cnb`）均通过。
 - 新增 `.cnb.yml`（CNB 云原生构建）：分支/标签推送时在 CNB Linux 节点跑全套单测；`main` 上每天 03:20 定时补做 GitHub 最新正式发布的镜像，另留 `api_trigger_mirror_release` API 入口用于立即补镜像。两条路径都用 `scripts/cnb_publish.py sync`，先比对附件名称与大小，已是最新镜像时只做几次 API 调用就退出；使用流水线内置 `CNB_TOKEN`，不需要 GitHub 侧密钥。`.github/workflows/cnb-mirror.yml` 的手工触发同样改为调用 `sync`（标签可留空取最新）。
+- `sync` 不依赖 GitHub API：CNB 构建节点共享出口 IP，实测未认证配额会返回 HTTP 403。此时标签改用 `git ls-remote --tags`（忽略预发布），附件名按 `BITFSAE_CAN_Host_<标签>.*` 约定拼出，大小用 HEAD 探测（跟随 302 到 CDN）；代价是拿不到 Release 说明文字。CNB 侧 API 触发补镜像已按这条路径实跑成功。
+- 命令输出统一：`main()` 把 stdout 重配置为 UTF-8，提示语句放在命令行层而不是函数内，避免 Windows 上 `python -m unittest`（stdout 为 cp1252）打印中文报 `UnicodeEncodeError`；匿名校验对偶发 TLS/连接抖动重试 3 次。
 
 ### 2026-09-04
 
