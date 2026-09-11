@@ -42,16 +42,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 API_BASE = "https://api.cnb.cool"
 WEB_BASE = "https://cnb.cool"
@@ -68,6 +70,14 @@ CHANNEL_SCHEMA = 1
 
 # 附件永久保留；CNB 的 ttl 单位是天，0 表示永久（上限 180 天）。
 ASSET_TTL_DAYS = 0
+
+# 发布附件命名约定（与 build_windows.ps1 / release.yml 一致）。
+# GitHub API 不可用（CNB 节点共享出口 IP 会被限流）时按它拼下载地址。
+ASSET_NAME_PATTERNS = (
+    "BITFSAE_CAN_Host_{tag}.zip",
+    "BITFSAE_CAN_Host_{tag}.zip.sha256",
+    "BITFSAE_CAN_Host_{tag}_setup.exe",
+)
 
 
 class CnbError(RuntimeError):
@@ -351,8 +361,12 @@ def verify_anonymous(
     channel_path: str,
     base: str = WEB_BASE,
     timeout: float = 60.0,
+    attempts: int = 3,
 ) -> dict[str, Any]:
-    """不携带任何令牌，验证频道文件与发布附件在国内可匿名下载。"""
+    """不携带任何令牌，验证频道文件与发布附件在国内可匿名下载。
+
+    下载校验带重试：国内到 CDN 偶发 TLS/连接抖动，不该让自动流水线误报失败。
+    """
     url = manifest_raw_url(repo, branch, channel_path, base)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": ACCEPT_JSON})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -362,15 +376,20 @@ def verify_anonymous(
         for asset in release.get("assets") or []:
             asset_url = _text(asset.get("url"))
             entry = {"tag": release.get("tag_name"), "name": asset.get("name"), "ok": False, "error": ""}
-            try:
-                head = urllib.request.Request(asset_url, headers={"User-Agent": USER_AGENT})
-                with urllib.request.urlopen(head, timeout=timeout) as response:
-                    size = int(response.headers.get("Content-Length") or 0)
-                    response.read(1)
-                entry["ok"] = True
-                entry["size"] = size
-            except Exception as exc:  # pragma: no cover - 网络异常直接回报
-                entry["error"] = str(exc)
+            for attempt in range(max(1, attempts)):
+                try:
+                    head = urllib.request.Request(asset_url, headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(head, timeout=timeout) as response:
+                        size = int(response.headers.get("Content-Length") or 0)
+                        response.read(1)
+                    entry["ok"] = True
+                    entry["size"] = size
+                    entry["error"] = ""
+                    break
+                except Exception as exc:  # pragma: no cover - 网络异常直接回报
+                    entry["error"] = str(exc)
+                    if attempt + 1 < max(1, attempts):
+                        time.sleep(1.0 + attempt)
             results.append(entry)
     return {"channel_url": url, "releases": len(channel.get("releases") or []), "assets": results}
 
@@ -443,8 +462,8 @@ def github_assets(release: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def mirror_is_current(cnb_release: dict[str, Any] | None, github_release_payload: dict[str, Any]) -> bool:
-    """CNB 发布是否已包含 GitHub 发布的全部附件且大小一致。"""
+def mirror_is_current(cnb_release: dict[str, Any] | None, wanted_assets: Sequence[dict[str, Any]]) -> bool:
+    """CNB 发布是否已包含待镜像的全部附件（名称与大小都一致）。"""
     if not cnb_release:
         return False
     have = {
@@ -452,10 +471,10 @@ def mirror_is_current(cnb_release: dict[str, Any] | None, github_release_payload
         for asset in cnb_release.get("assets") or []
         if isinstance(asset, dict)
     }
-    want = github_assets(github_release_payload)
+    want = [(_text(asset.get("name")), int(asset.get("size") or 0)) for asset in wanted_assets]
     if not want:
         return False
-    return all(have.get(name) == size for name, size in ((item["name"], item["size"]) for item in want))
+    return all(have.get(name) == size for name, size in want)
 
 
 def download_file(url: str, target: Path, token: str | None = None, timeout: float = 600.0) -> None:
@@ -472,6 +491,90 @@ def download_file(url: str, target: Path, token: str | None = None, timeout: flo
                 break
             handle.write(chunk)
     partial.replace(target)
+
+
+def _tag_sort_key(tag: str) -> tuple:
+    """给 vX.Y.Z 标签排序；带后缀的预发布排在对应正式版之后。"""
+    text = tag[1:] if tag.startswith(("v", "V")) else tag
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-(.+))?", text)
+    if not match:
+        return (0, 0, 0, 1, text)
+    major, minor, patch = (int(match.group(index)) for index in (1, 2, 3))
+    suffix = match.group(4)
+    return (major, minor, patch, 0 if suffix is None else 1, suffix or "")
+
+
+def latest_release_tag(repo: str, timeout: float = 60.0) -> str:
+    """用 git ls-remote 取最新正式标签（不经过 GitHub API，避免共享出口 IP 限流）。"""
+    if shutil.which("git") is None:
+        raise CnbError("系统中找不到 git，无法按标签探测最新发布")
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", "--refs", f"https://github.com/{repo.strip('/')}"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise CnbError(f"git ls-remote 失败：{(result.stderr or result.stdout).strip()[:300]}")
+    tags = [
+        line.split("\t", 1)[1].removeprefix("refs/tags/")
+        for line in result.stdout.splitlines()
+        if "\trefs/tags/" in line
+    ]
+    formal = [tag for tag in tags if re.fullmatch(r"v?\d+\.\d+\.\d+", tag)]
+    if not formal:
+        raise CnbError(f"GitHub 仓库 {repo} 上没有形如 vX.Y.Z 的标签")
+    return max(formal, key=_tag_sort_key)
+
+
+def probe_remote_size(url: str, timeout: float = 60.0) -> int:
+    """HEAD 探测发布附件大小；附件不存在返回 0。"""
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return int(response.headers.get("Content-Length") or 0)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return 0
+        raise CnbError(f"探测发布附件失败 {url} -> HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise CnbError(f"探测发布附件网络不可达 {url}: {exc.reason}") from exc
+
+
+def fallback_release(
+    repo: str,
+    tag: str,
+    asset_patterns: Sequence[str] = ASSET_NAME_PATTERNS,
+    timeout: float = 60.0,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """GitHub API 不可用时按仓库约定的附件名探测发布。
+
+    限流不该让自动补镜像失败：标签用 `git ls-remote` 取，附件名按
+    `BITFSAE_CAN_Host_<标签>.*` 约定拼出，大小用 HEAD 探测。
+    代价是拿不到 Release 说明文字，更新窗口会显示“此次 Release 未填写说明”。
+    """
+    if not tag:
+        tag = latest_release_tag(repo, timeout)
+    assets: list[dict[str, Any]] = []
+    for pattern in asset_patterns:
+        name = pattern.format(tag=tag)
+        url = "https://github.com/{}/releases/download/{}/{}".format(
+            repo.strip("/"),
+            urllib.parse.quote(tag, safe=""),
+            urllib.parse.quote(name, safe=""),
+        )
+        size = probe_remote_size(url, timeout)
+        if size <= 0:
+            raise CnbError(f"GitHub 上找不到发布附件 {name}，请确认标签 {tag} 是否为正式发布")
+        assets.append({"name": name, "size": size, "url": url})
+    metadata = {
+        "tag_name": tag,
+        "name": tag,
+        "body": "",
+        "published_at": "",
+        "prerelease": "-" in tag,
+        "draft": False,
+    }
+    print(f"按约定探测到发布 {tag}（{len(assets)} 个附件）")
+    return metadata, assets
 
 
 def _load_metadata(path: Path | None, tag: str, prerelease: bool) -> dict[str, Any]:
@@ -579,17 +682,26 @@ def cmd_sync(args: argparse.Namespace) -> int:
     token = _read_token(args.token_env)
     repo = args.repo
     github_token = (os.environ.get(args.github_token_env) or "").strip() or None
-    payload = github_release(args.github_repo, args.tag or None, args.include_prerelease,
-                             github_token, args.timeout)
-    metadata = normalize_metadata(payload)
+    try:
+        payload = github_release(args.github_repo, args.tag or None, args.include_prerelease,
+                                 github_token, args.timeout)
+        metadata = normalize_metadata(payload)
+        remote_assets = github_assets(payload)
+        if not remote_assets:
+            raise CnbError(f"GitHub 发布 {metadata['tag_name']} 没有附件")
+    except CnbError as exc:
+        # CNB 构建节点共享出口 IP，未认证的 GitHub API 经常被限流；
+        # 这种情况下按仓库约定探测，保证自动补镜像仍然能跑完。
+        print(f"GitHub API 不可用：{exc}")
+        print("改用标签与附件名约定探测…")
+        metadata, remote_assets = fallback_release(
+            args.github_repo, args.tag, args.asset_name or ASSET_NAME_PATTERNS, args.timeout
+        )
     tag = metadata["tag_name"]
-    remote_assets = github_assets(payload)
-    if not remote_assets:
-        raise CnbError(f"GitHub 发布 {tag} 没有附件，无法镜像")
 
     client = CnbClient(repo, token, timeout=args.timeout, base=args.api_base)
     current = client.get_release_by_tag(tag)
-    if mirror_is_current(current, payload) and not args.force:
+    if mirror_is_current(current, remote_assets) and not args.force:
         print(f"CNB 已是最新镜像：{tag}（{len(remote_assets)} 个附件），跳过下载与上传")
         if not args.skip_channel:
             _refresh_channel(client, repo, token, args, tag)
@@ -658,6 +770,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--tag", default="", help="指定发布标签；留空取最新正式发布")
     sync.add_argument("--include-prerelease", action="store_true", help="取最新时允许预发布")
     sync.add_argument("--download-dir", default="", help="附件下载目录；留空用临时目录")
+    sync.add_argument("--asset-name", action="append", default=[], help="附件名约定（{tag} 会被替换），可重复")
     sync.add_argument("--github-token-env", default="GITHUB_TOKEN", help="可选的 GitHub 令牌环境变量名")
     sync.add_argument("--force", action="store_true", help="即使已是最新镜像也重新上传")
     sync.set_defaults(func=cmd_sync)

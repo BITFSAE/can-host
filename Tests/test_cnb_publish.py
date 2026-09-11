@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -123,19 +125,75 @@ class MirrorStateTest(unittest.TestCase):
         self.assertEqual(assets[0]["size"], 17188170)
 
     def test_mirror_is_current_only_when_every_asset_matches(self) -> None:
-        github = self._github_release()
+        wanted = cnb_publish.github_assets(self._github_release())
         self.assertTrue(cnb_publish.mirror_is_current(
             self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 17188170,
-                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), github))
-        self.assertFalse(cnb_publish.mirror_is_current(None, github), "CNB 上没有该发布")
+                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), wanted))
+        self.assertFalse(cnb_publish.mirror_is_current(None, wanted), "CNB 上没有该发布")
         self.assertFalse(cnb_publish.mirror_is_current(
-            self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 17188170}), github), "缺少校验文件")
+            self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 17188170}), wanted), "缺少校验文件")
         self.assertFalse(cnb_publish.mirror_is_current(
             self._cnb_release({"BITFSAE_CAN_Host_v0.9.0.zip": 123,
-                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), github), "大小不一致")
+                               "BITFSAE_CAN_Host_v0.9.0.zip.sha256": 95}), wanted), "大小不一致")
+
+    def test_mirror_accepts_assets_from_the_fallback_probe(self) -> None:
+        # sync 的兜底路径直接给出 {name,size,url}，必须和 API 结果一样能被判断
+        with patch("cnb_publish.probe_remote_size", side_effect=lambda url, timeout=60.0:
+                   17188170 if url.endswith(".zip") else 95):
+            _, probed = cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.0")
+        current = self._cnb_release({item["name"]: item["size"] for item in probed})
+        self.assertTrue(cnb_publish.mirror_is_current(current, probed))
 
     def test_mirror_is_never_current_without_github_assets(self) -> None:
-        self.assertFalse(cnb_publish.mirror_is_current(self._cnb_release({}), {"tag_name": "v0.9.0"}))
+        self.assertFalse(cnb_publish.mirror_is_current(self._cnb_release({}), []))
+
+
+class FallbackReleaseTest(unittest.TestCase):
+    """GitHub API 被限流时按标签与附件名约定探测发布。"""
+
+    def test_tag_sort_prefers_formal_release(self) -> None:
+        tags = ["v0.8.0", "v0.9.0", "v0.9.0-rc1", "v0.10.0", "nightly"]
+        self.assertEqual(max(tags, key=cnb_publish._tag_sort_key), "v0.10.0")
+        self.assertLess(cnb_publish._tag_sort_key("v0.9.0"),
+                        cnb_publish._tag_sort_key("v0.9.0-rc1"))
+
+    def test_latest_release_tag_ignores_prereleases(self) -> None:
+        listing = "\n".join([
+            "1111111111111111111111111111111111111111\trefs/tags/v0.8.0",
+            "2222222222222222222222222222222222222222\trefs/tags/v0.9.0",
+            "3333333333333333333333333333333333333333\trefs/tags/v0.9.1-rc1",
+        ])
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=listing, stderr="")
+        with patch("cnb_publish.shutil.which", return_value="/usr/bin/git"), \
+             patch("cnb_publish.subprocess.run", return_value=completed):
+            self.assertEqual(cnb_publish.latest_release_tag("BITFSAE/can-host"), "v0.9.0")
+
+    def test_fallback_builds_expected_asset_urls_and_sizes(self) -> None:
+        probed: list[str] = []
+
+        def fake_probe(url, timeout=60.0):
+            probed.append(url)
+            return 17188170 if url.endswith(".zip") else 95
+
+        with patch("cnb_publish.probe_remote_size", side_effect=fake_probe):
+            metadata, assets = cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.0")
+        self.assertEqual(metadata["tag_name"], "v0.9.0")
+        self.assertFalse(metadata["prerelease"])
+        self.assertEqual([item["name"] for item in assets],
+                         ["BITFSAE_CAN_Host_v0.9.0.zip", "BITFSAE_CAN_Host_v0.9.0.zip.sha256",
+                          "BITFSAE_CAN_Host_v0.9.0_setup.exe"])
+        self.assertTrue(assets[0]["url"].startswith(
+            "https://github.com/BITFSAE/can-host/releases/download/v0.9.0/"))
+        self.assertEqual(assets[0]["size"], 17188170)
+        self.assertEqual(len(probed), 3)
+
+    def test_fallback_marks_prerelease_and_reports_missing_assets(self) -> None:
+        with patch("cnb_publish.probe_remote_size", return_value=10):
+            metadata, _ = cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.0-rc1")
+        self.assertTrue(metadata["prerelease"])
+        with patch("cnb_publish.probe_remote_size", return_value=0):
+            with self.assertRaises(cnb_publish.CnbError):
+                cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.0")
 
 
 class UploadFlowTest(unittest.TestCase):
