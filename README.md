@@ -77,7 +77,7 @@ CNB 镜像需要仓库 Actions secret `CNB_TOKEN`：CNB 访问令牌（用户名
 仓库另有 CNB 云原生构建配置 `.cnb.yml`，作为国内侧的 CI 与补镜像兜底，全部自动执行：
 
 - 分支/标签推送到 CNB 时跑全套上位机单元测试（Linux，覆盖协议、解码、更新器和镜像工具等与平台无关的逻辑）；
-- `main` 分支每天 03:20（Asia/Shanghai）由定时任务把 GitHub 上最新的正式发布补齐到 CNB：即使某次 GitHub Actions 失败或被跳过，CNB 也会自己补上。`scripts/cnb_publish.py sync` 先比对附件名称与大小，已是最新镜像时只做几次 API 调用就退出，因此重复执行是安全的；
+- `main` 分支每天 03:20（Asia/Shanghai）由定时任务把 GitHub 上最新的正式发布补齐到 CNB：即使某次 GitHub Actions 失败或被跳过，CNB 也会自己补上。`scripts/cnb_publish.py sync` 先比对附件名称与大小，已是最新镜像时只做几次 API 调用就退出，因此重复执行是安全的；它不依赖 GitHub API（CNB 构建节点共享出口 IP，未认证配额经常被用光）：标签走 `git ls-remote`，附件名与大小按发布约定和 HEAD 探测，代价是这种情况下更新窗口显示“此次 Release 未填写说明”；
 - 需要立刻补镜像时走 API：`POST /{repo}/-/build/start`，`event` 为 `api_trigger_mirror_release`，`env.TAG` 指定标签（留空取最新）；也可以在 GitHub 上手工触发 `cnb-mirror.yml`。两条路径都用 CNB 流水线内置的 `CNB_TOKEN`，不需要在 GitHub 保存 CNB 令牌。
 
 发布新版本的操作：
