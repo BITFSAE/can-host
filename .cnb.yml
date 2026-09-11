@@ -1,0 +1,58 @@
+# CNB 云原生构建（cnb.cool）配置：国内侧 CI + 发布镜像的自动兜底。
+#
+# 发布镜像的主路径在 GitHub Actions：`.github/workflows/release.yml` 打完包后
+# 直接调 `scripts/cnb_publish.py publish` 把同一批附件传成 CNB 发布。
+# 下面的定时任务与 API 入口用同一个 `sync` 子命令兜底：即使 GitHub Actions
+# 某次失败或被跳过，CNB 每天也会自己把 GitHub 上最新的正式发布补齐，
+# 已是最新镜像时只做几次 API 调用就退出。
+#
+# 目录：
+# - `"**"` / push：任何分支或标签被推到 CNB 时跑全套上位机单元测试。
+# - `"**"` / api_trigger_mirror_release：需要立刻补镜像时的 API 入口
+#   （`POST /{repo}/-/build/start`，event 必须以 api_trigger 开头，env.TAG 可指定标签）。
+# - `main` / crontab：每天自动补做最新 GitHub 正式发布的镜像。
+#
+# 令牌：镜像相关流水线使用 CNB 流水线内置的 CNB_TOKEN，不必配置任何密钥。
+
+"**":
+  push:
+    - name: 上位机单元测试（Linux）
+      docker:
+        image: python:3.11-slim
+      stages:
+        - name: 安装依赖
+          script: |
+            set -e
+            python -m pip install --no-cache-dir -r requirements.txt
+        - name: 运行单元测试
+          script: |
+            set -e
+            python -m unittest discover -s Tests -p "test_*.py" -v
+
+  # 手动/API 触发的补镜像；不传 TAG 时同步 GitHub 上最新的正式发布。
+  api_trigger_mirror_release:
+    - name: 补做 GitHub 发布镜像
+      docker:
+        image: python:3.11-slim
+      stages: &mirror_stages
+        - name: 准备工具
+          script: |
+            set -e
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl
+        - name: 同步 GitHub 发布到 CNB
+          script: |
+            set -e
+            python scripts/cnb_publish.py sync \
+              --repo "${CNB_REPO_SLUG}" \
+              --github-repo BITFSAE/can-host \
+              --tag "${TAG:-}" \
+              --download-dir cnb-assets
+
+# 定时任务只支持单一明确分支名，因此单独写在 main 下；时区为 Asia/Shanghai。
+main:
+  "crontab: 20 3 * * *":
+    - name: 每日补做最新 GitHub 发布镜像
+      docker:
+        image: python:3.11-slim
+      stages: *mirror_stages

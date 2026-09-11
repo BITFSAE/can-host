@@ -24,7 +24,7 @@
 - MQTT 遥测故障页已接入：第五条独立只读连接默认订阅 CRC 已通过的 `fsae/telemetry/v1`，按权威 `TelemetryFrame` 解码 BMS 32 位故障字、状态、告警等级和 `alarms`；空 `message` 按 `alarm_id` 补名称，告警明细位图与故障字不一致时单独提示。页面仍记录本次会话的故障进入/清除；3 秒断流后当前值恢复“等待数据”。
 - 内置整车模拟器（源码运行）发出全部代表帧，macOS 可开发整车页面；Windows 发布版不打包。
 - 代码按模块拆分：后端 `canhost/decoders.py`（CAN 帧格式唯一定义）+ `monitor.py`（会话汇总与原始帧校验）+ `bms/` + `vehicle/` + `telemetry/` 子包 + `transport.py`；前端 `web/js/` 九个模块（core/bms/vehicle/fan/bench/ivt/monitor/telemetry/updater）。
-- GitHub 软件内更新已接入：Windows 发布版启动后自动检查 BITFSAE/can-host 的正式 Release，左下角版本信息打开更新窗口，支持预发布、私有仓库只读 PAT、ZIP+SHA256 下载校验、安全解压、退出备份替换失败回滚和自动启动新版本；源码运行只检查不安装。
+- 软件内更新已接入：Windows 发布版启动后自动检查正式版，左下角版本信息打开更新窗口，支持预发布、私有仓库只读 PAT、ZIP+SHA256 下载校验、安全解压、退出备份替换失败回滚和自动启动新版本；源码运行只检查不安装。检查顺序为 CNB 国内镜像优先（`cnb.cool/totok22/can-host` 上由 CI 维护的更新频道与发布附件，匿名可读）、失败回退 `BITFSAE/can-host` 的 GitHub Release，窗口“更新源”一行显示本次结果来自哪个源；GitHub 令牌只发往 GitHub 域名。
 - Windows 安装包已接入：`packaging/windows/canhost.iss`（Inno Setup 6）生成 `BITFSAE_CAN_Host_v<版本>_setup.exe`，每用户安装到 `%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`（无需管理员），带开始菜单/桌面快捷方式和卸载器；`build_windows.ps1` 与 CI 统一产出 ZIP、`.sha256` 和 setup.exe。安装包与软件内更新互通：更新换目录后从备份复制回 `unins000.exe/.dat` 保住卸载入口，覆盖安装先清空旧目录。
 - 旧版本自动清理已接入：更新助手仍保留最近一份 `.old-<时间戳>` 备份；新版本成功启动后的下一次启动自动删除超过 15 分钟回退窗口的备份和更新临时目录（`startup_cleanup`，后台线程尽力而为），安装包卸载连带删除旧版本备份，历史版本不累积。
 - 界面 UI 与连接交互重构完成：左上角标题单行化（`CAN HOST`）；整车总览与整车风扇移除顶部冗余连接栏；底部把 CAN1、BMS CANB、整车 CANB 和开发模拟收成单行入口，RX/TX 合计与固件身份固定在右侧；BMS 主连接与整车连接保持独立。
@@ -97,6 +97,7 @@
 | 快捷栏高压回退逻辑只有模拟覆盖 | BMS 与整车并发时，主连接数据缺失后回退整车 CANB 镜像的取数优先级未实测 | 双 PCAN 并发时断开/恢复 BMS 主连接并核对快捷栏高压/SOC |
 | 1120×720只完成浏览器渲染检查 | PyWebView缩放和Windows显示缩放可能改变实际可用区域 | 在100%、125%、150%显示缩放下检查 |
 | 软件内更新未做真实 GitHub 与 Windows 端到端验证 | 真实 Release API、权限、下载速度、UAC/安装目录写权限、PowerShell 助手和新进程回滚未实机覆盖 | 用旧版升级到 v0.8.0，实测完整安装与回滚；确认安装目录权限和日志位置 |
+| CNB 镜像与国内更新频道由 CI 同步，尚未经过一次真实发布验证 | 镜像落后或频道写入失败时，国内用户检查更新会停在旧版本或回退 GitHub（国内不可达） | 下一次 `v*` 发布走完 release.yml 的 CNB 同步步骤；CNB 侧已有每日定时补镜像兜底与 `cnb_publish.py verify` 匿名校验；v0.9.0 已补做镜像并实测更新器命中 CNB，仍需 Windows 发布版实机走一次软件内更新 |
 | Setup.exe 安装包与卸载器保留逻辑只有静态锚定 | Inno 安装/卸载、更新后 `unins000` 复制回、`.old-*` 自动清理和覆盖安装清目录未实机覆盖 | 在干净 Windows 上完成安装→软件内更新→卸载全链路实测 |
 | 私有仓库访问令牌保存在本机明文 settings.json | 使用共用电脑或电脑失窃时令牌可能被读取 | 只给发布版用户创建 `contents:read` 最小权限；丢失令牌后立即撤销并清除；公开仓库保持不配置令牌 |
 | 现网 MQTT 1883 仍为明文且当前只读账号复用 telegraf | 网络路径可观察认证与 Payload；桌面用户共享服务账号不利于轮换和审计 | Broker 部署 TLS，并为上位机创建只读 `fsae/telemetry/v1` 的独立账号；TLS 实连验证后默认切换安全端口 |
@@ -105,6 +106,7 @@
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
+| 2026-09-11 | 国内镜像链路接入并跑通：`cnb.cool/totok22/can-host` 已镜像 main 与全部 14 个标签，v0.9.0 的 ZIP/`.sha256`/setup.exe 已上传为 CNB 发布（哈希与 GitHub 侧 digest 逐一核对一致），更新频道 `cnb-update:latest.json` 匿名可读且三个附件匿名下载全部成功；真实更新器逻辑对 CNB 频道检查 0.92 s 命中 `source=cnb`，下载校验文件返回的 SHA256 与 GitHub 一致。CI 侧：`cnb-mirror.yml`（push 镜像分支标签、手工触发调用 `sync` 补做发布）与 CNB `.cnb.yml`（174 项单测全绿、`sync` 在已是最新镜像时跳过上传、API 触发入口可用）均实跑通过，`release.yml` 在创建 GitHub Release 后用同一批附件同步 CNB 并刷新频道。新增 13 项 `cnb_publish` 测试与 6 项镜像源测试（含令牌不外发 CNB），更新器 28 项全绿 | `release.yml` 的 CNB 步骤要在下一次 `v*` 发布才实跑；Windows 发布版走 CNB 源实机更新仍待验证 |
 | 2026-09-04 | 发布 v0.9.0：CAN 监视器完成通用化重构，按 ID 汇总、内容变体、周期/帧数/注释、自动留档、CSV 导出、历史回放和持久化单发/周期发送已接入；页面内部移除 CAN1/CANB 角色硬编码和 Python 清单入口，短标签强制单行；通用发送允许当前选择的任意真实 PCAN，同时拦截项目已知命令 ID。全套 157 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过 | 实体双 PCAN、Windows PyWebView 中的视觉和交互、长时间高负载记录、非默认物理总线发送 |
 | 2026-09-04 | 发布 v0.8.3 并打通安装包链路：`packaging/windows/canhost.iss` 每用户安装（`%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`、快捷方式、卸载器、安装/卸载均清空目录，卸载连带删 `.old-*`）；更新助手换目录后从备份复制回 `unins000.exe/.dat` 保住卸载入口；`startup_cleanup` 在新版下次启动时自动删除超 15 分钟回退窗口的备份与临时目录；`build_windows.ps1` 与 `release.yml` 统一产出 ZIP+SHA256+setup.exe。修复两次 CI 失败：无 BOM 的中文 ps1 被 Windows PowerShell 5.1 按 ANSI 误读出弯引号导致解析错误（ps1/iss 加 UTF-8 BOM，嵌入安装助手测试锚定纯 ASCII）；Inno [Code] 不支持 `ExcludeTrailingBackslash` 改用 `ExtractFilePath`。全套 148 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过；GitHub Actions 1m29s 构建成功，v0.8.3 正式 Release 附 ZIP（17.2 MB）、`.sha256` 与 setup.exe（15.4 MB），GitHub 资产 digest 与 `.sha256` 附件一致 | 干净 Windows 上的安装/覆盖安装/软件内更新/卸载全链路实机验证 |
 | 2026-09-04 | v0.8.2发布复核：同步F405告警开关帧版本7、23个动作位规范、从控全状态动作命名、4300mV默认过压、默认反转电流方向和统一350ms从控窗口；内置模拟器与页面提示同步。全套143项测试、Python编译、全部JavaScript语法和差异格式检查通过 | 实体PCAN写入降级动作开关并核对周期回报、Flash断电保存和F405实际保护动作 |
@@ -141,6 +143,18 @@
 | 2026-08-02 | 16 项主机协议测试、PyWebView API 不公开检查、JavaScript 语法、HTML ID 引用、`node --check` 和 `git diff --check` 通过；Chromium 模拟快照（五页导航、确认/工程弹窗、CAN 列表滚动）无脚本错误，1460×920 与 1120×720 无水平溢出；总览信息、同页 138 串/48 温度、只读故障页、独立命令页、异常筛选、充电计时、预计时间、趋势曲线和统一字号通过 | 修正后的 PyWebView 原生窗口复测、实体 PCAN、F405 台架、Windows 打包和长时间记录 |
 
 ## 已完成变更
+
+### 2026-09-11
+
+#### CNB 国内镜像：代码同步、发布产物与更新源（v0.9.0 之后）
+
+- 新增 `scripts/cnb_publish.py`：用 CNB OpenAPI 创建/更新发布、预签名上传附件（同名覆盖、`ttl=0` 永久保留）并确认，再把 CNB 发布列表写成更新频道 `latest.json`，附件地址统一改写为主域名 `https://cnb.cool/<repo>/-/releases/download/<tag>/<file>`，最后不带令牌做一次匿名下载校验；只有标准库，令牌只从环境变量读取。
+- 更新频道落在 CNB 独立分支 `cnb-update`，不放进 main，避免与 GitHub main 的代码镜像互相覆盖；`cnb-mirror.yml` 因此不使用 `--mirror/--prune`。
+- `cnb-mirror.yml`：push 时镜像全部分支与标签到 CNB；手工触发并填标签时下载该 GitHub Release 的附件补做镜像，用于历史发布或补传。`release.yml` 在 GitHub Release 创建后调用同一脚本同步附件并刷新频道，失败即发布失败（镜像落后会让国内用户停在旧版本）。CNB 令牌存放在 Actions secret `CNB_TOKEN`，镜像目标仓库由工作流 `CNB_REPO` 指定。
+- `canhost/updater.py` 改为多更新源：先读 CNB 更新频道（匿名 raw），失败或没有可用版本再走 GitHub API；新增 `is_github_url()` 保证已保存的 GitHub 令牌只发往 GitHub 域名，CNB 与预签名下载一律匿名；HTTP 错误提示按源区分。状态新增 `source`，`app.py` 提供 `updater_cnb_repo`，更新窗口新增“更新源”一行显示本次结果来自 CNB 镜像还是 GitHub。
+- 新增测试：`Tests/test_cnb_publish.py`（URL 改写、频道生成、草稿与条数、上传三步流程与 406 回归、令牌缺失）和 `Tests/test_updater.py` 的镜像源用例（CNB 命中时不访问 GitHub、镜像不可达回退、双源都失败时报两个源、令牌不外发、下载使用频道附件地址）。
+- `v0.9.0` 已补做镜像：三个附件的 SHA256 与 GitHub API 给出的 digest 逐一核对一致，频道匿名校验与真实更新器检查（`source=cnb`）均通过。
+- 新增 `.cnb.yml`（CNB 云原生构建）：分支/标签推送时在 CNB Linux 节点跑全套单测；`main` 上每天 03:20 定时补做 GitHub 最新正式发布的镜像，另留 `api_trigger_mirror_release` API 入口用于立即补镜像。两条路径都用 `scripts/cnb_publish.py sync`，先比对附件名称与大小，已是最新镜像时只做几次 API 调用就退出；使用流水线内置 `CNB_TOKEN`，不需要 GitHub 侧密钥。`.github/workflows/cnb-mirror.yml` 的手工触发同样改为调用 `sync`（标签可留空取最新）。
 
 ### 2026-09-04
 

@@ -22,6 +22,8 @@ BITFSAE 车队 CAN 上位机：BMS 监视四页（运行总览、电芯与温度
 
 同名的 `BITFSAE_CAN_Host_vX.Y.Z.zip` 保留作便携方式：解压后复制整个 `BITFSAE_CAN_Host` 文件夹到目标电脑运行其中的 exe，不能只复制 exe。软件内更新使用的就是这个 ZIP。
 
+国内网络不便访问 GitHub 时，用 CNB 上的同一批产物：[cnb.cool/totok22/can-host 发布](https://cnb.cool/totok22/can-host/-/releases) 的附件名与 GitHub Release 完全一致（`setup.exe`、`.zip`、`.zip.sha256`），无需代理、无需登录即可下载；软件内更新也会优先走这个镜像。
+
 ## Windows 源码运行
 
 ```powershell
@@ -63,11 +65,20 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1
 
 ## CI 自动构建与发布
 
-仓库在 `.github/workflows/` 下提供两条 GitHub Actions 工作流，都在 windows-latest 上运行：
+仓库在 `.github/workflows/` 下提供三条 GitHub Actions 工作流，都在 windows-latest 或 ubuntu-latest 上运行：
 
 - `tests.yml`：main 分支推送和 Pull Request 时自动运行全部上位机单元测试。
-- `release.yml`：推送 `v*` 标签（如 `v0.2.0`）时触发。先核对标签版本与 `canhost/__init__.py` 的 `__version__` 一致，再执行 `build_windows.ps1`（测试 + PyInstaller 打包 + 生成 `release\` 发布产物），并把 ZIP、`.sha256` 和 `setup.exe` 一并附加到创建的 GitHub Release。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供产物下载，不创建 Release。
+- `release.yml`：推送 `v*` 标签（如 `v0.2.0`）时触发。先核对标签版本与 `canhost/__init__.py` 的 `__version__` 一致，再执行 `build_windows.ps1`（测试 + PyInstaller 打包 + 生成 `release\` 发布产物），并把 ZIP、`.sha256` 和 `setup.exe` 一并附加到创建的 GitHub Release，随后用同一批文件同步 CNB 发布并刷新国内更新频道（这一步失败即视为发布失败）。也可在 Actions 页面手动触发一次构建，此时只在该次运行页面提供产物下载，不创建 Release。
+- `cnb-mirror.yml`：push 时把全部分支与标签镜像到 CNB；Actions 页面手动触发时把 GitHub 发布补做镜像到 CNB（可填标签，留空同步最新的正式发布）。
 - 标签版本号后带后缀（如 `v0.2.0-rc1`）时创建的是 GitHub 预发布（Pre-release），版本号主体仍须与 `__version__` 一致；不带后缀的 `vX.Y.Z` 创建正式 Release。
+
+CNB 镜像需要仓库 Actions secret `CNB_TOKEN`：CNB 访问令牌（用户名固定 `cnb`，令牌需包含仓库读写与发布读写权限），镜像目标仓库写在两条工作流的 `CNB_REPO` 环境变量里（当前 `totok22/can-host`）。令牌缺失或同步失败会让发布流水线直接失败，避免镜像落后导致国内用户检查不到新版本。
+
+仓库另有 CNB 云原生构建配置 `.cnb.yml`，作为国内侧的 CI 与补镜像兜底，全部自动执行：
+
+- 分支/标签推送到 CNB 时跑全套上位机单元测试（Linux，覆盖协议、解码、更新器和镜像工具等与平台无关的逻辑）；
+- `main` 分支每天 03:20（Asia/Shanghai）由定时任务把 GitHub 上最新的正式发布补齐到 CNB：即使某次 GitHub Actions 失败或被跳过，CNB 也会自己补上。`scripts/cnb_publish.py sync` 先比对附件名称与大小，已是最新镜像时只做几次 API 调用就退出，因此重复执行是安全的；
+- 需要立刻补镜像时走 API：`POST /{repo}/-/build/start`，`event` 为 `api_trigger_mirror_release`，`env.TAG` 指定标签（留空取最新）；也可以在 GitHub 上手工触发 `cnb-mirror.yml`。两条路径都用 CNB 流水线内置的 `CNB_TOKEN`，不需要在 GitHub 保存 CNB 令牌。
 
 发布新版本的操作：
 
@@ -84,14 +95,14 @@ Release 同时附上 `BITFSAE_CAN_Host_vX.Y.Z.zip`、同名 `.sha256` 校验文�
 
 Windows 发布版左下角版本信息可点击，会打开“软件内更新”窗口：
 
-1. 启动时自动检查一次 `BITFSAE/can-host` 的正式 Release；需要手动检查时点击“检查更新”，勾选“包含预发布版（Pre-release）”可列出 `-rc1` 等预发布。
+1. 启动时自动检查一次正式版：先读 CNB 国内镜像（`cnb.cool/totok22/can-host` 上由 CI 维护的更新频道与发布附件），镜像不可用时回退 `BITFSAE/can-host` 的 GitHub Release；需要手动检查时点击“检查更新”，勾选“包含预发布版（Pre-release）”可列出 `-rc1` 等预发布。窗口“更新源”一行会显示本次结果来自哪个源。
 2. 点击“下载更新”后自动下载 ZIP 和 `.sha256`，先校验 SHA256，再校验 ZIP 只包含预期的 `BITFSAE_CAN_Host/` 目录（拒绝绝对路径、`..` 和符号链接）。
 3. 点击“退出并安装”后应用退出，由隐藏 PowerShell 助手等待旧进程结束、备份旧目录为 `.old-<时间戳>`、替换为新目录并重新启动；启动新版本失败时自动恢复旧目录。
 4. 旧版本清理：新版本成功启动后，下一次启动时自动删除超过 15 分钟回退窗口的旧版本备份和更新临时目录；安装包卸载也会一并删除旧版本备份。回退窗口内如需手动回退，备份位于安装目录的上一级，名字形如 `BITFSAE_CAN_Host.old-<时间戳>`；更早的历史版本可随时从 GitHub Release 重新下载。
 
 安装包（setup.exe）安装的版本与软件内更新完全兼容：更新替换目录后会保留卸载器文件，Windows「设置 - 应用」的卸载入口和开始菜单、桌面快捷方式继续有效；用新版 setup.exe 覆盖安装时会先清空旧目录再安装，不会残留旧文件。成功替换后才能删除备份。
 
-公开仓库的 Release 无需任何凭据即可检查、下载。若仓库保持私有，使用者在更新窗口保存有 `repo:contents:read` 的只读 GitHub PAT；令牌只保存在本机 `%APPDATA%\BITFSAE\CAN Host\settings.json`，不返回前端、不写入日志。源码运行只能检查更新，不能替换安装目录。
+公开仓库的 Release 无需任何凭据即可检查、下载；CNB 镜像的更新频道与附件同样匿名可读，两者的下载地址都由检查结果给出，不会把 GitHub 令牌发往 CNB。若仓库保持私有，使用者在更新窗口保存有 `repo:contents:read` 的只读 GitHub PAT；令牌只保存在本机 `%APPDATA%\BITFSAE\CAN Host\settings.json`，不返回前端、不写入日志。源码运行只能检查更新，不能替换安装目录。
 
 发布新版本只需更新版本号、提交推送，再打 `v*` 标签：
 
@@ -115,9 +126,11 @@ git push origin v0.9.0
 | `canhost/bms/` | BMS 协议状态机、工具命令编码、BMS 模拟器 |
 | `canhost/vehicle/` | 整车协议状态机（含风扇命令应答）与整车模拟器 |
 | `canhost/ivt.py` | IVT 请求、响应解析和 BMS CAN1 目标比较 |
-| `canhost/updater.py` | GitHub Release 检查、SHA256 校验、安全解压与 Windows 退出安装 |
+| `canhost/updater.py` | 发布检查（CNB 国内镜像优先、GitHub 回退）、SHA256 校验、安全解压与 Windows 退出安装 |
 | `canhost/telemetry/` | MQTT 只读订阅、TelemetryFrame Protobuf 解码和故障变化记录 |
 | `canhost/web/` | 无网络依赖的 HTML/CSS/JavaScript 界面（`js/` 按页面模块拆分） |
 | `cli/` | 独立命令行工具 `pcan_bms_bench.py`、`pcan_ivt_tool.py` |
-| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / monitor / telemetry / updater） |
+| `scripts/cnb_publish.py` | 把发布产物上传 CNB 并维护国内更新频道（CI 与本地补镜像共用） |
+| `.cnb.yml` | CNB 云原生构建：Linux 单元测试 + 定时/API 补做发布镜像 |
+| `Tests/` | 单元测试（decoders / bms / fan / ivt / vehicle / monitor / telemetry / updater / cnb_publish） |
 | `todo.md` | 上位机待办、风险、验证和变更摘要 |
