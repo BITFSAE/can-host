@@ -1,0 +1,90 @@
+name: CNB 镜像同步
+
+# 把 GitHub 上的代码与发布产物同步到 CNB（cnb.cool），供国内直连下载：
+# - 代码：push 时镜像全部分支与标签（不删除 CNB 上独有的分支，更新频道分支在那里）。
+# - 发布产物：在 release.yml 里随发布一起上传；本工作流的手工触发用于补做历史发布。
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 需要补做镜像的发布标签（例如 v0.9.0，留空表示只同步代码）
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CNB_REPO: totok22/can-host
+
+jobs:
+  code:
+    name: 同步分支与标签
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 推送全部分支与标签到 CNB
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::仓库缺少 Actions secret CNB_TOKEN，无法同步到 CNB"
+            exit 1
+          fi
+          git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*"
+          git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}"
+          # 不用 --mirror/--prune：CNB 上还有更新频道分支，不能被本地 refspec 删掉。
+          git push cnb --force \
+            "+refs/remotes/origin/*:refs/heads/*" \
+            "+refs/tags/*:refs/tags/*"
+
+  release:
+    name: 同步发布产物
+    if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 下载 GitHub 发布产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p cnb-assets
+          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --dir cnb-assets --clobber
+          gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" \
+            --json tagName,name,body,publishedAt,isPrerelease > cnb-assets/github-release.json
+          ls -l cnb-assets
+
+      - name: 上传到 CNB 并刷新更新频道
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error::仓库缺少 Actions secret CNB_TOKEN，无法同步到 CNB"
+            exit 1
+          fi
+          asset_args=()
+          while IFS= read -r file; do asset_args+=(--asset "$file"); done \
+            < <(find cnb-assets -maxdepth 1 -type f ! -name github-release.json | sort)
+          python scripts/cnb_publish.py publish \
+            --repo "${CNB_REPO}" \
+            --tag "${{ inputs.tag }}" \
+            --metadata-json cnb-assets/github-release.json \
+            "${asset_args[@]}"
