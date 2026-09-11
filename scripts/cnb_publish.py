@@ -573,7 +573,6 @@ def fallback_release(
         "prerelease": "-" in tag,
         "draft": False,
     }
-    print(f"按约定探测到发布 {tag}（{len(assets)} 个附件）")
     return metadata, assets
 
 
@@ -697,6 +696,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         metadata, remote_assets = fallback_release(
             args.github_repo, args.tag, args.asset_name or ASSET_NAME_PATTERNS, args.timeout
         )
+        print(f"按约定探测到发布 {metadata['tag_name']}（{len(remote_assets)} 个附件）")
     tag = metadata["tag_name"]
 
     client = CnbClient(repo, token, timeout=args.timeout, base=args.api_base)
@@ -785,7 +785,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_stdout() -> None:
+    """Windows 控制台/CI 的默认编码可能装不下中文，改成 UTF-8 并替换无法编码的字符。"""
+    stream = getattr(sys, "stdout", None)
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # pragma: no cover - 环境不支持时保持原样
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdout()
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
