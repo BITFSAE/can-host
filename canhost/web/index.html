@@ -1117,7 +1117,7 @@
     </div>
   </div>
 
-  <dialog id="connectDialog" class="modal">
+  <dialog id="connectDialog" class="modal" data-backdrop-close>
     <form method="dialog">
       <header><h2 id="connectDialogTitle">CAN 连接设置</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
       <div class="modal-body">
@@ -1153,7 +1153,7 @@
     </form>
   </dialog>
 
-  <dialog id="telemetryConnectDialog" class="modal telemetry-modal">
+  <dialog id="telemetryConnectDialog" class="modal telemetry-modal" data-backdrop-close>
     <form method="dialog">
       <header><h2>MQTT 遥测订阅</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
       <div class="modal-body">
@@ -1213,7 +1213,7 @@
     </form>
   </dialog>
 
-  <dialog id="updaterDialog" class="modal updater-dialog">
+  <dialog id="updaterDialog" class="modal updater-dialog" data-backdrop-close>
     <form method="dialog">
       <header>
         <div class="modal-heading">

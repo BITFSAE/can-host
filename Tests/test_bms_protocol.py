@@ -802,6 +802,9 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="page-telemetry"', html)
         self.assertIn('id="telemetryConnectDialog"', html)
         self.assertIn('id="telemetryFaultCode">等待数据', html)
+        for dialog_id in ("connectDialog", "telemetryConnectDialog", "updaterDialog"):
+            self.assertRegex(html, rf'<dialog id="{dialog_id}"[^>]*data-backdrop-close')
+        self.assertNotRegex(html, r'<dialog id="confirmDialog"[^>]*data-backdrop-close')
         self.assertNotIn("benchIvtMode", html)
         self.assertNotIn("模拟 IVT", html)
         self.assertNotIn("真实 IVT-S", html)
@@ -813,6 +816,9 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("toggleVehicleDockConnection", core_js)
         self.assertIn("toggleSimulationChannels", core_js)
         self.assertIn("CONNECTION_PREFS_KEY", core_js)
+        self.assertIn("bindBackdropDismissal", core_js)
+        self.assertIn("event.target !== dialog", core_js)
+        self.assertIn('dialog.close("cancel")', core_js)
 
     def test_fan_js_defines_receiving_used_for_fresh_tag(self) -> None:
         js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")

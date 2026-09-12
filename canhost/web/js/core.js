@@ -211,7 +211,20 @@ function showPage(page) {
   schedulePoll(0);
 }
 
+function bindBackdropDismissal() {
+  $$('dialog[data-backdrop-close]').forEach(dialog => {
+    dialog.addEventListener("click", event => {
+      if (event.target !== dialog || !dialog.open) return;
+      const bounds = dialog.getBoundingClientRect();
+      const outside = event.clientX < bounds.left || event.clientX > bounds.right
+        || event.clientY < bounds.top || event.clientY > bounds.bottom;
+      if (outside) dialog.close("cancel");
+    });
+  });
+}
+
 function bindCoreControls() {
+  bindBackdropDismissal();
   $("#can1BusButton")?.addEventListener("click", () => toggleMainDockConnection("can1"));
   $("#canbBmsBusButton")?.addEventListener("click", () => toggleMainDockConnection("canb_bms"));
   $("#canbVehicleBusButton")?.addEventListener("click", toggleVehicleDockConnection);
