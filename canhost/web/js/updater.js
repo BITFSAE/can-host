@@ -4,6 +4,7 @@
 var updaterPollTimer = null;
 var updaterAutoStarted = false;
 var updaterClosing = false;
+var updaterAutoInstall = false;
 
 function initUpdater() {
   if (!state.api || !state.bootstrap) return;
@@ -32,23 +33,10 @@ function bindUpdaterControls() {
     prerelease.dataset.bound = "1";
     prerelease.addEventListener("change", () => refreshUpdaterPending());
   }
-  const download = $("#updaterDownload");
-  if (download && !download.dataset.bound) {
-    download.dataset.bound = "1";
-    download.addEventListener("click", async () => {
-      const result = await state.api.download_update();
-      if (!result.ok) {
-        toast(result.error || "无法开始下载", true);
-        updaterRenderUpdaterStatus();
-      } else {
-        await pollUpdaterStatus();
-      }
-    });
-  }
   const install = $("#updaterInstall");
   if (install && !install.dataset.bound) {
     install.dataset.bound = "1";
-    install.addEventListener("click", () => installDownloadedUpdate());
+    install.addEventListener("click", startUpdateIntent);
   }
   const saveToken = $("#updaterSaveToken");
   if (saveToken && !saveToken.dataset.bound) {
@@ -122,6 +110,13 @@ async function pollUpdaterStatus() {
   const status = await state.api.get_updater_status();
   if (status) state.updater = status;
   updaterRenderUpdaterStatus();
+  if (updaterAutoInstall && status?.state === "ready") {
+    updaterAutoInstall = false;
+    await installDownloadedUpdate();
+  } else if (updaterAutoInstall && ["download_failed", "install_failed"].includes(status?.state)) {
+    updaterAutoInstall = false;
+    updaterRenderUpdaterStatus();
+  }
 }
 
 function updaterRenderUpdaterStatus() {
@@ -201,7 +196,7 @@ function updaterRenderUpdaterStatus() {
 
   const fileNode = $("#updaterFile");
   if (fileNode) {
-    fileNode.textContent = status.stage_dir ? "下载与校验已完成。点击“重启并安装”后，应用会自动替换并启动新版本。" : "";
+    fileNode.textContent = status.stage_dir ? "下载与校验已完成，正在准备重启安装。" : "";
     fileNode.classList.toggle("hidden", !status.stage_dir);
   }
 
@@ -215,12 +210,14 @@ function updaterRenderUpdaterStatus() {
 
   const checkBtn = $("#updaterCheck");
   if (checkBtn) checkBtn.disabled = ["checking", "downloading", "installing"].includes(stateName);
-  const downloadBtn = $("#updaterDownload");
-  if (downloadBtn) downloadBtn.disabled = stateName !== "update_available" || !latest?.assets?.length;
   const installBtn = $("#updaterInstall");
   if (installBtn) {
-    installBtn.disabled = stateName !== "ready" || !installSupported || updaterClosing;
-    installBtn.textContent = stateName === "installing" ? "正在退出…" : "重启并安装";
+    const canUpdate = stateName === "update_available" || stateName === "ready";
+    installBtn.disabled = !canUpdate || !installSupported || updaterClosing || updaterAutoInstall;
+    if (stateName === "installing" || updaterClosing) installBtn.textContent = "正在退出…";
+    else if (stateName === "downloading" || updaterAutoInstall) installBtn.textContent = "正在更新…";
+    else if (stateName === "update_available" && latest?.tag_name) installBtn.textContent = `更新到 ${latest.tag_name}`;
+    else installBtn.textContent = "立即更新";
   }
   const prerelease = $("#updaterPrerelease");
   if (prerelease) prerelease.disabled = ["checking", "downloading", "installing"].includes(stateName);
@@ -234,6 +231,8 @@ function updaterRenderUpdaterStatus() {
   if (sourceNode) sourceNode.textContent = updaterSourceText(status);
   const pathNode = $("#updaterSettingsPath");
   if (pathNode) pathNode.textContent = state.bootstrap?.updater_settings_path || "—";
+  const logNode = $("#updaterLogDir");
+  if (logNode) logNode.textContent = state.bootstrap?.updater_log_dir || "—";
 
   const indicator = $("#appUpdateIndicator");
   const versionFact = $("#appVersionFact");
@@ -302,7 +301,7 @@ function updaterStatusText(status) {
   if (stateName === "check_failed") return "检查更新失败";
   if (stateName === "downloading") return "正在下载 " + (status.latest?.tag_name || status.downloaded_zip || "") + "…";
   if (stateName === "download_failed") return "下载更新失败";
-  if (stateName === "ready") return "已下载并校验，可以重启安装";
+  if (stateName === "ready") return "已下载并校验，正在准备重启安装";
   if (stateName === "installing") return "应用正在退出并安装更新…";
   if (stateName === "install_failed") return "无法启动安装助手";
   return "尚未检查更新";
@@ -314,6 +313,32 @@ function formatUpdaterSize(value) {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KiB";
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GiB";
+}
+
+async function startUpdateIntent() {
+  if (!state.api || updaterClosing || updaterAutoInstall) return;
+  const stateName = state.updater?.state;
+  if (stateName === "ready") {
+    await installDownloadedUpdate();
+    return;
+  }
+  if (stateName !== "update_available") return;
+  updaterAutoInstall = true;
+  updaterRenderUpdaterStatus();
+  try {
+    const result = await state.api.download_update();
+    if (!result.ok) {
+      updaterAutoInstall = false;
+      toast(result.error || "无法开始下载", true);
+      updaterRenderUpdaterStatus();
+      return;
+    }
+    await pollUpdaterStatus();
+  } catch (error) {
+    updaterAutoInstall = false;
+    toast(error?.message || "无法开始下载", true);
+    updaterRenderUpdaterStatus();
+  }
 }
 
 async function installDownloadedUpdate() {
