@@ -33,6 +33,7 @@ from canhost.updater import (
     find_checksum_asset,
     find_zip_asset,
     is_github_url,
+    launch_installer,
     read_sha256_digest,
     release_is_newer,
     startup_cleanup,
@@ -236,6 +237,39 @@ class InstallerPackagingTest(unittest.TestCase):
         self.assertIn("old process restarted", INSTALLER_SCRIPT)
         self.assertIn("forcing stop", INSTALLER_SCRIPT)
         self.assertIn("PresentationFramework", INSTALLER_SCRIPT)
+
+    def test_install_helper_retries_a_busy_install_directory(self) -> None:
+        self.assertIn("Rename-DirectoryWithRetry", INSTALLER_SCRIPT)
+        self.assertIn('Write-Log "old rename blocked; retrying"', INSTALLER_SCRIPT)
+
+    def test_launcher_runs_helper_outside_install_and_work_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_dir = root / "installed" / APP_FOLDER_NAME
+            stage_dir = root / "downloads" / APP_FOLDER_NAME
+            work_dir = root / "updates" / "canhost-update-test"
+            stage_dir.mkdir(parents=True)
+            (stage_dir / APP_EXE_NAME).write_bytes(b"staged executable")
+            log_dir = root / "logs"
+            result_path = root / "settings" / "last-update-result.json"
+
+            with patch("canhost.updater.install_ready", return_value=True), \
+                    patch("canhost.updater._powershell", return_value=Path("powershell.exe")), \
+                    patch("canhost.updater.update_log_dir", return_value=log_dir), \
+                    patch("canhost.updater.update_result_path", return_value=result_path), \
+                    patch("canhost.updater.subprocess.Popen") as popen:
+                launch_installer(
+                    app_dir=app_dir.resolve(),
+                    stage_dir=stage_dir.resolve(),
+                    work_dir=work_dir.resolve(),
+                    expected_version="v0.9.3",
+                    current_pid=1234,
+                )
+
+            helper_cwd = Path(popen.call_args.kwargs["cwd"])
+            self.assertEqual(helper_cwd, work_dir.parent.resolve())
+            self.assertNotEqual(helper_cwd, app_dir.resolve())
+            self.assertNotEqual(helper_cwd, work_dir.resolve())
 
     def test_failed_helper_result_is_consumed_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

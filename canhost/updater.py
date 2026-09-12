@@ -199,6 +199,20 @@ function Start-App([string]$Directory, [bool]$WithHealth) {
     }
     return [System.Diagnostics.Process]::Start($psi)
 }
+function Rename-DirectoryWithRetry([string]$Source, [string]$DestinationLeaf) {
+    $attempt = 1
+    while ($true) {
+        try {
+            Rename-Item -LiteralPath $Source -NewName $DestinationLeaf -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge 30) { throw }
+            if ($attempt -eq 1) { Write-Log "old rename blocked; retrying" }
+            $attempt += 1
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
 Write-Log "start staged=$StagedDir app=$AppDir"
 
 $stagedExe = Join-Path $StagedDir $ExeName
@@ -237,7 +251,7 @@ $movedOld = $false
 $new = $null
 $failureCode = "install_failed"
 try {
-    Rename-Item -LiteralPath $AppDir -NewName (Split-Path $backup -Leaf)
+    Rename-DirectoryWithRetry $AppDir (Split-Path $backup -Leaf)
     $movedOld = $true
     Write-Log "old renamed $backup"
     Move-Item -LiteralPath $StagedDir -Destination $AppDir
@@ -465,6 +479,12 @@ def launch_installer(
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
+        # Installed shortcuts start the app with cwd=app_dir.  The detached
+        # PowerShell helper must not inherit that directory or its own current
+        # directory handle prevents Rename-Item from swapping the installation.
+        # Use the update directory's parent so the helper can also remove
+        # work_dir after a successful install.
+        "cwd": str(work_dir.parent.resolve()),
     }
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
