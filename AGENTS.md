@@ -1,4 +1,4 @@
-BITFSAE 车队 CAN 上位机（can-host）：BMS 监视 + 整车 CANB 遥测的桌面工具，Python（PyWebView + python-can）+ 零构建前端，面向 Windows + PCAN-USB 发布。
+BITFSAE 车队 CAN 上位机（can-host）：BMS 监视 + 整车 CANB 遥测的桌面工具，Python（PyWebView + python-can）+ 零构建前端，Windows 与 Apple Silicon macOS 发布包都以连接实体 PCAN-USB 为主要用途；macOS 过渡版本可暂时保留开发模拟入口，但不得把它写成发布目的或硬件替代方案。
 
 ## 接口权威仓库
 

@@ -60,14 +60,26 @@ def _write_update_health(path: Path, version: str) -> None:
             pass
 
 
+def _simulation_available() -> bool:
+    """Temporarily retain the simulators in source and macOS builds.
+
+    Both frozen desktop builds are field tools for real PCAN hardware.  The
+    first macOS release keeps the existing simulator entry as a transitional
+    development aid; this exception must not be used as a hardware fallback.
+    """
+    return not getattr(sys, "frozen", False) or sys.platform == "darwin"
+
+
 class Api:
     def __init__(self, update_health_path: Path | None = None) -> None:
         # PyWebView exposes every public member of js_api to JavaScript. Native
         # Window/WinForms objects must remain private; walking AccessibilityObject
         # recursively raises TYPE_E_CANTLOADLIBRARY on affected Windows systems.
         # The source build keeps the simulator for UI/protocol development.
-        # A frozen Windows release is a field tool and only exposes real PCAN.
-        self._service = CanService(allow_simulation=not getattr(sys, "frozen", False))
+        # The macOS field build temporarily keeps the same entry, while the
+        # Windows field build remains hardware-only.
+        simulation_available = _simulation_available()
+        self._service = CanService(allow_simulation=simulation_available)
         # The engineering tools have their own transport lifetime.  This
         # lets the operator keep the BMS monitor on CAN1 while the bench
         # sender, the IVT configurator, or the fan tool uses its own PCAN handle.
@@ -77,7 +89,7 @@ class Api:
         # feeds the vehicle pages and the quick-value strip while the main
         # BMS connection stays on CAN1 for parameter work.
         self._vehicle_service = CanService(protocol_kind="vehicle",
-                                           allow_simulation=not getattr(sys, "frozen", False))
+                                           allow_simulation=simulation_available)
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()
@@ -125,6 +137,8 @@ class Api:
             "updater_settings_path": str(settings_path()),
             "updater_log_dir": str(update_log_dir()),
             "startup_update_result": self._startup_update_result,
+            "runtime_platform": sys.platform,
+            "frozen": bool(getattr(sys, "frozen", False)),
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
             "profiles": profiles,
         }
@@ -466,6 +480,55 @@ def main() -> None:
         import webview
     except ImportError:
         raise SystemExit("缺少 pywebview。请先执行：pip install -r requirements.txt")
+    if "--packaging-smoke-test" in sys.argv or "--pcan-driver-smoke-test" in sys.argv:
+        # Exercise the real-PCAN backend first.  CI cannot attach a USB adapter
+        # or install the third-party macOS driver, but it must still prove that
+        # PyInstaller included every Python module needed to load that driver.
+        import can  # noqa: F401
+        from can.interfaces.pcan.basic import PCANBasic
+        from can.interfaces.pcan.pcan import PcanBus  # noqa: F401
+
+        if "--pcan-driver-smoke-test" in sys.argv:
+            # The build script invokes this extra check when libPCBUSB is
+            # installed on the build Mac.  Constructing PCANBasic proves that
+            # the frozen app can find and load the external arm64 driver; no
+            # adapter is opened and no CAN frame is sent.
+            PCANBasic()
+            return
+        import paho.mqtt.client  # noqa: F401
+        import time
+        from .bms.simulator import BmsSimulator  # noqa: F401
+        from .telemetry import fsae_telemetry_pb2  # noqa: F401
+        from .vehicle.simulator import VehicleSimulator  # noqa: F401
+        if not (WEB_DIR / "index.html").is_file():
+            raise SystemExit("打包自检失败：缺少 canhost/web/index.html")
+        api = Api()
+        try:
+            bootstrap = api.bootstrap()
+            if "PCAN_USBBUS1" not in bootstrap["channels"]:
+                raise SystemExit("打包自检失败：缺少实体 PCAN 通道配置")
+            if sys.platform == "darwin" and not bootstrap["simulation_enabled"]:
+                raise SystemExit("打包自检失败：macOS 过渡版本未包含临时模拟通道")
+            bms_result = api.connect_can({
+                "mode": "simulation", "bus_profile": "can1", "bitrate": 500000,
+            })
+            vehicle_result = api.connect_vehicle({
+                "mode": "simulation", "bus_profile": "canb", "bitrate": 500000,
+            })
+            if not bms_result.get("ok") or not vehicle_result.get("ok"):
+                raise SystemExit("打包自检失败：macOS 模拟通道无法启动")
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                bms_ready = api.get_snapshot()["overview"].get("voltage_v") is not None
+                vehicle_ready = api.get_vehicle_snapshot()["pack"].get("voltage_v") is not None
+                if bms_ready and vehicle_ready:
+                    break
+                time.sleep(0.05)
+            else:
+                raise SystemExit("打包自检失败：macOS 模拟通道未产出完整数据")
+        finally:
+            api.close()
+        return
     update_health_path = _update_health_path_from_argv()
     api = Api(update_health_path=update_health_path)
     if install_ready():

@@ -1,4 +1,4 @@
-"""Host-side tests for the Windows BMS CAN application."""
+"""Host-side tests for the BITFSAE CAN desktop application."""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ from datetime import datetime, timedelta
 import sqlite3
 import tempfile
 from pathlib import Path
+import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 from canhost.transport import CanService
-from canhost.app import Api, _update_health_path_from_argv, _write_update_health
+from canhost.app import Api, _simulation_available, _update_health_path_from_argv, _write_update_health
 from canhost.bms.protocol import BmsProtocol, build_command, command_ack_matches, switch_catalog
 from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID
 from canhost.bms.simulator import BmsSimulator
@@ -700,6 +702,8 @@ class BmsProtocolTest(unittest.TestCase):
         try:
             bootstrap = api.bootstrap()
             self.assertTrue(bootstrap["simulation_enabled"])
+            self.assertEqual(bootstrap["runtime_platform"], sys.platform)
+            self.assertFalse(bootstrap["frozen"])
             simulation = next(item for item in bootstrap["profiles"] if item["key"] == "simulation")
             self.assertEqual(simulation["mode"], "simulation")
             self.assertIn("开发测试", simulation["name"])
@@ -720,12 +724,33 @@ class BmsProtocolTest(unittest.TestCase):
             self.assertGreater(payload["pid"], 0)
             self.assertFalse(any(target.parent.glob(".update-health.json-*.tmp")))
 
+    def test_frozen_macos_temporarily_keeps_simulation_available(self) -> None:
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "darwin"):
+            self.assertTrue(_simulation_available())
+
+    def test_frozen_windows_keeps_hardware_only_policy(self) -> None:
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "win32"):
+            self.assertFalse(_simulation_available())
+
     def test_release_transport_rejects_simulation(self) -> None:
         service = CanService(allow_simulation=False)
         try:
             result = service.connect({"mode": "simulation", "bus_profile": "can1", "bitrate": 500000})
             self.assertFalse(result["ok"])
             self.assertIn("真实 PCAN", result["error"])
+        finally:
+            service.disconnect()
+
+    def test_macos_missing_pcbusb_error_explains_real_hardware_dependency(self) -> None:
+        service = CanService(allow_simulation=False)
+        try:
+            with patch.object(sys, "platform", "darwin"), \
+                    patch.dict(sys.modules, {"can": MagicMock()}):
+                sys.modules["can"].Bus.side_effect = OSError("PCBUSB library not found.")
+                result = service.connect({"mode": "pcan", "channel": "PCAN_USBBUS1"})
+            self.assertFalse(result["ok"])
+            self.assertIn("包含 arm64", result["error"])
+            self.assertIn("/usr/local/lib", result["error"])
         finally:
             service.disconnect()
 

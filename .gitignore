@@ -8,9 +8,11 @@ __pycache__/
 # 本地虚拟环境与构建产物
 .venv-canhost/
 .venv-canhost-build/
+.venv-canhost-build-macos/
 .venv-bms-host*/
 build/
 dist/
+release/
 
 # Windows WebView2 运行时调试日志
 debug.log

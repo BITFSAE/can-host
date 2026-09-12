@@ -71,13 +71,18 @@ CHANNEL_SCHEMA = 1
 # 附件永久保留；CNB 的 ttl 单位是天，0 表示永久（上限 180 天）。
 ASSET_TTL_DAYS = 0
 
-# 发布附件命名约定（与 build_windows.ps1 / release.yml 一致）。
+# 发布附件命名约定（与 build_windows.ps1 / build_macos.sh / release.yml 一致）。
 # GitHub API 不可用（CNB 节点共享出口 IP 会被限流）时按它拼下载地址。
-ASSET_NAME_PATTERNS = (
+WINDOWS_ASSET_NAME_PATTERNS = (
     "BITFSAE_CAN_Host_{tag}.zip",
     "BITFSAE_CAN_Host_{tag}.zip.sha256",
     "BITFSAE_CAN_Host_{tag}_setup.exe",
 )
+MACOS_ASSET_NAME_PATTERNS = (
+    "BITFSAE_CAN_Host_macOS_arm64_{tag}.dmg",
+    "BITFSAE_CAN_Host_macOS_arm64_{tag}.dmg.sha256",
+)
+ASSET_NAME_PATTERNS = WINDOWS_ASSET_NAME_PATTERNS + MACOS_ASSET_NAME_PATTERNS
 
 
 class CnbError(RuntimeError):
@@ -553,8 +558,11 @@ def fallback_release(
     """
     if not tag:
         tag = latest_release_tag(repo, timeout)
-    assets: list[dict[str, Any]] = []
-    for pattern in asset_patterns:
+    patterns = tuple(asset_patterns)
+    macos_optional = patterns == ASSET_NAME_PATTERNS
+    required_patterns = WINDOWS_ASSET_NAME_PATTERNS if macos_optional else patterns
+
+    def probe(pattern: str) -> dict[str, Any] | None:
         name = pattern.format(tag=tag)
         url = "https://github.com/{}/releases/download/{}/{}".format(
             repo.strip("/"),
@@ -562,9 +570,21 @@ def fallback_release(
             urllib.parse.quote(name, safe=""),
         )
         size = probe_remote_size(url, timeout)
-        if size <= 0:
+        return {"name": name, "size": size, "url": url} if size > 0 else None
+
+    assets: list[dict[str, Any]] = []
+    for pattern in required_patterns:
+        asset = probe(pattern)
+        if asset is None:
+            name = pattern.format(tag=tag)
             raise CnbError(f"GitHub 上找不到发布附件 {name}，请确认标签 {tag} 是否为正式发布")
-        assets.append({"name": name, "size": size, "url": url})
+        assets.append(asset)
+
+    if macos_optional:
+        macos_assets = [probe(pattern) for pattern in MACOS_ASSET_NAME_PATTERNS]
+        if any(asset is not None for asset in macos_assets) and any(asset is None for asset in macos_assets):
+            raise CnbError(f"GitHub 发布 {tag} 的 macOS DMG 与校验文件不完整")
+        assets.extend(asset for asset in macos_assets if asset is not None)
     metadata = {
         "tag_name": tag,
         "name": tag,

@@ -22,10 +22,11 @@
 - 底部常看值快捷栏在所有非工具页常驻：低压 V/I/P、高压 V/I、SOC、SOP 放电/充电功率限值、风扇最高转速；高压和 SOC 优先 BMS 主连接、无数据时回退整车连接 0x4B0。
 - CAN 监视器已改为通用的“连接 1 / 连接 2”数据源：相同 ID 汇总，显示方向、长度、最新数据、周期、帧数和项目帧名，并可展开最近八种完整数据；真实 PCAN 连接后自动进入页面并按本机开关自动留档，支持手动留档、CSV 导出和历史回放。发送项本机持久化，支持单发与周期发送，目标为当前选择的真实 PCAN，不把 CAN1/CANB 角色写死；项目内已知命令 ID 继续由专用页面处理。
 - MQTT 遥测故障页已接入：第五条独立只读连接默认订阅 CRC 已通过的 `fsae/telemetry/v1`，按权威 `TelemetryFrame` 解码 BMS 32 位故障字、状态、告警等级和 `alarms`；空 `message` 按 `alarm_id` 补名称，告警明细位图与故障字不一致时单独提示。页面仍记录本次会话的故障进入/清除；3 秒断流后当前值恢复“等待数据”。
-- 内置整车模拟器（源码运行）发出全部代表帧，macOS 可开发整车页面；Windows 发布版不打包。
+- 内置整车模拟器发出全部代表帧；源码和本次 Apple Silicon macOS 过渡版本暂时保留调试模拟入口，Windows 发布版不打包。macOS 安装包的发布用途仍是实体 PCAN 联调，模拟数据不计入驱动、接线、时序或实车协议验收。
 - 代码按模块拆分：后端 `canhost/decoders.py`（CAN 帧格式唯一定义）+ `monitor.py`（会话汇总与原始帧校验）+ `bms/` + `vehicle/` + `telemetry/` 子包 + `transport.py`；前端 `web/js/` 九个模块（core/bms/vehicle/fan/bench/ivt/monitor/telemetry/updater）。
 - 软件内更新已接入：Windows 发布版启动后自动检查正式版，左下角版本信息打开更新窗口；用户点击一次“更新到 vX.Y.Z”后自动完成下载、SHA256 校验、安全解压、退出、替换和重启。新版必须在 45 秒内以匹配的进程号与版本号回报页面健康信号才算成功；退出卡住时有看门狗兜底，失败会停止新版、恢复目录、重新启动旧版并显示原因。日志固定保存在 `%LOCALAPPDATA%\BITFSAE\CAN Host\update-logs`。检查顺序为 CNB 国内镜像优先、失败回退 GitHub；GitHub 令牌只发往 GitHub 域名。
 - Windows 安装包已接入：`packaging/windows/canhost.iss`（Inno Setup 6）生成 `BITFSAE_CAN_Host_v<版本>_setup.exe`，每用户安装到 `%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`（无需管理员），带开始菜单/桌面快捷方式和卸载器；`build_windows.ps1` 与 CI 统一产出 ZIP、`.sha256` 和 setup.exe。安装包与软件内更新互通：更新换目录后从备份复制回 `unins000.exe/.dat` 保住卸载入口，覆盖安装先清空旧目录。
+- Apple Silicon macOS 发布已接入：`can_host_macos.spec` + `build_macos.sh` 生成原生 arm64 `.app` 和 LZMA DMG，实体 PCAN 通过外部 MacCAN `libPCBUSB` 驱动接入；CI 与 Windows 并行构建后发布到同一个 Release。本次过渡版本暂时保留调试模拟入口。当前为 ad-hoc 签名，macOS 自动替换安装和 Apple 公证尚未接入。
 - 旧版本自动清理已接入：更新助手仍保留最近一份 `.old-<时间戳>` 备份；新版本成功启动后的下一次启动自动删除超过 15 分钟回退窗口的备份和更新临时目录（`startup_cleanup`，后台线程尽力而为），安装包卸载连带删除旧版本备份，历史版本不累积。
 - 界面 UI 与连接交互重构完成：左上角标题单行化（`CAN HOST`）；整车总览与整车风扇移除顶部冗余连接栏；底部把 CAN1、BMS CANB、整车 CANB 和开发模拟收成单行入口，RX/TX 合计与固件身份固定在右侧；BMS 主连接与整车连接保持独立。
 - 整车模拟器 SOP 发送周期已同步为 10ms，与 F405/BMS 新协议一致。
@@ -38,6 +39,8 @@
 ### 发布前必须完成
 
 - [ ] 在目标 Windows 10/11 和 WebView2 Runtime 上运行源码版本及PyInstaller产物。
+- [ ] 在另一台干净的 Apple Silicon Mac 上从 DMG 拖入“应用程序”，验证 Gatekeeper 首次打开、文件对话框和覆盖升级；调试模拟只做附加回归，不作为发布验收主项。
+- [ ] 安装 MacCAN `libPCBUSB` 0.13 或更新版，用实体 PCAN-USB 验证 CAN1/CANB 收发、双通道并发和命令应答。
 - [ ] 发布真实 Release 后做一次软件内更新端到端验证：旧版检查到新版、下载校验、退出安装、新版自动启动，并验证安装目录无写权限/新版本启动失败时的回滚。
 - [ ] 在干净 Windows 上实测 setup.exe：安装快捷方式、每用户目录、卸载入口；安装版走一次软件内更新，确认卸载入口保留、`.old-*` 备份 15 分钟后被下次启动自动清理、再次运行 setup.exe 覆盖安装不残留旧文件。
 - [ ] 更新器 401/403、404、私密仓库令牌保存/清除、私有仓库发布版下载校验在真实 GitHub 上验证一次。
@@ -92,6 +95,7 @@
 |---|---|---|
 | 尚未完成实体PCAN和F405台架验证 | 模拟数据不能证明驱动、总线时序和真实帧完全正确 | 按 `DOC/CAN上位机与工具使用.md` 完成台架检查并保存原始记录 |
 | 尚未验证Windows打包产物 | 目标电脑可能缺少WebView2、PCAN-Basic或打包资源 | 在干净目标机安装、启动并连接PCAN |
+| macOS DMG 仅在当前 arm64 开发机完成构建和驱动库加载验证 | 尚未连接实体适配器，第三方 MacCAN 驱动、Gatekeeper 和其他 M 系列系统版本仍可能存在差异 | 在干净 Apple Silicon Mac 安装 DMG，并用实体 PCAN 完成收发、双通道和命令应答测试 |
 | 通用原始帧发送无法识别所有外部节点命令 | 操作者填入未登记 ID 或错误物理总线时可能影响总线上其他节点 | 保持逐次确认与已知项目命令 ID 拦截；实体台架验证后由操作者只在明确总线和帧定义下使用 |
 | 长时间记录性能未实测 | 高帧率运行时可能出现磁盘或界面性能问题 | 完成长时间`.bmslog`/CSV记录与回放测试 |
 | 整车页各节点只有模拟数据验证 | ECU 10 ms 帧率、赛会能量计发送行为、胎温轮位、实车帧内容可能与模拟不同 | 实车 CANB 逐卡验证并记录实测帧 |
@@ -107,8 +111,11 @@
 
 | 日期 | 结果 | 尚未覆盖 |
 |---|---|---|
+| 2026-09-12 | 将远端 v0.9.1 更新事务/CNB 镜像的 17 个提交与本地 Apple Silicon macOS 发布链路完成语义合并；保留一次点击更新、页面健康回报和回滚机制，并接入 macOS arm64 打包、自检、驱动提示及双平台 GitHub/CNB 发布。补齐 CNB 在 GitHub API 限流时的双平台附件探测，兼容历史 Windows-only 发布并拒绝只有 DMG 或只有校验文件的残缺 macOS 发布。合并后 192 项单元测试通过（1 项按平台跳过），Python/JavaScript/Bash 语法、工作流 YAML 和差异格式检查通过；完整重建 v0.9.1 DMG，冻结包与挂载后双自检、`libPCBUSB` 加载、签名、镜像 CRC 和 SHA256 均通过。 | 双平台 GitHub Actions 与五附件 CNB 实际发布尚未触发；实体 PCAN-USB、干净 Apple Silicon Mac 和目标 Windows 10/11 仍需现场验收 |
 | 2026-09-12 | v0.9.1 更新事务与弹窗提示修正：隔离环境 187 项单元测试全绿，Windows PowerShell 5.1 实际解析嵌入助手脚本，PyInstaller one-folder 构建成功；在 `%TEMP%` 隔离目录实跑两条发布版交接链路。正常链路完成旧目录备份、新目录换入、发布版启动、UI 健康回报和成功确认；故障链路用错误预期版本触发健康不匹配，确认失败新进程被停止、旧目录标记文件恢复、旧版本重新启动且结果码为 `health_mismatch`。Edge/WebView 同内核 1460×920 渲染中打开连接弹窗并触发错误提示，确认 toast 宿主位于 `connectDialog`、高对比错误框完整处于弹窗内且背景遮罩保持模糊。全部 JavaScript 语法、Python 编译和差异格式检查通过 | 仍需用正式 v0.9.0 安装版通过真实 CNB/GitHub Release 升级到 v0.9.1，并在目标 Windows 10/11 实测安装目录权限、快捷方式与卸载入口 |
 | 2026-09-11 | 国内镜像链路接入并跑通：`cnb.cool/totok22/can-host` 已镜像 main 与全部 14 个标签，v0.9.0 的 ZIP/`.sha256`/setup.exe 已上传为 CNB 发布（哈希与 GitHub 侧 digest 逐一核对一致），更新频道 `cnb-update:latest.json` 匿名可读且三个附件匿名下载全部成功；真实更新器逻辑对 CNB 频道检查 0.92 s 命中 `source=cnb`，下载校验文件返回的 SHA256 与 GitHub 一致。CI 侧：`cnb-mirror.yml`（push 镜像分支标签、手工触发调用 `sync` 补做发布）与 CNB `.cnb.yml` 均实跑通过——CNB 侧单测 174 项全绿、API 触发的补镜像构建为 success；`release.yml` 在创建 GitHub Release 后用同一批附件同步 CNB 并刷新频道。CNB 构建节点实测会被 GitHub API 限流（共享出口 IP，HTTP 403），`sync` 已按标签与附件名约定兜底并跑通（"已是最新镜像，跳过下载与上传"）。新增 18 项 `cnb_publish` 测试与 6 项镜像源测试（含令牌不外发 CNB），更新器 28 项全绿，GitHub 与 CNB 上的 182 项全量测试通过 | `release.yml` 的 CNB 步骤要在下一次 `v*` 发布才实跑；CNB 每日定时任务待首次自动触发；Windows 发布版走 CNB 源实机更新仍待验证 |
+| 2026-09-05 | 深入复核 Apple Silicon macOS 发布链路：明确 Windows/macOS 包都面向实体 PCAN，调试模拟仅在本次过渡版本临时保留；冻结包自检增加 PCAN 后端导入和本机 `libPCBUSB` 实际加载，修正驱动缺失/加载失败提示，阻止 macOS 更新页下载无法安装的 Windows ZIP；发现 protobuf arm64 扩展最低要求 macOS 12，已把 DMG 最低系统版本从 11 修正为 12，并在构建脚本中自动核对全部 Mach-O 依赖。本机 160 项测试、Python/JavaScript/Bash 语法、工作流 YAML、完整 DMG 重建、冻结包驱动加载、签名、镜像校验、挂载后双自检和 SHA256 全部通过。 | 尚未接实体 PCAN-USB；需在干净 Apple Silicon Mac 完成收发、双通道并发和命令应答验收 |
+| 2026-09-04 | 新增 Apple Silicon macOS 发布链路：PyInstaller arm64 `.app`、ad-hoc 签名、LZMA DMG/SHA256、冻结包依赖自检和 GitHub Release 双平台并行构建；实体 PCAN 使用外部 MacCAN `libPCBUSB`，本次过渡版本暂时保留 BMS/整车调试模拟入口。本机用 arm64 Python 3.11 完成 159 项测试、冻结包自检、签名校验、原生窗口 5 秒存活、DMG 校验与镜像完整性验证；成品约 12 MB | 干净 Apple Silicon Mac 的拖入安装/Gatekeeper、实体 PCAN-USB 与 MacCAN 双通道收发、Apple Developer ID 公证 |
 | 2026-09-04 | 发布 v0.9.0：CAN 监视器完成通用化重构，按 ID 汇总、内容变体、周期/帧数/注释、自动留档、CSV 导出、历史回放和持久化单发/周期发送已接入；页面内部移除 CAN1/CANB 角色硬编码和 Python 清单入口，短标签强制单行；通用发送允许当前选择的任意真实 PCAN，同时拦截项目已知命令 ID。全套 157 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过 | 实体双 PCAN、Windows PyWebView 中的视觉和交互、长时间高负载记录、非默认物理总线发送 |
 | 2026-09-04 | 发布 v0.8.3 并打通安装包链路：`packaging/windows/canhost.iss` 每用户安装（`%LOCALAPPDATA%\Programs\BITFSAE_CAN_Host`、快捷方式、卸载器、安装/卸载均清空目录，卸载连带删 `.old-*`）；更新助手换目录后从备份复制回 `unins000.exe/.dat` 保住卸载入口；`startup_cleanup` 在新版下次启动时自动删除超 15 分钟回退窗口的备份与临时目录；`build_windows.ps1` 与 `release.yml` 统一产出 ZIP+SHA256+setup.exe。修复两次 CI 失败：无 BOM 的中文 ps1 被 Windows PowerShell 5.1 按 ANSI 误读出弯引号导致解析错误（ps1/iss 加 UTF-8 BOM，嵌入安装助手测试锚定纯 ASCII）；Inno [Code] 不支持 `ExcludeTrailingBackslash` 改用 `ExtractFilePath`。全套 148 项测试、Python 编译、全部 JavaScript 语法和差异格式检查通过；GitHub Actions 1m29s 构建成功，v0.8.3 正式 Release 附 ZIP（17.2 MB）、`.sha256` 与 setup.exe（15.4 MB），GitHub 资产 digest 与 `.sha256` 附件一致 | 干净 Windows 上的安装/覆盖安装/软件内更新/卸载全链路实机验证 |
 | 2026-09-04 | v0.8.2发布复核：同步F405告警开关帧版本7、23个动作位规范、从控全状态动作命名、4300mV默认过压、默认反转电流方向和统一350ms从控窗口；内置模拟器与页面提示同步。全套143项测试、Python编译、全部JavaScript语法和差异格式检查通过 | 实体PCAN写入降级动作开关并核对周期回报、Flash断电保存和F405实际保护动作 |
@@ -193,7 +200,7 @@
 
 #### 底栏单行连接与独立服务状态修正
 
-- 底栏压缩为一行：左侧依次为 CAN1、BMS CANB、整车 CANB 和仅源码开发态显示的模拟按钮；删除无明确对象的“…”按钮和重复的全局“未连接”文字；RX、TX 与固件身份移到同一行右侧。
+- 底栏压缩为一行：左侧依次为 CAN1、BMS CANB、整车 CANB 和开发模拟按钮；该按钮原先只在源码态显示，本次 macOS 过渡版本也临时保留，Windows 发布版仍隐藏；删除无明确对象的“…”按钮和重复的全局“未连接”文字；RX、TX 与固件身份移到同一行右侧。
 - CAN1/BMS CANB 只在 BMS 主服务内互斥，整车 CANB 保持独立，可使用另一 PCAN 通道并行连接；断开任一服务不再连带断开另一服务。
 - 三个真实连接按钮均按本机保存的通道/位率一键连接、再次点击断开；低频参数收进底栏最右侧的统一连接设置，CAN1 固定 500 kbit/s。模拟按钮统一启动/停止 BMS 与整车开发模拟源，并拒绝和真实 CAN 混用。
 - 删除运行总览顶部重复显示“CAN1 · BMS 主监视”的作用域条，连接状态只由底栏按钮表达。
@@ -206,7 +213,7 @@
 - 去掉本轮上一版总览和整车页的空态引导条（底部已有连接入口），避免重复提示。
 - 底部状态栏改为 CAN1、BMS CANB、整车 CANB 三个角色按钮；本版曾把三者错误做成全局单连接，已在 2026-09-03 修正为“BMS 主服务内部互斥、整车服务独立”。
 - CAN1 固定为 BMS 主监视（可写）；BMS CANB 走主 BMS 协议（0x4B0/0x4B1 镜像，只读，无 138 串）；整车 CANB 走车辆协议（SOP/PDM/ECU/风扇命令）。
-- 通道与位率在 2026-09-03 收进统一连接设置；开发用“模拟”按钮单独存放，发布版自动隐藏。
+- 通道与位率在 2026-09-03 收进统一连接设置；开发用“模拟”按钮单独存放。Windows 发布版自动隐藏，本次 macOS 过渡版本临时显示。
 - 原 BMS/整车连接弹窗在 2026-09-03 合并为低频设置弹窗，同时删除全局角色短状态并恢复两项连接独立显示。
 - 增加页内作用域提示：总览、CAN 监视器、参数与命令、整车风扇分别显示当前连接的实际用途；参数页在非 CAN1 时按钮降饱和但仍保留可点击（提交时后端继续拒绝），风扇页在非整车角色时明确提示需整车遥测。
 - 整车风扇页统一子块标题、面板表面、间距和按钮节奏；电池箱风扇增加“当前实际占空比 / 保存状态”独立状态值，取消重复的状态拼接；子块分段改用统一“标题 + 说明”结构。
@@ -446,7 +453,7 @@
 
 - 参数页压缩标题、输入框、开关行和维护命令行的高度；“系统参数与维护命令”和“需要谨慎的操作”拆成左右两个同级面板，Flash 保存状态移到顶部命令条件栏。
 - 充电请求回读拆成“请求值”和“充电机反馈”两个字段，分别表示主控保存的请求值与 Legacy/Chroma 充电机返回的实际值。
-- 源码运行仍保留内置模拟数据供开发；PyInstaller 发布版固定使用真实 PCAN，隐藏工作模式选择并排除模拟器模块。发布版使用说明补充 Python、PCAN-Basic/驱动和 WebView2 的安装边界。
+- 源码运行仍保留内置模拟数据供开发；当时仅有的 Windows PyInstaller 发布版固定使用真实 PCAN，隐藏工作模式选择并排除模拟器模块。发布版使用说明补充 Python、PCAN-Basic/驱动和 WebView2 的安装边界。
 
 #### 状态机、IMD 和保存状态再次精简
 
@@ -484,7 +491,7 @@
 - 底部状态栏统一为单行：连接项显示工作模式、总线用途和位率；RX/TX、固件身份和记录状态使用统一层级，回放使用黄色状态点，Legacy CANB 不重复显示 250k。
 - 移除工程参数文件（`.bmsproj`）功能：按钮、对话框、导出/导入接口和对应测试一并删除，简化顶部栏。
 - 固件新增独立构建日期帧`0x186C51F4`（经典CAN DLC 8：年-2000、月、日，北京时间），与身份帧同时发送；状态栏固件信息显示“变体 · Git · 构建日期”，旧固件不发该帧时不显示日期。
-- 首次验证 macOS 源码运行：Homebrew Python 3.14 虚拟环境安装 pywebview 6.2.1 与 python-can 4.6.1，`python -m TOOLS.bms_host` 正常打开原生窗口；macOS 无 PEAK 驱动，只能使用内置模拟数据。
+- 首次验证 macOS 源码运行：Homebrew Python 3.14 虚拟环境安装 pywebview 6.2.1 与 python-can 4.6.1，`python -m TOOLS.bms_host` 正常打开原生窗口；当时尚未安装 MacCAN `libPCBUSB`，只验证了内置模拟数据。
 
 #### 故障页和界面缩放复核
 

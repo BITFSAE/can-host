@@ -1,4 +1,4 @@
-name: 上位机 Windows 构建与发布
+name: 上位机 Windows 与 macOS 构建发布
 
 on:
   push:
@@ -14,7 +14,7 @@ env:
   CNB_REPO: totok22/can-host
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -54,67 +54,109 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: BITFSAE_CAN_Host_${{ steps.label.outputs.label }}
+          name: BITFSAE_CAN_Host_windows_${{ steps.label.outputs.label }}
           path: release/*
           if-no-files-found: error
 
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 核对构建架构
+        run: test "$(uname -m)" = "arm64"
+
+      - name: 计算产物标签
+        id: label
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            label="$GITHUB_REF_NAME"
+          else
+            label="${GITHUB_SHA:0:7}"
+          fi
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
+      - name: 运行测试、打包并生成 Apple Silicon DMG
+        run: bash build_macos.sh "${{ steps.label.outputs.label }}"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: BITFSAE_CAN_Host_macos_arm64_${{ steps.label.outputs.label }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: BITFSAE_CAN_Host_*
+          path: release
+          merge-multiple: true
+
       - name: 创建 GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "$env:GITHUB_REF_NAME"
-          $zip = "release/BITFSAE_CAN_Host_$tag.zip"
-          $checksum = "release/BITFSAE_CAN_Host_$tag.zip.sha256"
-          $setup = "release/BITFSAE_CAN_Host_${tag}_setup.exe"
-          $notes = @"
-          首次安装：下载 BITFSAE_CAN_Host_${tag}_setup.exe 双击安装。每用户安装、无需管理员，自动创建开始菜单和桌面快捷方式，可在 Windows「设置-应用」中卸载。
+          tag="$GITHUB_REF_NAME"
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+          Windows 首次安装：下载 BITFSAE_CAN_Host_${tag}_setup.exe。便携方式使用 BITFSAE_CAN_Host_${tag}.zip；已安装版本可从软件左下角执行软件内更新。
 
-          已安装旧版本：直接在上位机左下角版本入口检查更新，下载校验后一键重启安装新版本，无需重新运行安装包。
+          macOS Apple Silicon：下载 BITFSAE_CAN_Host_macOS_arm64_${tag}.dmg，将应用拖入“应用程序”。连接实体 PCAN-USB 前安装 0.13 或更新版、包含 arm64 的 MacCAN libPCBUSB；先用 MacCAN Monitor 验证适配器收发。此包为团队内部 ad-hoc 签名，未做 Apple 公证；首次启动如被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
 
-          便携方式：解压 BITFSAE_CAN_Host_${tag}.zip 后复制整个 BITFSAE_CAN_Host 文件夹到目标电脑，运行其中的 BITFSAE_CAN_Host.exe，不能只复制 exe；软件内更新使用同一 ZIP。
-
-          目标电脑需要先安装：
-
-          - PEAK PCAN-USB 驱动（含 PCAN-Basic 运行组件）
-          - Microsoft Edge WebView2 Runtime
-
-          发布版只支持真实 PCAN，不包含源码运行用的内置模拟器。
-          "@
-          if (gh release view $tag) {
-            gh release upload $tag $zip $checksum $setup --clobber
-          } else {
-            # 版本号后带 -rc1 / -pre 等后缀的标签创建为 GitHub 预发布（Pre-release）。
-            $extra = @()
-            if ($tag.Substring('v'.Length).Contains('-')) { $extra += '--prerelease' }
-            gh release create $tag $zip $checksum $setup --title $tag --notes "$notes" @extra
-          }
+          两个平台的发布包都用于实体 PCAN 联调。Windows 安装 PEAK PCAN-Basic 与驱动；macOS 安装 MacCAN libPCBUSB。本次 macOS 过渡版本暂时保留调试模拟入口，它不能代替驱动、接线和实际总线验证；Windows 发布版不包含模拟器。
+          EOF
+          prerelease=()
+          if [[ "${tag#v}" == *-* ]]; then prerelease+=(--prerelease); fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --notes-file "$notes_file"
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" release/* --title "$tag" --notes-file "$notes_file" "${prerelease[@]}"
+          fi
 
       - name: 同步发布产物到 CNB 镜像
-        # 上传与 GitHub Release 完全相同的一批文件（同名附件覆盖），并刷新上位机
-        # 在国内匿名读取的更新频道。这里失败等于发布失败：镜像落后会让国内用户
-        # 检查更新时停在旧版本，所以不降级为警告。
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
+        # 上传与 GitHub Release 完全相同的 Windows/macOS 附件，并刷新上位机
+        # 在国内匿名读取的更新频道。镜像落后会让国内用户停在旧版本，因此失败即发布失败。
+        shell: bash
         env:
-          # 步骤级 env 会整体替换作业级 env，GH_TOKEN 必须在这里再声明一次，
-          # 否则 `gh release view` 读不到元数据，发布附件同步会直接失败。
           GH_TOKEN: ${{ github.token }}
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
-          if (-not $env:CNB_TOKEN) { throw "仓库缺少 Actions secret CNB_TOKEN，无法同步到 CNB 镜像。" }
-          $tag = "$env:GITHUB_REF_NAME"
-          $metadata = "release/github-release.json"
-          gh release view $tag --repo "$env:GITHUB_REPOSITORY" `
-            --json tagName,name,body,publishedAt,isPrerelease > $metadata
-          $assets = @(
-            "release/BITFSAE_CAN_Host_$tag.zip",
-            "release/BITFSAE_CAN_Host_$tag.zip.sha256",
-            "release/BITFSAE_CAN_Host_${tag}_setup.exe"
-          )
-          $arguments = @("scripts/cnb_publish.py", "publish", "--repo", "$env:CNB_REPO",
-                         "--tag", $tag, "--metadata-json", $metadata)
-          foreach ($asset in $assets) { $arguments += @("--asset", $asset) }
-          python @arguments
-          if ($LASTEXITCODE -ne 0) { throw "CNB 镜像同步失败（退出码 $LASTEXITCODE）。" }
+          set -euo pipefail
+          if [[ -z "${CNB_TOKEN:-}" ]]; then
+            echo "::error::仓库缺少 Actions secret CNB_TOKEN，无法同步到 CNB 镜像"
+            exit 1
+          fi
+          tag="$GITHUB_REF_NAME"
+          metadata="release/github-release.json"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,name,body,publishedAt,isPrerelease > "$metadata"
+          mapfile -t assets < <(find release -maxdepth 1 -type f ! -name 'github-release.json' -print | sort)
+          if [[ ${#assets[@]} -ne 5 ]]; then
+            echo "::error::预期 5 个双平台发布附件，实际找到 ${#assets[@]} 个"
+            printf '%s\n' "${assets[@]}"
+            exit 1
+          fi
+          arguments=(scripts/cnb_publish.py publish --repo "$CNB_REPO" \
+                     --tag "$tag" --metadata-json "$metadata")
+          for asset in "${assets[@]}"; do arguments+=(--asset "$asset"); done
+          python "${arguments[@]}"

@@ -4,11 +4,11 @@
 
 | 要做什么 | 看哪份 |
 |---|---|
-| 安装、运行、打包发布上位机 | [`../README.md`](../README.md) |
+| 安装、运行、打包发布 Windows/macOS 上位机 | [`../README.md`](../README.md) |
 | 使用某个页面（BMS 四页 / 整车总览 / 整车风扇 / 遥测故障 / 台架 / IVT 配置） | [`CAN上位机与工具使用.md`](CAN上位机与工具使用.md) |
 | 标定或手动调试整车风扇、电池箱风扇 | [`风扇标定与手动调试指南.md`](风扇标定与手动调试指南.md) |
 | 软件内检查、下载和安装发布（CNB 国内镜像优先，GitHub 回退） | [`CAN上位机与工具使用.md`](CAN上位机与工具使用.md) 第 10 节 |
-| 发布产物镜像到 CNB、维护国内更新频道 | [`../README.md`](../README.md) 的“CI 自动构建与发布”，脚本 `scripts/cnb_publish.py` |
+| 将 Windows/macOS 发布产物镜像到 CNB、维护国内更新频道 | [`../README.md`](../README.md) 的“CI 自动构建与发布”，脚本 `scripts/cnb_publish.py` |
 | 查某个 CAN 帧的字段、字节序、缩放 | 对应固件仓库协议文档（见下表）；上位机解码定义在 `canhost/decoders.py` |
 | 查上位机进度、风险、待验证项 | [`../todo.md`](../todo.md) |
 

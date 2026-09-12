@@ -222,9 +222,12 @@ function updaterRenderUpdaterStatus() {
   const prerelease = $("#updaterPrerelease");
   if (prerelease) prerelease.disabled = ["checking", "downloading", "installing"].includes(stateName);
   const autoNote = $("#updaterAutoNote");
+  const frozenMac = state.bootstrap?.frozen === true && state.bootstrap?.runtime_platform === "darwin";
   if (autoNote) autoNote.textContent = installSupported
     ? "公开仓库默认方案：启动时自动检查一次正式版；优先 CNB 国内镜像，失败回退 GitHub；发现更新不会自动下载。"
-    : "当前为源码运行，只能检查发布（优先 CNB 国内镜像），不能替换安装目录。";
+    : frozenMac
+      ? "macOS 发布版只检查版本（优先 CNB 国内镜像）；升级请下载对应 DMG 后覆盖安装。"
+      : "当前为源码运行，只能检查发布（优先 CNB 国内镜像），不能替换安装目录。";
   const repoNode = $("#updaterRepo");
   if (repoNode) repoNode.textContent = state.bootstrap?.updater_repo || "BITFSAE/can-host";
   const sourceNode = $("#updaterSource");

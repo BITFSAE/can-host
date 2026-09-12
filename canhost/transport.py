@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 import threading
 import time
 from collections import deque
@@ -147,11 +148,18 @@ class CanService:
                 self.connection.update({"connected": True, "status": status, "error": None})
             return {"ok": True, "connection": dict(self.connection)}
         except Exception as exc:
+            error = str(exc)
+            if sys.platform == "darwin" and "PCBUSB library not found" in error:
+                error = ("macOS 未找到 MacCAN PCBUSB 驱动库；请安装 0.13 或更新版、"
+                         "包含 arm64 的 libPCBUSB 到 /usr/local/lib 后重新连接")
+            elif sys.platform == "darwin" and "PCAN-Basic API could not be loaded" in error:
+                error = ("macOS 无法加载 MacCAN PCBUSB 驱动库；请确认 libPCBUSB 为 0.13 "
+                         "或更新版、包含 arm64、位于 /usr/local/lib，并用 MacCAN Monitor 验证驱动安装")
             self.disconnect()
             with self.lock:
-                self.connection.update({"status": "连接失败", "error": str(exc), "mode": mode, "channel": channel,
+                self.connection.update({"status": "连接失败", "error": error, "mode": mode, "channel": channel,
                                         "bitrate": bitrate, "bus_profile": profile})
-            return {"ok": False, "error": str(exc), "connection": dict(self.connection)}
+            return {"ok": False, "error": error, "connection": dict(self.connection)}
 
     def disconnect(self) -> dict[str, Any]:
         self.stop_event.set()

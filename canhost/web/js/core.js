@@ -418,7 +418,7 @@ async function toggleSimulationChannels() {
   } finally {
     setBusConnecting("simulation", false);
   }
-  toast("开发模拟通道已启动");
+  toast("临时调试模拟通道已启动；实车与台架验证请使用实体 PCAN");
   await poll();
 }
 
