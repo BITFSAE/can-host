@@ -16,12 +16,19 @@ from canhost.vehicle.calibration import FanCalibrationSession, BatteryFanCalibra
 class FanControllerToolTest(unittest.TestCase):
     def test_battery_fan_calibration_safety_and_cap_calculation_helpers(self) -> None:
         snap = {
-            "connection": {"connected": True, "mode": "pcan"},
-            "pack": {"age": 0.1, "state": 5},
-            "pdm": {"bus": {"offline": False, "age": 0.1, "current_a": 3.0}},
-            "battery_fan": {"status_age": 0.1, "status": {
+            "connection": {"connected": True, "mode": "pcan",
+                           "bus_profile": "canb", "bitrate": 500000},
+            "pack": {"age": 0.1, "state": 5, "temperature_complete": True},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "voltage_v": 24.0,
+                            "current_a": 3.0, "power_w": 72.0}},
+            "battery_fan": {"status_age": 0.1, "calibration_age": 0.1,
+                            "calibration": {"calib_state": 1, "step": 1,
+                                            "target_duty_pct": 20, "chroma_budget_w": 35,
+                                            "hv_budget_w": 70}, "status": {
                 "power_source": 2, "power_source_name": "高压/DCDC 70W",
-                "flags": {"stall_confirmed": False},
+                "protocol_version": 1,
+                "flags": {"hardware_ready": True, "stall_confirmed": False,
+                          "calibration_active": True},
             }},
         }
         session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
@@ -31,6 +38,9 @@ class FanControllerToolTest(unittest.TestCase):
         snap["pack"]["state"] = 5
         snap["battery_fan"]["status"]["flags"]["stall_confirmed"] = True
         self.assertIn("停转", session._safety_error(snap, 18.0))
+        snap["battery_fan"]["status"]["flags"]["stall_confirmed"] = False
+        snap["pack"]["temperature_complete"] = False
+        self.assertIn("温度", session._safety_error(snap, 18.0))
         summary = session._median([{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 2000.0}] * 10)
         self.assertEqual({key: summary[key] for key in ("v", "i", "p", "rpm")},
                          {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 2000.0})
@@ -242,6 +252,20 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(snapshot["fan"]["status"]["rpm"], [3000, 3400, 0])
         self.assertIn("ack_history", snapshot["fan"])
 
+    def test_calibration_status_generations_advance_only_on_received_frames(self) -> None:
+        protocol = VehicleProtocol()
+        initial = protocol.snapshot({"connected": True})
+        self.assertEqual(initial["fan"]["calib_status_generation"], 0)
+        self.assertEqual(initial["battery_fan"]["status_generation"], 0)
+        self.assertEqual(initial["battery_fan"]["calibration_generation"], 0)
+        protocol.ingest(CanFrame(0x5A9, bytes.fromhex("01 02 14 1E 0F 01 00 00"), False))
+        protocol.ingest(CanFrame(0x5AA, bytes.fromhex("0B B8 28 37 09 E7 0A 01"), False))
+        protocol.ingest(CanFrame(0x5AD, bytes.fromhex("03 23 46 23 46 01 02 28"), False))
+        snapshot = protocol.snapshot({"connected": True})
+        self.assertEqual(snapshot["fan"]["calib_status_generation"], 1)
+        self.assertEqual(snapshot["battery_fan"]["status_generation"], 1)
+        self.assertEqual(snapshot["battery_fan"]["calibration_generation"], 1)
+
     def test_send_fan_command_preconditions(self) -> None:
         service = CanService(protocol_kind="vehicle")
         try:
@@ -255,6 +279,68 @@ class FanControllerToolTest(unittest.TestCase):
             result = service.send_fan_command("fan_query", {}, True)
             self.assertFalse(result["ok"])
             self.assertIn("只允许使用真实 PCAN", result["error"])
+        finally:
+            service.disconnect()
+
+    def test_fan_writes_reject_legacy_250k_profile(self) -> None:
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.connection.update({"connected": True, "mode": "pcan",
+                                       "bus_profile": "canb_legacy", "bitrate": 250000})
+            fan = service.send_fan_command("fan_query", {}, True)
+            battery = service.send_battery_fan_command("battery_fan_query", {}, True)
+            self.assertFalse(fan["ok"])
+            self.assertFalse(battery["ok"])
+            self.assertIn("500 kbit/s", fan["error"])
+            self.assertIn("500 kbit/s", battery["error"])
+        finally:
+            service.disconnect()
+
+    def test_disconnect_attempts_safe_stop_before_invalidating_sessions(self) -> None:
+        events: list[str] = []
+
+        class FakeSession:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def is_running(self) -> bool:
+                return True
+
+            def abort(self, reason: str = "") -> dict:
+                events.append(f"{self.name}:abort:{reason}")
+                return {"ok": True}
+
+            def cancel_for_disconnect(self) -> None:
+                events.append(f"{self.name}:invalidate")
+
+        service = CanService(protocol_kind="vehicle")
+        service.fan_calib_session = FakeSession("fan")  # type: ignore[assignment]
+        service.battery_fan_calib_session = FakeSession("battery")  # type: ignore[assignment]
+        service.disconnect()
+        self.assertEqual(events, [
+            "fan:abort:整车 CANB 正在断开", "fan:invalidate",
+            "battery:abort:整车 CANB 正在断开", "battery:invalidate",
+        ])
+
+    def test_two_automatic_fan_calibrations_are_mutually_exclusive(self) -> None:
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.battery_fan_calib_session.status = "running"
+            blocked = service.send_fan_command("fan_query", {}, True)
+            self.assertFalse(blocked["ok"])
+            self.assertIn("PDM", blocked["error"])
+            blocked_start = service.start_fan_calibration()
+            self.assertFalse(blocked_start["ok"])
+            self.assertIn("不能同时", blocked_start["error"])
+
+            service.battery_fan_calib_session.status = "idle"
+            service.fan_calib_session.status = "running"
+            blocked = service.send_battery_fan_command("battery_fan_query", {}, True)
+            self.assertFalse(blocked["ok"])
+            self.assertIn("PDM", blocked["error"])
+            blocked_start = service.start_battery_fan_calibration()
+            self.assertFalse(blocked_start["ok"])
+            self.assertIn("不能同时", blocked_start["error"])
         finally:
             service.disconnect()
 
@@ -396,6 +482,257 @@ class FanControllerToolTest(unittest.TestCase):
         # 没有有效数据时返回 None，不应生成 15% 的假建议。
         self.assertIsNone(session._max_safe_duty([], "dcdc"))
 
+        # 非单调结果不能跨过失败点：40% 超预算后，即使 60% 偶然回落也只能推荐 20%。
+        non_monotonic = [
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 20,
+             "rpm3": 2000, "current_a": 10.0},
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 40,
+             "rpm3": 2000, "current_a": 18.5},
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 60,
+             "rpm3": 2000, "current_a": 17.0},
+        ]
+        self.assertEqual(session._max_safe_duty(non_monotonic, "dcdc"), 20)
+        non_monotonic[1]["current_a"] = float("nan")
+        self.assertEqual(session._max_safe_duty(non_monotonic, "dcdc"), 20)
+        startup_dead_zone = [
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 5,
+             "rpm3": 0, "current_a": 3.0},
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 10,
+             "rpm3": 1800, "current_a": 4.0},
+            {"tier": "dcdc", "channel": 2, "duty2_pct": 20,
+             "rpm3": 2200, "current_a": 5.0},
+        ]
+        self.assertEqual(session._max_safe_duty(startup_dead_zone, "dcdc"), 20)
+
+    def test_fan_cap_requires_both_loops_and_battery_fan_has_no_fake_default(self) -> None:
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        session.channel_caps["dcdc"][1] = 40
+        values = list(session.channel_caps["dcdc"].values())
+        self.assertFalse(all(value is not None for value in values))
+        session.channel_caps["dcdc"][2] = 55
+        values = list(session.channel_caps["dcdc"].values())
+        self.assertEqual(min(values), 40)
+
+        battery = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        self.assertIsNone(battery.suggested_caps["chroma_cap_pct"])
+        self.assertIsNone(battery.suggested_caps["hv_cap_pct"])
+        battery_records = [
+            {"duty_pct": 20, "delta_power_w": 20.0, "rpm": 1800},
+            {"duty_pct": 40, "delta_power_w": 40.0, "rpm": 2200},
+            {"duty_pct": 60, "delta_power_w": 30.0, "rpm": 2500},
+        ]
+        self.assertEqual(battery._max_safe_duty(battery_records, 35.0), 20)
+
+    def test_calibration_parameter_and_stop_validation(self) -> None:
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: _calib_snap())
+        self.assertFalse(session.start_sweep(steps=[0, 20, 10])["ok"])
+        self.assertFalse(session.start_sweep(steps=[0, 10, 10])["ok"])
+        self.assertFalse(session.start_sweep(hold_s=float("nan"))["ok"])
+        self.assertFalse(session.abort()["ok"])
+
+        battery = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        self.assertFalse(battery.start(steps=[0, 20, 10])["ok"])
+        self.assertFalse(battery.start(hold_s=float("nan"))["ok"])
+        self.assertFalse(battery.abort()["ok"])
+
+    def test_battery_fan_safety_requires_live_session_and_valid_measurements(self) -> None:
+        snap = {
+            "connection": {"connected": True, "mode": "pcan",
+                           "bus_profile": "canb", "bitrate": 500000},
+            "pack": {"age": 0.1, "state": 5, "temperature_complete": True},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "voltage_v": 24.0,
+                            "current_a": 3.0, "power_w": 72.0}},
+            "battery_fan": {"status_age": 0.1, "calibration_age": 0.1,
+                            "calibration": {"calib_state": 0, "chroma_budget_w": 35,
+                                            "hv_budget_w": 70}, "status": {
+                "power_source": 2,
+                "protocol_version": 1,
+                "flags": {"hardware_ready": True, "stall_confirmed": False,
+                          "calibration_active": False},
+            }},
+        }
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        self.assertIn("未处于活动", session._safety_error(snap, 18.0, True))
+        snap["pdm"]["bus"]["power_w"] = float("nan")
+        self.assertIn("无效", session._safety_error(snap, 18.0))
+
+    def test_battery_fan_step_sampling_retries_once_before_aborting(self) -> None:
+        """最小 hold 的 1s 采样窗样本不足时延长一轮，而不是直接中止整次扫频。"""
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        baseline = {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0, "std_i": 0.0,
+                    "std_p": 0.0, "baseline_id": 1, "step": 0}
+        session._measure_baseline = lambda step, current, start: (dict(baseline), None)
+        session._wait_for_active = lambda *args, **kwargs: None
+        session._wait_for_completed = lambda **kwargs: None
+        windows: list[float] = []
+
+        def fake_samples(seconds, current, expected_step, expected_duty):
+            windows.append(seconds)
+            # settle(2s) 结果被丢弃；正式的 1s 窗只给 5 个样本（低于 10 个门槛）。
+            count = 5 if len(windows) == 2 else 12
+            return [{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 1500.0}] * count, None
+
+        session._samples = fake_samples
+        session.status = "running"
+        session._run(steps=[50], hold_s=3.0, max_current_a=18.0)
+        self.assertEqual(session.status, "completed")
+        self.assertEqual(windows, [2.0, 1.0, 2.0])
+        self.assertEqual(len(session.records), 1)
+        self.assertEqual(session.records[0]["duty_pct"], 50)
+
+        # 延长一轮后仍然不足才允许中止，且中止文案保留手动恢复路径。
+        always_short = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        always_short._measure_baseline = lambda step, current, start: (dict(baseline), None)
+        always_short._wait_for_active = lambda *args, **kwargs: None
+        always_short._wait_for_completed = lambda **kwargs: None
+        always_short._samples = lambda seconds, current, step, duty: (
+            [{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 1500.0}] * 4, None)
+        always_short.status = "running"
+        always_short._run(steps=[50], hold_s=3.0, max_current_a=18.0)
+        self.assertEqual(always_short.status, "aborted")
+        self.assertIn("样本不足", always_short.abort_reason)
+
+    def test_calibration_rejects_nonfinite_dcdc_and_temperature_values(self) -> None:
+        snap = _calib_snap()
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        snap["pdm"]["battery"]["current_a"] = float("nan")
+        ready, error = session._dcdc_ready_by_measurement(snap)
+        self.assertFalse(ready)
+        self.assertIn("无效", error)
+        snap["pdm"]["battery"]["current_a"] = 0.1
+        snap["fan"]["diagnostic"]["motor_temp_c"] = float("nan")
+        self.assertIn("温度无效", session.check_preconditions()["error"])
+        snap["fan"]["diagnostic"]["motor_temp_c"] = 45.0
+        snap["fan"]["status_age"] = float("nan")
+        self.assertIn("0x5A2", session.check_preconditions()["error"])
+
+    def test_start_current_must_also_fit_user_protection_limit(self) -> None:
+        snap = _calib_snap(state=1, bus_current=6.0, bat_current=3.0,
+                           bus_v=23.5, bat_v=23.5)
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        result = session.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                     max_current_a=5.0, tier="battery")
+        self.assertFalse(result["ok"])
+        self.assertIn("5.0 A", result["error"])
+
+    def test_status_confirmation_rejects_pre_command_generations(self) -> None:
+        fan_snap = _calib_snap()
+        fan_snap["fan"].update({
+            "calib_status_generation": 4,
+            "calib_status_age": 0.1,
+            "calib_status": {"calib_state": 1, "step": 2,
+                             "calib_target_pct": [20, 0], "lease_remaining_s": 10},
+        })
+        fan = FanCalibrationSession(lambda *_: {"ok": True}, lambda: fan_snap)
+        stale = fan._wait_for_calib_state(
+            1, 2, 20, 0, after_generation=4, timeout_s=0.06)
+        self.assertIn("新0x5A9", stale)
+        fan_snap["fan"]["calib_status_generation"] = 5
+        self.assertIsNone(fan._wait_for_calib_state(
+            1, 2, 20, 0, after_generation=4, timeout_s=0.06))
+
+        battery_snap = {
+            "connection": {"connected": True, "mode": "pcan",
+                           "bus_profile": "canb", "bitrate": 500000},
+            "pack": {"age": 0.1, "state": 5, "temperature_complete": True},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "voltage_v": 24.0,
+                            "current_a": 3.0, "power_w": 72.0}},
+            "battery_fan": {"status_age": 0.1, "calibration_age": 0.1,
+                            "status_generation": 8, "calibration_generation": 9,
+                            "calibration": {"calib_state": 1, "step": 3,
+                                            "target_duty_pct": 30,
+                                            "chroma_budget_w": 35, "hv_budget_w": 70},
+                            "status": {"power_source": 2, "protocol_version": 1,
+                                       "lease_remaining_s": 10,
+                                       "flags": {"hardware_ready": True,
+                                                 "stall_confirmed": False,
+                                                 "calibration_active": True}}},
+        }
+        battery = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: battery_snap)
+        battery.run_params = {"max_current_a": 18.0}
+        stale = battery._wait_for_active(
+            3, 30, after_status_generation=8, after_calibration_generation=9,
+            timeout_s=0.06)
+        self.assertIn("确认标定目标", stale)
+        battery_snap["battery_fan"]["status_generation"] = 9
+        battery_snap["battery_fan"]["calibration_generation"] = 10
+        self.assertIsNone(battery._wait_for_active(
+            3, 30, after_status_generation=8, after_calibration_generation=9,
+            timeout_s=0.06))
+
+    def test_disconnect_invalidates_recommendations_but_keeps_export_records(self) -> None:
+        fan = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        fan.status = "completed"
+        fan.records = [{"step": 1}]
+        fan.suggested_caps = {"battery_cap_pct": 30, "dcdc_cap_pct": 50}
+        fan.channel_caps["battery"] = {1: 30, 2: 35}
+        fan.cancel_for_disconnect()
+        self.assertEqual(fan.status, "stale")
+        self.assertEqual(fan.records, [{"step": 1}])
+        self.assertIsNone(fan.suggested_caps["battery_cap_pct"])
+        self.assertNotIn("raw_samples", fan.get_snapshot())
+
+        battery = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        battery.status = "completed"
+        battery.records = [{"step": 1}]
+        battery.suggested_caps = {"chroma_cap_pct": 30, "hv_cap_pct": 50}
+        battery.cancel_for_disconnect()
+        self.assertEqual(battery.status, "stale")
+        self.assertEqual(battery.records, [{"step": 1}])
+        self.assertIsNone(battery.suggested_caps["hv_cap_pct"])
+
+    def test_new_sweep_waits_for_old_worker_and_invalidates_rerun_result(self) -> None:
+        class StuckWorker:
+            def __init__(self) -> None:
+                self.joined = False
+
+            def is_alive(self) -> bool:
+                return True
+
+            def join(self, timeout: float) -> None:
+                self.joined = True
+
+        fan = FanCalibrationSession(lambda *_: {"ok": True}, lambda: _calib_snap())
+        stuck = StuckWorker()
+        fan._thread = stuck  # type: ignore[assignment]
+        fan.status = "aborted"
+        fan._stop_event.set()
+        blocked = fan.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                  max_current_a=18.0, tier="dcdc")
+        self.assertFalse(blocked["ok"])
+        self.assertIn("尚未安全退出", blocked["error"])
+        self.assertTrue(stuck.joined)
+        self.assertTrue(fan._stop_event.is_set(), "旧线程未退出时不得清除停止信号")
+
+        battery = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        battery_stuck = StuckWorker()
+        battery._thread = battery_stuck  # type: ignore[assignment]
+        battery.status = "aborted"
+        battery._stop_event.set()
+        blocked = battery.start(steps=[0], hold_s=3.0, max_current_a=18.0)
+        self.assertFalse(blocked["ok"])
+        self.assertIn("尚未安全退出", blocked["error"])
+        self.assertTrue(battery._stop_event.is_set())
+
+        # Once the prior worker is gone, a rerun is allowed, but its loop's old
+        # recommendation is invalidated before the new worker starts.
+        snap = _calib_snap(state=1, bus_current=3.0, bat_current=3.0,
+                           bus_v=23.5, bat_v=23.5)
+        fan = FanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        fan.status = "aborted"
+        fan._stop_event.set()
+        fan.channel_caps["battery"] = {1: 30, 2: 35}
+        fan.suggested_caps = {"battery_cap_pct": 30, "dcdc_cap_pct": 50}
+        try:
+            started = fan.start_sweep(channel=1, steps=[0], hold_s=3.0,
+                                      max_current_a=8.0, tier="battery")
+            self.assertTrue(started["ok"], started)
+            self.assertIsNone(fan.channel_caps["battery"][1])
+            self.assertIsNone(fan.suggested_caps["battery_cap_pct"])
+            self.assertEqual(fan.suggested_caps["dcdc_cap_pct"], 50)
+        finally:
+            fan._stop_event.set()
+
     def test_calibration_preconditions_require_real_pcan_and_fresh_fan_frames(self) -> None:
         sent_commands = []
         def fake_send(name, vals, ack):
@@ -414,7 +751,8 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("真实 PCAN", result["error"])
 
-        fake_snap["connection"] = {"mode": "pcan", "connected": True}
+        fake_snap["connection"] = {"mode": "pcan", "connected": True,
+                                   "bus_profile": "canb", "bitrate": 500000}
         fake_snap["fan"] = {
             "status": {"rpm": [3000, 3000, 0]},
             "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
@@ -461,17 +799,33 @@ class FanControllerToolTest(unittest.TestCase):
 
     def test_calibration_abort_uses_acknowledged_stop_and_auto(self) -> None:
         sent = []
+        post_ack_status = {"polls_until_frame": 0}
         def fake_send(name, vals, ack):
             sent.append((name, vals, ack))
+            if name == "fan_calib" and vals.get("action") == 3:
+                post_ack_status["polls_until_frame"] = 2
             return {"ok": True}
+        def snapshot():
+            if post_ack_status["polls_until_frame"] > 0:
+                post_ack_status["polls_until_frame"] -= 1
+            if post_ack_status["polls_until_frame"] == 0 and "calib_status" not in fake_snap["fan"]:
+                fake_snap["fan"]["calib_status"] = {
+                    "calib_state": 3, "step": 0, "calib_target_pct": [0, 0],
+                    "lease_remaining_s": 0,
+                }
+                fake_snap["fan"]["calib_status_age"] = 0.1
+                fake_snap["fan"]["calib_status_generation"] += 1
+            return fake_snap
         fake_snap = {
-            "connection": {"mode": "pcan", "connected": True},
+            "connection": {"mode": "pcan", "connected": True,
+                           "bus_profile": "canb", "bitrate": 500000},
             "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
                             "age": 0.1, "offline": False}},
             "fan": {"status": {}, "diagnostic": {}, "power_status": {},
+                    "calib_status_generation": 0,
                     "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1},
         }
-        session = FanCalibrationSession(fake_send, lambda: fake_snap)
+        session = FanCalibrationSession(fake_send, snapshot)
         session.status = "running"
         result = session.abort("测试中止")
         self.assertTrue(result["ok"], result)
@@ -580,7 +934,8 @@ def _calib_snap(*, bus_current: float = 2.0, bus_offline: bool = False,
                 ctrl_temp: float | None = 40.0) -> dict:
     """构造标定测试用的整车快照；PDM 双路都给出，满足 DCDC 实测判据。"""
     return {
-        "connection": {"mode": "pcan", "connected": True},
+        "connection": {"mode": "pcan", "connected": True,
+                       "bus_profile": "canb", "bitrate": 500000},
         "pdm": {
             "bus": {"voltage_v": bus_v, "current_a": bus_current, "power_w": 48.0,
                     "age": 0.1, "offline": bus_offline},
@@ -592,7 +947,9 @@ def _calib_snap(*, bus_current: float = 2.0, bus_offline: bool = False,
             "diagnostic": {"faults": faults, "motor_temp_c": motor_temp,
                            "controller_temp_c": ctrl_temp},
             "power_status": {"power_supply_state": state, "power_supply_name": "DCDC就绪"},
+            "calib_limits": {"protocol_version": 3},
             "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+            "calib_limits_age": 0.1,
         },
     }
 
@@ -605,14 +962,19 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
             return {"ok": True}
         def snapshot(offline=False, state=3, current=2.0, motor=45.0, ctrl=40.0, faults=0):
             return {
-                "connection": {"mode": "pcan", "connected": True},
+                "connection": {"mode": "pcan", "connected": True,
+                               "bus_profile": "canb", "bitrate": 500000},
                 "pdm": {"bus": {"voltage_v": 24.0, "current_a": current, "power_w": 48.0,
                                 "age": 0.1, "offline": offline}},
                 "fan": {
                     "status": {"rpm": [3000, 3000, 0]},
                     "diagnostic": {"faults": faults, "motor_temp_c": motor, "controller_temp_c": ctrl},
                     "power_status": {"power_supply_state": state, "power_supply_name": "DCDC就绪"},
+                    "calib_status": {"calib_state": 1, "calib_state_name": "标定中",
+                                     "step": 2, "calib_target_pct": [20, 0],
+                                     "lease_remaining_s": 10},
                     "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+                    "calib_status_age": 0.1,
                 },
             }
         session = FanCalibrationSession(fake_send, snapshot)
@@ -625,19 +987,25 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
         # 温度失联或温度无效时必须中止，否则标定在没有温度保护的情况下继续。
         self.assertIn("温度输入失联", session._watchdog(snapshot(faults=0x18), 18.0))
         self.assertIn("温度无效", session._watchdog(snapshot(motor=None, ctrl=None), 18.0))
+        self.assertIn("外部改写", session._watchdog(
+            snapshot(), 18.0, expected_step=3, expected_duties=(20, 0)))
 
     def test_watchdog_keeps_selected_battery_tier(self) -> None:
         """重复采样路径也必须使用所选档位，不能把电池档误当成 DCDC 放行。"""
         session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
         snap = {
-            "connection": {"mode": "pcan", "connected": True},
+            "connection": {"mode": "pcan", "connected": True,
+                           "bus_profile": "canb", "bitrate": 500000},
             "pdm": {"bus": {"voltage_v": 24.0, "current_a": 2.0, "power_w": 48.0,
                             "age": 0.1, "offline": False}},
             "fan": {
                 "status": {"rpm": [3000, 3000, 0]},
                 "diagnostic": {"faults": 0, "motor_temp_c": 45.0, "controller_temp_c": 40.0},
                 "power_status": {"power_supply_state": 3, "power_supply_name": "DCDC就绪"},
+                "calib_status": {"calib_state": 1, "step": 2,
+                                 "calib_target_pct": [20, 0], "lease_remaining_s": 10},
                 "status_age": 0.1, "diagnostic_age": 0.1, "power_status_age": 0.1,
+                "calib_status_age": 0.1,
             },
         }
         self.assertIn("档位", session._watchdog(snap, 8.0, expected_state=1))

@@ -12,6 +12,12 @@ from canhost.vehicle.simulator import VehicleSimulator
 
 
 class VehicleProtocolTest(unittest.TestCase):
+    def test_pack_status_accepts_firmware_seven_byte_dlc(self) -> None:
+        protocol = VehicleProtocol()
+        protocol.ingest(CanFrame(0x4B0, bytes.fromhex("01 F4 FF F6 50 1F 50"), False))
+        self.assertEqual(protocol.pack["state"], 5)
+        self.assertTrue(protocol.pack["temperature_complete"])
+
     def test_pack_and_fault_strip(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x4B0, bytes.fromhex("16 44 00 0A 4E 1F 50"), False))

@@ -290,11 +290,16 @@ class Api:
         return self._vehicle_service.send_battery_fan_command(name, values, acknowledged)
 
     def start_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "error": "标定参数必须是对象"}
         opts = options or {}
-        channel = int(opts.get("channel", 1))
+        try:
+            channel = int(opts.get("channel", 1))
+            hold_s = float(opts.get("hold_s", 6.0))
+            max_current_a = float(opts.get("max_current_a", 18.0))
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "标定通道、保持时间或电流保护参数无效"}
         steps = opts.get("steps")
-        hold_s = float(opts.get("hold_s", 6.0))
-        max_current_a = float(opts.get("max_current_a", 18.0))
         tier = str(opts.get("tier", "dcdc"))
         return self._vehicle_service.start_fan_calibration(
             channel, steps, hold_s, max_current_a, tier)
@@ -321,10 +326,16 @@ class Api:
         return self._vehicle_service.export_fan_calibration(format_type)
 
     def start_battery_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "error": "标定参数必须是对象"}
         opts = options or {}
+        try:
+            hold_s = float(opts.get("hold_s", 5.0))
+            max_current_a = float(opts.get("max_current_a", 18.0))
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "保持时间或电流保护参数无效"}
         return self._vehicle_service.start_battery_fan_calibration(
-            opts.get("steps"), float(opts.get("hold_s", 5.0)),
-            float(opts.get("max_current_a", 18.0)))
+            opts.get("steps"), hold_s, max_current_a)
 
     def stop_battery_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.stop_battery_fan_calibration()

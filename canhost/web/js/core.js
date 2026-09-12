@@ -27,7 +27,8 @@ var state = {
   pendingFanAction: null,
   pendingMonitorAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
-  dirty: { thresholds: false, switches: false, charge: false, direction: false, chargerType: false, fan: false },
+  dirty: { thresholds: false, switches: false, charge: false, direction: false,
+           chargerType: false, fan: false, fanCaps: false, batteryFanCaps: false },
   onlyActiveAlarms: false,
   uiScale: 1,
   lastZoomWheelAt: 0,
@@ -49,7 +50,10 @@ const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
 function fmt(value, digits = 1, fallback = "—") {
   return value === null || value === undefined || Number.isNaN(value) ? fallback : Number(value).toFixed(digits);
 }
-function isFresh(age, limit = DATA_FRESH_MAX_S) { return age != null && age <= limit; }
+function isFresh(age, limit = DATA_FRESH_MAX_S) {
+  const value = Number(age);
+  return age != null && Number.isFinite(value) && value >= 0 && value <= limit;
+}
 function text(id, value) { const node = $(id); if (node) node.textContent = value; }
 function setClass(idOrNode, className, enabled) {
   const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
@@ -741,6 +745,9 @@ async function sendPendingCommand() {
       state.pendingFanCommand = null;
       if (["fan_curve", "fan_failsafe", "fan_restore_defaults"].includes(pending.name)) {
         state.dirty.fan = false;
+      }
+      if (pending.name === "fan_calib" && [5, 6].includes(Number(pending.values?.action))) {
+        state.dirty.fanCaps = false;
       }
       toast(result.message || "风扇命令已执行");
       await poll();

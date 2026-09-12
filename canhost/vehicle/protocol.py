@@ -82,6 +82,13 @@ class VehicleProtocol:
         self.last_fan_limits_monotonic: float | None = None
         self.last_battery_fan_status_monotonic: float | None = None
         self.last_battery_fan_calib_monotonic: float | None = None
+        # Calibration workers use these receive generations to distinguish a
+        # post-command status frame from a still-fresh frame received before
+        # the command ACK.  Age and matching values alone cannot prove that
+        # the controller applied the latest target.
+        self.fan_calib_generation = 0
+        self.battery_fan_status_generation = 0
+        self.battery_fan_calib_generation = 0
         self.ecu: dict[str, Any] = {
             "torque_pct": [None] * 4, "velocity_rpm": [None] * 4,
             "motor_temp_c": [None] * 4, "inverter_temp_c": [None] * 4,
@@ -173,12 +180,14 @@ class VehicleProtocol:
         elif can_id == FAN_CALIB_STATUS_ID and len(data) >= 6:
             self.fan["calib_status"] = decode_fan_calib_status(data)
             self.last_fan_calib_monotonic = now_mono
+            self.fan_calib_generation += 1
         elif can_id == FAN_CALIB_LIMITS_ID and len(data) >= 8:
             self.fan["calib_limits"] = decode_fan_calib_limits(data)
             self.last_fan_limits_monotonic = now_mono
         elif can_id == BMS_FAN_STATUS_ID and len(data) >= 8:
             self.battery_fan["status"] = decode_bms_fan_status(data)
             self.last_battery_fan_status_monotonic = now_mono
+            self.battery_fan_status_generation += 1
         elif can_id == BMS_FAN_ACK_ID and len(data) >= 8:
             ack = decode_bms_fan_ack(data)
             self.battery_fan_acks[ack["sequence"]] = ack
@@ -189,6 +198,7 @@ class VehicleProtocol:
         elif can_id == BMS_FAN_CALIB_ID and len(data) >= 8:
             self.battery_fan["calibration"] = decode_bms_fan_calib(data)
             self.last_battery_fan_calib_monotonic = now_mono
+            self.battery_fan_calib_generation += 1
         elif can_id == 0x502 and len(data) >= 8:
             self.ecu["torque_pct"] = decode_ecu_wheels_i16(data, 0.1)
             self.last_ecu_monotonic["torque"] = now_mono
@@ -252,9 +262,12 @@ class VehicleProtocol:
         fan["power_status_age"] = age(now, self.last_fan_power_monotonic)
         fan["calib_status_age"] = age(now, self.last_fan_calib_monotonic)
         fan["calib_limits_age"] = age(now, self.last_fan_limits_monotonic)
+        fan["calib_status_generation"] = self.fan_calib_generation
         battery_fan = {key: dict(value) for key, value in self.battery_fan.items()}
         battery_fan["status_age"] = age(now, self.last_battery_fan_status_monotonic)
         battery_fan["calibration_age"] = age(now, self.last_battery_fan_calib_monotonic)
+        battery_fan["status_generation"] = self.battery_fan_status_generation
+        battery_fan["calibration_generation"] = self.battery_fan_calib_generation
         battery_fan["ack_history"] = list(self.battery_fan_ack_history)
         ecu = {key: (list(value) if isinstance(value, list) else dict(value))
                for key, value in self.ecu.items()}

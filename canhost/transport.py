@@ -67,6 +67,7 @@ class CanService:
         self.command_sequence = 0
         self.fan_command_sequence = 0
         self.battery_fan_command_sequence = 0
+        self.fan_calibration_start_lock = threading.Lock()
         self.ivt_operation_lock = threading.Lock()
         self.ivt_rx_condition = threading.Condition(self.lock)
         self.ivt_rx_frames: deque[IvtFrame] = deque(maxlen=512)
@@ -85,11 +86,11 @@ class CanService:
         self.monitor_tx_stop = threading.Event()
         self.monitor_tx_thread: threading.Thread | None = None
         self.fan_calib_session = FanCalibrationSession(
-            send_fn=self.send_fan_command,
+            send_fn=self._send_fan_calibration_command,
             snapshot_fn=self.vehicle_snapshot
         ) if self.protocol_kind == "vehicle" else None
         self.battery_fan_calib_session = BatteryFanCalibrationSession(
-            send_fn=self.send_battery_fan_command,
+            send_fn=self._send_battery_fan_calibration_command,
             snapshot_fn=self.vehicle_snapshot,
         ) if self.protocol_kind == "vehicle" else None
 
@@ -162,6 +163,17 @@ class CanService:
             return {"ok": False, "error": error, "connection": dict(self.connection)}
 
     def disconnect(self) -> dict[str, Any]:
+        # Signal and join calibration workers before shutting down python-can, so
+        # an in-flight final stop has a bounded chance to finish on the old bus.
+        # Device-side leases remain the final guard if communication is already lost.
+        if self.fan_calib_session:
+            if self.fan_calib_session.is_running():
+                self.fan_calib_session.abort("整车 CANB 正在断开")
+            self.fan_calib_session.cancel_for_disconnect()
+        if self.battery_fan_calib_session:
+            if self.battery_fan_calib_session.is_running():
+                self.battery_fan_calib_session.abort("整车 CANB 正在断开")
+            self.battery_fan_calib_session.cancel_for_disconnect()
         self.stop_event.set()
         self.bench_stop_event.set()
         self._stop_all_monitor_periodic()
@@ -424,17 +436,35 @@ class CanService:
             return {"ok": False, "error": str(exc)}
 
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
+        # Serialize manual operations against both automatic-calibration start
+        # paths.  Otherwise a manual command can pass its running check just
+        # before a sweep publishes status="running" and disturb its baseline.
+        with self.fan_calibration_start_lock:
+            return self._send_fan_command(name, values, acknowledged, from_calibration=False)
+
+    def _send_fan_calibration_command(self, name: str, values: dict[str, Any],
+                                      acknowledged: bool) -> dict[str, Any]:
+        return self._send_fan_command(name, values, acknowledged, from_calibration=True)
+
+    def _send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool,
+                          *, from_calibration: bool) -> dict[str, Any]:
         if not acknowledged:
             return {"ok": False, "error": "发送前必须确认本次写操作"}
         if self.protocol_kind != "vehicle":
             return {"ok": False, "error": "风扇命令通过整车连接发送；当前连接不是整车连接"}
+        if self.battery_fan_calib_session and self.battery_fan_calib_session.is_running():
+            return {"ok": False, "error": "电池箱风扇自动标定正在运行；PDM测量期间不能操作整车风扇"}
+        if (not from_calibration and self.fan_calib_session
+                and self.fan_calib_session.is_running()):
+            return {"ok": False, "error": "整车风扇自动标定正在运行；请使用安全中止，不能并发发送其他风扇命令"}
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "CAN 尚未连接"}
             if self.connection.get("mode") != "pcan":
                 return {"ok": False, "error": "风扇命令只允许使用真实 PCAN 发送"}
-            if self.connection.get("bus_profile") not in {"canb", "canb_legacy"}:
-                return {"ok": False, "error": "风扇命令只允许从 CANB 发送"}
+            if (self.connection.get("bus_profile") != "canb"
+                    or self.connection.get("bitrate") != 500000):
+                return {"ok": False, "error": "风扇命令只允许从整车 CANB 500 kbit/s 发送；Legacy 250 kbit/s 禁止写入"}
             self.fan_command_sequence = (self.fan_command_sequence + 1) & 0xFF
             sequence = self.fan_command_sequence
             # A late lease-expiry ACK (result 5) may reuse an old sequence;
@@ -467,17 +497,32 @@ class CanService:
             return {"ok": False, "error": str(exc)}
 
     def send_battery_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool) -> dict[str, Any]:
+        with self.fan_calibration_start_lock:
+            return self._send_battery_fan_command(name, values, acknowledged, from_calibration=False)
+
+    def _send_battery_fan_calibration_command(self, name: str, values: dict[str, Any],
+                                              acknowledged: bool) -> dict[str, Any]:
+        return self._send_battery_fan_command(name, values, acknowledged, from_calibration=True)
+
+    def _send_battery_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool,
+                                  *, from_calibration: bool) -> dict[str, Any]:
         if not acknowledged:
             return {"ok": False, "error": "发送前必须确认本次写操作"}
         if self.protocol_kind != "vehicle":
             return {"ok": False, "error": "电池箱风扇命令通过整车 CANB 连接发送"}
+        if self.fan_calib_session and self.fan_calib_session.is_running():
+            return {"ok": False, "error": "整车风扇自动标定正在运行；PDM测量期间不能操作电池箱风扇"}
+        if (not from_calibration and self.battery_fan_calib_session
+                and self.battery_fan_calib_session.is_running()):
+            return {"ok": False, "error": "电池箱风扇自动标定正在运行；请使用安全中止，不能并发发送其他风扇命令"}
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "CAN 尚未连接"}
             if self.connection.get("mode") != "pcan":
                 return {"ok": False, "error": "电池箱风扇命令只允许使用真实 PCAN 发送"}
-            if self.connection.get("bus_profile") not in {"canb", "canb_legacy"}:
-                return {"ok": False, "error": "电池箱风扇命令只允许从 CANB 发送"}
+            if (self.connection.get("bus_profile") != "canb"
+                    or self.connection.get("bitrate") != 500000):
+                return {"ok": False, "error": "电池箱风扇命令只允许从整车 CANB 500 kbit/s 发送；Legacy 250 kbit/s 禁止写入"}
             self.battery_fan_command_sequence = (self.battery_fan_command_sequence + 1) & 0xFF
             sequence = self.battery_fan_command_sequence
             self.protocol.battery_fan_acks.pop(sequence, None)
@@ -608,8 +653,11 @@ class CanService:
                               tier: str = "dcdc") -> dict[str, Any]:
         if not self.fan_calib_session:
             return {"ok": False, "error": "当前连接不支持风扇标定"}
-        return self.fan_calib_session.start_sweep(
-            channel, steps, hold_s, max_current_a, tier)
+        with self.fan_calibration_start_lock:
+            if self.battery_fan_calib_session and self.battery_fan_calib_session.is_running():
+                return {"ok": False, "error": "电池箱风扇自动标定正在运行；两套标定不能同时占用PDM测量"}
+            return self.fan_calib_session.start_sweep(
+                channel, steps, hold_s, max_current_a, tier)
 
     def stop_fan_calibration(self) -> dict[str, Any]:
         if not self.fan_calib_session:
@@ -627,7 +675,10 @@ class CanService:
                                       hold_s: float = 5.0, max_current_a: float = 18.0) -> dict[str, Any]:
         if not self.battery_fan_calib_session:
             return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
-        return self.battery_fan_calib_session.start(steps, hold_s, max_current_a)
+        with self.fan_calibration_start_lock:
+            if self.fan_calib_session and self.fan_calib_session.is_running():
+                return {"ok": False, "error": "整车风扇自动标定正在运行；两套标定不能同时占用PDM测量"}
+            return self.battery_fan_calib_session.start(steps, hold_s, max_current_a)
 
     def stop_battery_fan_calibration(self) -> dict[str, Any]:
         if not self.battery_fan_calib_session:
