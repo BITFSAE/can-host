@@ -409,6 +409,22 @@ class HostUpdaterTest(unittest.TestCase):
             self.assertIn(reasons[index], error)
             self.assertIn("HTTPS 证书校验失败", error)
 
+    def test_download_certificate_failure_reports_friendly_tls_error(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+        summary = _release("v0.3.0")
+        failure = urllib.error.URLError(
+            ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory) / "canhost-update-test"
+            with patch("canhost.updater.cleanup_update_dirs", return_value=0), \
+                 patch("canhost.updater.update_temp_dir", return_value=work), \
+                 patch.object(updater, "_download_payload", side_effect=failure):
+                updater._download_worker(summary)
+        status = updater.status()
+        self.assertEqual(status["state"], "download_failed")
+        self.assertIn("HTTPS 证书校验失败", status["error"])
+
     def test_download_worker_rejects_mismatched_checksum(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
         summary = _release("v0.3.0")

@@ -516,8 +516,8 @@ def main() -> None:
         from . import trust
         if not trust.ca_bundle_path():
             raise SystemExit("打包自检失败：certifi CA 证书包缺失")
-        if not trust.https_ssl_context().get_ca_certs():
-            raise SystemExit("打包自检失败：HTTPS CA 证书未加载")
+        if not trust.certifi_roots_loaded(trust.https_ssl_context()):
+            raise SystemExit("打包自检失败：certifi CA 证书未完整加载")
         if not (WEB_DIR / "index.html").is_file():
             raise SystemExit("打包自检失败：缺少 canhost/web/index.html")
         api = Api()

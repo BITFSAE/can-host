@@ -4,7 +4,7 @@
 
 ## 未发布
 
-- 修复 macOS 发布包检查更新时报 `CERTIFICATE_VERIFY_FAILED`：更新器 HTTPS 改用随包 certifi CA 证书，打包自检增加证书包检查，报错文案改为可执行建议。
+- 修复 macOS 发布包检查更新时报 `CERTIFICATE_VERIFY_FAILED`：更新器 HTTPS 在系统信任库上追加随包 certifi CA 证书，打包自检增加证书包检查，检查与下载阶段均提供可执行的报错建议。
 
 ## v0.9.4 — 2026-09-12
 

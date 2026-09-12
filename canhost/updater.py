@@ -4,8 +4,8 @@
 检查更新先读 CNB 上匿名可读的更新频道，失败才回退 GitHub API；
 下载地址由所选发布自带的附件地址决定，因此不需要代理，也不需要任何令牌。
 
-HTTPS 请求统一走 ``trust.https_ssl_context()``：Windows 沿用系统证书库，
-macOS 冻结包没有系统 CA 列表，改用随包的 certifi 证书，否则检查更新会报
+HTTPS 请求统一走 ``trust.https_ssl_context()``：保留系统证书库并追加随包的
+certifi 证书，避免 macOS 冻结包缺少系统 CA 时检查更新报
 CERTIFICATE_VERIFY_FAILED。
 """
 from __future__ import annotations
@@ -47,8 +47,7 @@ SOURCE_LABELS = {SOURCE_CNB: "CNB 镜像", SOURCE_GITHUB: "GitHub"}
 # 只向这些域名发送已保存的 GitHub 令牌，其余（含 CNB 与预签名地址）一律匿名。
 GITHUB_HOSTS = ("github.com", "githubusercontent.com")
 
-# Windows 默认就使用系统证书库；macOS 冻结包没有系统 CA 列表，检查更新会报
-# CERTIFICATE_VERIFY_FAILED，这里统一改用随包的 certifi 证书。
+# 保留系统信任库，同时追加随包 certifi；macOS 冻结包缺少系统 CA 时也能校验。
 SSL_CONTEXT = trust.https_ssl_context()
 
 APP_FOLDER_NAME = "BITFSAE_CAN_Host"
@@ -952,7 +951,23 @@ class HostUpdater:
         return f"GitHub 请求失败（HTTP {code}）。"
 
     @staticmethod
-    def _tls_error_message(exc: Exception) -> str:
+    def _is_certificate_error(exc: BaseException) -> bool:
+        """Recognize certificate failures, including URLError-wrapped SSL errors."""
+        current: BaseException | object | None = exc
+        seen: set[int] = set()
+        while isinstance(current, BaseException) and id(current) not in seen:
+            seen.add(id(current))
+            if (isinstance(current, ssl.SSLCertVerificationError)
+                    or "CERTIFICATE_VERIFY_FAILED" in str(current)):
+                return True
+            if isinstance(current, urllib.error.URLError):
+                current = current.reason
+            else:
+                current = current.__cause__ or current.__context__
+        return False
+
+    @staticmethod
+    def _tls_error_message() -> str:
         """Friendly text for certificate failures on both update sources."""
         return ("HTTPS 证书校验失败，无法连接更新源。请升级到最新发布包后重试；"
                 "若仍复现，检查系统时间或代理/防火墙")
@@ -969,8 +984,8 @@ class HostUpdater:
                     problems.append(f"{label}：{self._http_error_message(exc, source)}")
                     continue
                 except (urllib.error.URLError, ssl.SSLError) as exc:
-                    if "CERTIFICATE_VERIFY_FAILED" in str(exc) or isinstance(exc, ssl.SSLError):
-                        problems.append(f"{label}：{self._tls_error_message(exc)}")
+                    if self._is_certificate_error(exc):
+                        problems.append(f"{label}：{self._tls_error_message()}")
                     else:
                         problems.append(f"{label}：{exc}")
                     continue
@@ -1098,6 +1113,10 @@ class HostUpdater:
             source = str(self._state.get("source") or SOURCE_GITHUB)
             self._set(state="download_failed", message="下载更新失败",
                       error=self._http_error_message(exc, source), progress=0.0)
+        except (urllib.error.URLError, ssl.SSLError) as exc:
+            error = self._tls_error_message() if self._is_certificate_error(exc) else str(exc)
+            self._set(state="download_failed", message="下载更新失败",
+                      error=error, progress=0.0)
         except Exception as exc:
             self._set(state="download_failed", message="下载更新失败",
                       error=str(exc), progress=0.0)
