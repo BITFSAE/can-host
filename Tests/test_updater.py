@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from io import BytesIO
 import json
 import os
 import subprocess
@@ -316,8 +317,37 @@ class HostUpdaterTest(unittest.TestCase):
         self.assertEqual(status["state"], "ready")
         self.assertTrue(status["stage_dir"])
         self.assertEqual(status["progress"], 1.0)
+        self.assertEqual(status["download_stage"], "ready")
+        self.assertEqual(status["downloaded_bytes"], status["total_bytes"])
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(expected_urls), 2)
+
+    def test_download_payload_reports_bytes_progress_and_speed(self) -> None:
+        updater = HostUpdater()
+
+        class Response(BytesIO):
+            # Some mirrors omit Content-Length; the release asset size must
+            # still keep the UI percentage meaningful.
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "update.zip"
+            with patch("canhost.updater.urllib.request.urlopen", return_value=Response(b"abcdef")):
+                updater._download_payload(
+                    {"url": "https://example/update.zip", "size": 6}, target, progress=True
+                )
+            self.assertEqual(target.read_bytes(), b"abcdef")
+        status = updater.status()
+        self.assertEqual(status["downloaded_bytes"], 6)
+        self.assertEqual(status["total_bytes"], 6)
+        self.assertEqual(status["progress"], 1.0)
+        self.assertGreater(status["download_speed_bps"], 0)
 
     def test_http_error_message_mentions_private_token_only_on_access_denied(self) -> None:
         updater = HostUpdater()

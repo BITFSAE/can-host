@@ -76,7 +76,7 @@
           <img class="team-logo" src="assets/bitfsae-logo.svg" alt="BITFSAE">
         </div>
         <dl class="rail-facts">
-          <div><dt>上位机</dt><dd><button id="appVersionFact" class="rail-fact-button" type="button" title="软件内更新"><span id="appVersion">v—</span><i aria-hidden="true">·</i><span class="fact-date" id="appVersionDate">—</span><i id="appUpdateIndicator" class="app-update-indicator hidden" aria-label="有可用更新"></i></button></dd></div>
+          <div><dt>上位机</dt><dd><button id="appVersionFact" class="rail-fact-button" type="button" title="软件内更新"><span id="appVersion">v—</span><i aria-hidden="true">·</i><span class="fact-date" id="appVersionDate">—</span><span id="appUpdateIndicator" class="app-update-indicator hidden" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg><b id="appUpdateIndicatorText"></b></span></button></dd></div>
         </dl>
       </div>
     </aside>
@@ -1260,9 +1260,10 @@
           <pre id="updaterNotes">此次 Release 未填写说明。</pre>
         </section>
 
-        <div class="updater-progress hidden">
-          <div class="updater-progress-head"><span>下载进度</span><b id="updaterProgressText">0%</b></div>
+        <div id="updaterProgressPanel" class="updater-progress hidden">
+          <div class="updater-progress-head"><span id="updaterProgressLabel">下载进度</span><b id="updaterProgressText">0%</b></div>
           <div class="meter"><i id="updaterProgress"></i></div>
+          <div class="updater-progress-meta"><span id="updaterProgressBytes">等待数据</span><span id="updaterProgressSpeed">—</span></div>
         </div>
 
         <div id="updaterError" class="modal-error hidden"></div>
@@ -1298,7 +1299,7 @@
       </div>
       <footer>
         <button type="button" class="outline-button" id="updaterCheck">检查更新</button>
-        <button type="button" class="action-button" id="updaterInstall">立即更新</button>
+        <button type="button" class="action-button" id="updaterInstall">下载更新</button>
       </footer>
     </form>
   </dialog>

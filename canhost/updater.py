@@ -682,6 +682,10 @@ class HostUpdater:
             "message": "尚未检查更新",
             "error": None,
             "progress": 0.0,
+            "downloaded_bytes": 0,
+            "total_bytes": 0,
+            "download_speed_bps": 0.0,
+            "download_stage": "",
             "latest": None,
             "source": None,
             "downloaded_zip": "",
@@ -737,6 +741,10 @@ class HostUpdater:
                 "message": f"正在检查更新（{SOURCE_LABELS.get(self.sources[0], self.sources[0])} 优先）…",
                 "error": None,
                 "progress": 0.0,
+                "downloaded_bytes": 0,
+                "total_bytes": 0,
+                "download_speed_bps": 0.0,
+                "download_stage": "",
                 "latest": None,
                 "source": None,
                 "include_prerelease": bool(include_prerelease),
@@ -762,11 +770,16 @@ class HostUpdater:
             if tag and tag != latest.get("tag_name"):
                 return {"ok": False, "state": self._state["state"],
                         "error": f"没有版本 {tag} 的检查结果，请重新检查更新"}
+            zip_asset = find_zip_asset(latest)
             self._state.update({
                 "state": "downloading",
                 "message": f"正在下载 {latest.get('tag_name')}…",
                 "error": None,
                 "progress": 0.0,
+                "downloaded_bytes": 0,
+                "total_bytes": int(zip_asset.get("size") or 0) if zip_asset else 0,
+                "download_speed_bps": 0.0,
+                "download_stage": "checksum",
                 "downloaded_zip": "",
                 "stage_dir": "",
                 "install_error": None,
@@ -974,8 +987,9 @@ class HostUpdater:
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            total = int(response.headers.get("Content-Length") or 0)
+            total = int(response.headers.get("Content-Length") or asset.get("size") or 0)
             done = 0
+            started = time.monotonic()
             with partial.open("wb") as handle:
                 while True:
                     chunk = response.read(256 * 1024)
@@ -983,8 +997,14 @@ class HostUpdater:
                         break
                     handle.write(chunk)
                     done += len(chunk)
-                    if progress and total:
-                        self._set(progress=min(1.0, done / total))
+                    if progress:
+                        elapsed = max(time.monotonic() - started, 0.001)
+                        self._set(
+                            progress=min(1.0, done / total) if total else 0.0,
+                            downloaded_bytes=done,
+                            total_bytes=total,
+                            download_speed_bps=done / elapsed,
+                        )
         partial.replace(target)
 
     def _download_worker(self, latest: dict[str, Any]) -> None:
@@ -1003,9 +1023,17 @@ class HostUpdater:
             work_dir = update_temp_dir(work_parent)
             zip_path = work_dir / zip_name
             checksum_path = work_dir / f"{zip_name}.sha256"
+            self._set(download_stage="checksum")
             self._download_payload(checksum_asset, checksum_path)
             expected = read_sha256_digest(checksum_path)
+            self._set(
+                download_stage="archive",
+                downloaded_bytes=0,
+                total_bytes=int(zip_asset.get("size") or 0),
+                download_speed_bps=0.0,
+            )
             self._download_payload(zip_asset, zip_path, progress=True)
+            self._set(download_stage="verifying")
             actual = hashlib.sha256(zip_path.read_bytes()).hexdigest().lower()
             if actual != expected:
                 raise ValueError(f"更新包校验不一致：期望 {expected[:16]}…，实际 {actual[:16]}…")
@@ -1015,6 +1043,10 @@ class HostUpdater:
                 message=f"{tag} 已下载并校验，可以重启安装",
                 error=None,
                 progress=1.0,
+                downloaded_bytes=int(zip_path.stat().st_size),
+                total_bytes=int(zip_path.stat().st_size),
+                download_speed_bps=0.0,
+                download_stage="ready",
                 downloaded_zip=str(zip_path),
                 stage_dir=str(stage_dir),
                 install_error=None,

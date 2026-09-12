@@ -131,6 +131,7 @@ class Api:
             "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
             "telemetry_enabled": True,
             "updater_enabled": install_ready(),
+            "updater_check_enabled": True,
             "updater_repo": DEFAULT_REPO,
             "updater_cnb_repo": DEFAULT_CNB_REPO,
             "updater_has_token": self._updater.has_token(),
