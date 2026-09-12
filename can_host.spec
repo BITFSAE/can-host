@@ -14,6 +14,8 @@ a = Analysis(
         "cli.pcan_bms_bench",
         "paho.mqtt.client",
         "canhost.telemetry.fsae_telemetry_pb2",
+        # 保留 updater TLS 依赖（certifi）在冻结包内，跨平台一致。
+        "certifi",
     ],
     hookspath=[],
     runtime_hooks=[],

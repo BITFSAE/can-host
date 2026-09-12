@@ -512,6 +512,12 @@ def main() -> None:
         from .bms.simulator import BmsSimulator  # noqa: F401
         from .telemetry import fsae_telemetry_pb2  # noqa: F401
         from .vehicle.simulator import VehicleSimulator  # noqa: F401
+        # The updater must prove the bundle really ships usable CA certs.
+        from . import trust
+        if not trust.ca_bundle_path():
+            raise SystemExit("打包自检失败：certifi CA 证书包缺失")
+        if not trust.https_ssl_context().get_ca_certs():
+            raise SystemExit("打包自检失败：HTTPS CA 证书未加载")
         if not (WEB_DIR / "index.html").is_file():
             raise SystemExit("打包自检失败：缺少 canhost/web/index.html")
         api = Api()

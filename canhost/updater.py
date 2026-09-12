@@ -3,6 +3,10 @@
 国内网络直连 GitHub 不可靠，发布产物因此同时镜像到 CNB（cnb.cool）：
 检查更新先读 CNB 上匿名可读的更新频道，失败才回退 GitHub API；
 下载地址由所选发布自带的附件地址决定，因此不需要代理，也不需要任何令牌。
+
+HTTPS 请求统一走 ``trust.https_ssl_context()``：Windows 沿用系统证书库，
+macOS 冻结包没有系统 CA 列表，改用随包的 certifi 证书，否则检查更新会报
+CERTIFICATE_VERIFY_FAILED。
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -23,6 +28,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
+
+from . import trust
 
 
 DEFAULT_REPO = "BITFSAE/can-host"
@@ -39,6 +46,10 @@ DEFAULT_SOURCES = (SOURCE_CNB, SOURCE_GITHUB)
 SOURCE_LABELS = {SOURCE_CNB: "CNB 镜像", SOURCE_GITHUB: "GitHub"}
 # 只向这些域名发送已保存的 GitHub 令牌，其余（含 CNB 与预签名地址）一律匿名。
 GITHUB_HOSTS = ("github.com", "githubusercontent.com")
+
+# Windows 默认就使用系统证书库；macOS 冻结包没有系统 CA 列表，检查更新会报
+# CERTIFICATE_VERIFY_FAILED，这里统一改用随包的 certifi 证书。
+SSL_CONTEXT = trust.https_ssl_context()
 
 APP_FOLDER_NAME = "BITFSAE_CAN_Host"
 APP_EXE_NAME = f"{APP_FOLDER_NAME}.exe"
@@ -881,13 +892,13 @@ class HostUpdater:
     ) -> Any:
         headers = self._source_headers(source, accept)
         request = urllib.request.Request(url, headers=headers)
-        return urllib.request.urlopen(request, timeout=self.timeout)
+        return urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT)
 
     def _fetch_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
         request = urllib.request.Request(
             url, headers=headers if headers is not None else self._headers("application/json")
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _github_releases(self) -> list[dict[str, Any]]:
@@ -940,6 +951,12 @@ class HostUpdater:
             return f"GitHub 上没有找到 Release（HTTP 404），请确认仓库与发布标签存在。"
         return f"GitHub 请求失败（HTTP {code}）。"
 
+    @staticmethod
+    def _tls_error_message(exc: Exception) -> str:
+        """Friendly text for certificate failures on both update sources."""
+        return ("HTTPS 证书校验失败，无法连接更新源。请升级到最新发布包后重试；"
+                "若仍复现，检查系统时间或代理/防火墙")
+
     def _check_worker(self, include_prerelease: bool) -> None:
         thread = threading.current_thread()
         problems: list[str] = []
@@ -950,6 +967,12 @@ class HostUpdater:
                     releases = self._releases_from(source)
                 except urllib.error.HTTPError as exc:
                     problems.append(f"{label}：{self._http_error_message(exc, source)}")
+                    continue
+                except (urllib.error.URLError, ssl.SSLError) as exc:
+                    if "CERTIFICATE_VERIFY_FAILED" in str(exc) or isinstance(exc, ssl.SSLError):
+                        problems.append(f"{label}：{self._tls_error_message(exc)}")
+                    else:
+                        problems.append(f"{label}：{exc}")
                     continue
                 except Exception as exc:
                     problems.append(f"{label}：{exc}")
@@ -1006,7 +1029,7 @@ class HostUpdater:
         request = urllib.request.Request(url, headers=self._download_headers(url))
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT) as response:
             total = int(response.headers.get("Content-Length") or asset.get("size") or 0)
             done = 0
             started = time.monotonic()

@@ -18,6 +18,8 @@ a = Analysis(
         "cli.pcan_bms_bench",
         "paho.mqtt.client",
         "canhost.telemetry.fsae_telemetry_pb2",
+        # HTTPS 更新检查在 macOS 上依赖随包的 CA 证书，必须真正打进去。
+        "certifi",
         # This first macOS field release temporarily keeps both lazily imported
         # simulators as a secondary development aid. Real PCAN remains the
         # bundle's primary transport and is covered by the packaging smoke test.

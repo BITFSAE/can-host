@@ -7,6 +7,7 @@ import hashlib
 from io import BytesIO
 import json
 import os
+import ssl
 import subprocess
 import tempfile
 import unittest
@@ -390,6 +391,23 @@ class HostUpdaterTest(unittest.TestCase):
         missing = urllib.error.HTTPError("https://api.github.com/", 404, "Not Found", None, None)
         self.assertNotIn("私有仓库", updater._http_error_message(missing))
         self.assertIn("404", updater._http_error_message(missing))
+
+    def test_certificate_verify_failure_reports_friendly_tls_error(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+        reasons = ["CNB 镜像", "GitHub"]
+        for index, source in enumerate(updater.sources):
+            with patch.object(
+                updater, "_releases_from",
+                side_effect=urllib.error.URLError(
+                    ssl.SSLError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+                                 " (_ssl.c:1006)")),
+            ):
+                updater._check_worker(False)
+            status = updater.status()
+            self.assertEqual(status["state"], "check_failed")
+            error = str(status["error"])
+            self.assertIn(reasons[index], error)
+            self.assertIn("HTTPS 证书校验失败", error)
 
     def test_download_worker_rejects_mismatched_checksum(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
