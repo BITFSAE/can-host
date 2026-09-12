@@ -98,6 +98,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
+          # 步骤级 env 会整体替换作业级 env，GH_TOKEN 必须在这里再声明一次，
+          # 否则 `gh release view` 读不到元数据，发布附件同步会直接失败。
+          GH_TOKEN: ${{ github.token }}
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
           if (-not $env:CNB_TOKEN) { throw "仓库缺少 Actions secret CNB_TOKEN，无法同步到 CNB 镜像。" }
