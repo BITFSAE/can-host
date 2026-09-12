@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import csv
+import json
 from types import SimpleNamespace
 from datetime import datetime, timedelta
 import sqlite3
@@ -12,7 +13,7 @@ from pathlib import Path
 import unittest
 
 from canhost.transport import CanService
-from canhost.app import Api
+from canhost.app import Api, _update_health_path_from_argv, _write_update_health
 from canhost.bms.protocol import BmsProtocol, build_command, command_ack_matches, switch_catalog
 from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID
 from canhost.bms.simulator import BmsSimulator
@@ -704,6 +705,20 @@ class BmsProtocolTest(unittest.TestCase):
             self.assertIn("开发测试", simulation["name"])
         finally:
             api.close()
+
+    def test_update_health_marker_is_absolute_and_atomic_json(self) -> None:
+        self.assertIsNone(_update_health_path_from_argv(["--update-health-file", "relative.json"]))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory).resolve() / "update-health.json"
+            self.assertEqual(
+                _update_health_path_from_argv(["--update-health-file", str(target)]),
+                target,
+            )
+            _write_update_health(target, "0.9.1")
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["version"], "0.9.1")
+            self.assertGreater(payload["pid"], 0)
+            self.assertFalse(any(target.parent.glob(".update-health.json-*.tmp")))
 
     def test_release_transport_rejects_simulation(self) -> None:
         service = CanService(allow_simulation=False)

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime
+import json
+import os
+from pathlib import Path
 import sys
 import threading
 from typing import Any
@@ -12,15 +14,54 @@ from . import __version__, __version_date__
 from .transport import CanService
 from .bms.protocol import switch_catalog
 from .telemetry import TelemetryService
-from .updater import DEFAULT_CNB_REPO, DEFAULT_REPO, HostUpdater, install_ready, startup_cleanup
+from .updater import (
+    DEFAULT_CNB_REPO,
+    DEFAULT_REPO,
+    HostUpdater,
+    consume_update_result,
+    install_ready,
+    startup_cleanup,
+    update_log_dir,
+)
 from .updater import _read_settings, settings_path
 
 
 WEB_DIR = Path(__file__).parent / "web"
 
 
+def _update_health_path_from_argv(argv: list[str] | None = None) -> Path | None:
+    """Return the helper-provided health path without exposing it to JS."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        index = args.index("--update-health-file")
+        value = args[index + 1]
+    except (ValueError, IndexError):
+        return None
+    path = Path(value)
+    return path.resolve() if path.is_absolute() else None
+
+
+def _write_update_health(path: Path, version: str) -> None:
+    """Atomically tell the installer helper that backend and UI both loaded."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}-{os.getpid()}.tmp")
+    payload = {
+        "pid": os.getpid(),
+        "version": version,
+        "ready_at": datetime.now().astimezone().isoformat(),
+    }
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
 class Api:
-    def __init__(self) -> None:
+    def __init__(self, update_health_path: Path | None = None) -> None:
         # PyWebView exposes every public member of js_api to JavaScript. Native
         # Window/WinForms objects must remain private; walking AccessibilityObject
         # recursively raises TYPE_E_CANTLOADLIBRARY on affected Windows systems.
@@ -43,6 +84,9 @@ class Api:
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
                                     cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
+        self._startup_update_result = consume_update_result() if install_ready() else None
+        self._update_health_path = update_health_path
+        self._shutdown_finished = threading.Event()
         self._window: Any = None
 
     def _read_update_token(self) -> str | None:
@@ -79,9 +123,21 @@ class Api:
             "updater_cnb_repo": DEFAULT_CNB_REPO,
             "updater_has_token": self._updater.has_token(),
             "updater_settings_path": str(settings_path()),
+            "updater_log_dir": str(update_log_dir()),
+            "startup_update_result": self._startup_update_result,
             "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
             "profiles": profiles,
         }
+
+    def mark_frontend_ready(self) -> dict[str, Any]:
+        """Complete the updater health handshake after the first UI poll."""
+        if self._update_health_path is None:
+            return {"ok": True, "required": False}
+        try:
+            _write_update_health(self._update_health_path, __version__)
+        except OSError as exc:
+            return {"ok": False, "required": True, "error": str(exc)}
+        return {"ok": True, "required": True}
 
     def get_updater_status(self) -> dict[str, Any]:
         status = self._updater.status()
@@ -133,6 +189,18 @@ class Api:
         timer.name = "canhost-update-exit"
         timer.daemon = True
         timer.start()
+
+        # A WebView2/native backend shutdown can occasionally stall after its
+        # window is gone. The helper cannot replace loaded files until this PID
+        # exits, so allow normal cleanup first and then guarantee the handoff.
+        def force_exit_if_stuck() -> None:
+            if not self._shutdown_finished.is_set():
+                os._exit(0)
+
+        watchdog = threading.Timer(20.0, force_exit_if_stuck)
+        watchdog.name = "canhost-update-exit-watchdog"
+        watchdog.daemon = True
+        watchdog.start()
 
     def save_update_token(self, token: str) -> dict[str, Any]:
         return self._updater.set_token(token)
@@ -379,7 +447,7 @@ class Api:
         self._telemetry_service.disconnect()
 
 
-def _run_startup_update_cleanup() -> None:
+def _run_startup_update_cleanup(keep_temp_dir: Path | None = None) -> None:
     """Delete old-version backups and update temp dirs once the app runs.
 
     The updated build itself proves the update worked by reaching this point,
@@ -387,7 +455,8 @@ def _run_startup_update_cleanup() -> None:
     thread; removal is best effort and never blocks or breaks startup.
     """
     try:
-        startup_cleanup(Path(sys.executable).resolve().parent)
+        keep = {keep_temp_dir} if keep_temp_dir is not None else None
+        startup_cleanup(Path(sys.executable).resolve().parent, keep_temp_dirs=keep)
     except Exception:
         pass
 
@@ -397,9 +466,12 @@ def main() -> None:
         import webview
     except ImportError:
         raise SystemExit("缺少 pywebview。请先执行：pip install -r requirements.txt")
-    api = Api()
+    update_health_path = _update_health_path_from_argv()
+    api = Api(update_health_path=update_health_path)
     if install_ready():
+        keep_temp_dir = update_health_path.parent if update_health_path is not None else None
         cleanup_thread = threading.Thread(target=_run_startup_update_cleanup,
+                                          args=(keep_temp_dir,),
                                           name="canhost-startup-cleanup", daemon=True)
         cleanup_thread.start()
     window = webview.create_window(
@@ -412,7 +484,10 @@ def main() -> None:
     try:
         webview.start(debug=debug)
     finally:
-        api.close()
+        try:
+            api.close()
+        finally:
+            api._shutdown_finished.set()
 
 
 if __name__ == "__main__":

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -22,6 +25,8 @@ from canhost.updater import (
     SOURCE_GITHUB,
     HostUpdater,
     cleanup_old_backups,
+    cleanup_update_dirs,
+    consume_update_result,
     cnb_channel_url,
     extract_update_archive,
     find_checksum_asset,
@@ -136,6 +141,19 @@ class SafeArchiveTest(unittest.TestCase):
 
 
 class BackupCleanupTest(unittest.TestCase):
+    def test_cleanup_keeps_active_update_handoff_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            active = parent / "canhost-update-active"
+            stale = parent / "canhost-update-stale"
+            active.mkdir()
+            stale.mkdir()
+            (active / "update-health.json").write_text("{}", encoding="utf-8")
+            (stale / "payload.bin").write_bytes(b"x")
+            self.assertEqual(cleanup_update_dirs(parent, keep={active}), 1)
+            self.assertTrue(active.is_dir())
+            self.assertFalse(stale.exists())
+
     def test_cleanup_deletes_old_backups_keeps_fresh_and_unrelated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
@@ -185,6 +203,54 @@ class InstallerPackagingTest(unittest.TestCase):
         # BOM UTF-8 落盘；任何非 ASCII 字符在 ANSI 误读下可能变成弯引号并
         # 提前终止字符串，直接破坏安装助手解析。
         self.assertTrue(INSTALLER_SCRIPT.isascii())
+
+    @unittest.skipUnless(os.name == "nt", "Windows PowerShell parser is Windows-only")
+    def test_install_helper_parses_in_windows_powershell(self) -> None:
+        encoded = base64.b64encode(INSTALLER_SCRIPT.encode("utf-8")).decode("ascii")
+        command = (
+            "$source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CANHOST_SCRIPT_B64));"
+            "[ScriptBlock]::Create($source) | Out-Null"
+        )
+        powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / (
+            r"System32\WindowsPowerShell\v1.0\powershell.exe"
+        )
+        environment = os.environ.copy()
+        environment["CANHOST_SCRIPT_B64"] = encoded
+        result = subprocess.run(
+            [str(powershell), "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_install_helper_requires_ui_health_and_restarts_rollback(self) -> None:
+        self.assertIn("--update-health-file", INSTALLER_SCRIPT)
+        self.assertIn("frontend healthy", INSTALLER_SCRIPT)
+        self.assertIn("health pid mismatch", INSTALLER_SCRIPT)
+        self.assertIn("health version mismatch", INSTALLER_SCRIPT)
+        self.assertIn("Start-App $AppDir $false", INSTALLER_SCRIPT)
+        self.assertIn("old process restarted", INSTALLER_SCRIPT)
+        self.assertIn("forcing stop", INSTALLER_SCRIPT)
+        self.assertIn("PresentationFramework", INSTALLER_SCRIPT)
+
+    def test_failed_helper_result_is_consumed_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result_path = Path(directory) / "last-update-result.json"
+            result_path.write_text(json.dumps({
+                "ok": False,
+                "code": "health_timeout",
+                "log_path": r"C:\logs\update.log",
+            }), encoding="utf-8")
+            with patch("canhost.updater.update_result_path", return_value=result_path):
+                result = consume_update_result()
+                self.assertEqual(result["code"], "health_timeout")
+                self.assertIn("恢复", result["message"])
+                self.assertEqual(result["log_path"], r"C:\logs\update.log")
+                self.assertIsNone(consume_update_result())
+            self.assertFalse(result_path.exists())
 
     def test_inno_setup_uses_updater_folder_layout(self) -> None:
         iss = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "canhost.iss"

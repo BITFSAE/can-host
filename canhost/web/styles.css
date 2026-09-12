@@ -1571,9 +1571,27 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 
 /* ---------- Toasts ---------- */
 
-.toast-stack { position: fixed; right: 22px; bottom: 46px; display: grid; gap: 9px; z-index: 40; }
+.toast-stack {
+  position: fixed;
+  right: 22px;
+  bottom: 46px;
+  display: grid;
+  gap: 9px;
+  width: min(320px, calc(100vw - 28px));
+  z-index: 40;
+}
+/* A modal dialog lives in the browser top layer. A body-level toast remains
+   behind its blurred backdrop regardless of z-index, so core.js moves the
+   shared host into the open dialog and this keeps it visible inside the box. */
+.modal > .toast-stack {
+  position: absolute;
+  right: 14px;
+  bottom: 70px;
+  width: min(320px, calc(100% - 28px));
+  z-index: 2;
+}
 .toast {
-  width: 320px;
+  width: 100%;
   padding: 12px 15px;
   border: 1px solid var(--line);
   border-left: 2px solid var(--accent);
@@ -1584,7 +1602,11 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   line-height: 1.6;
   animation: toast-in .18s ease;
 }
-.toast.error { border-left-color: var(--fault); }
+.toast.error {
+  border-color: rgba(242, 85, 77, .72);
+  background: #2b1718;
+  color: #ffd2cf;
+}
 @keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 
 /* The CAN monitor is a workstation, not a document: its table scrolls inside the

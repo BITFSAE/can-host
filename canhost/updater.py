@@ -56,6 +56,11 @@ BACKUP_DIR_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}\.old-(\d{{14}})$")
 # startup cleanup must leave them alone.
 BACKUP_KEEP_SECONDS = 15 * 60
 
+# The helper is hidden, so diagnostics must live outside its disposable
+# staging directory. Otherwise cleanup removes the only useful failure record.
+UPDATE_LOG_DIR_NAME = "update-logs"
+UPDATE_RESULT_NAME = "last-update-result.json"
+
 
 def is_github_url(url: str) -> bool:
     """True only for GitHub-hosted URLs, the sole place the saved token may go."""
@@ -148,30 +153,78 @@ param(
     [Parameter(Mandatory=$true)][string]$StagedDir,
     [Parameter(Mandatory=$true)][string]$ExeName,
     [Parameter(Mandatory=$true)][string]$WorkDir,
+    [Parameter(Mandatory=$true)][string]$ExpectedVersion,
+    [Parameter(Mandatory=$true)][string]$LogPath,
+    [Parameter(Mandatory=$true)][string]$HealthFile,
+    [Parameter(Mandatory=$true)][string]$ResultPath,
     [int]$OldPid = 0
 )
 $ErrorActionPreference = "Stop"
-$log = Join-Path $WorkDir "install-helper.log"
 function Write-Log([string]$Message) {
-    try { Add-Content -LiteralPath $log -Value $Message -Encoding UTF8 } catch {}
+    try {
+        $stamp = [DateTime]::UtcNow.ToString("o")
+        Add-Content -LiteralPath $LogPath -Value "$stamp $Message" -Encoding UTF8
+    } catch {}
+}
+function Write-Result([string]$Code) {
+    try {
+        $payload = [ordered]@{
+            ok = $false
+            code = $Code
+            log_path = $LogPath
+            at = [DateTime]::UtcNow.ToString("o")
+        }
+        $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath -Encoding UTF8
+    } catch {}
+}
+function Show-Failure() {
+    try {
+        Add-Type -AssemblyName PresentationFramework
+        $message = "The update failed. The previous version was restored when possible.`n`nLog: $LogPath"
+        [System.Windows.MessageBox]::Show($message, "BITFSAE CAN Host update", "OK", "Error") | Out-Null
+    } catch {}
+}
+function Start-App([string]$Directory, [bool]$WithHealth) {
+    $target = Join-Path $Directory $ExeName
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+        throw "application executable missing: $target"
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $target
+    $psi.WorkingDirectory = $Directory
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+    if ($WithHealth) {
+        $psi.Arguments = "--update-health-file `"$HealthFile`""
+    }
+    return [System.Diagnostics.Process]::Start($psi)
 }
 Write-Log "start staged=$StagedDir app=$AppDir"
 
 $stagedExe = Join-Path $StagedDir $ExeName
 if (-not (Test-Path -LiteralPath $stagedExe -PathType Leaf)) {
     Write-Log "staged exe missing"
+    Write-Result "staged_exe_missing"
+    Show-Failure
     exit 21
 }
 
 if ($OldPid -gt 0) {
-    $deadline = (Get-Date).AddSeconds(90)
+    $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
         $process = Get-Process -Id $OldPid -ErrorAction SilentlyContinue
         if (-not $process) { break }
         Start-Sleep -Milliseconds 250
     }
     if (Get-Process -Id $OldPid -ErrorAction SilentlyContinue) {
-        Write-Log "old process still running"
+        Write-Log "old process did not exit gracefully; forcing stop pid=$OldPid"
+        Stop-Process -Id $OldPid -Force -ErrorAction SilentlyContinue
+        try { Wait-Process -Id $OldPid -Timeout 10 -ErrorAction SilentlyContinue } catch {}
+    }
+    if (Get-Process -Id $OldPid -ErrorAction SilentlyContinue) {
+        Write-Log "old process still running after forced stop"
+        Write-Result "old_process_stuck"
+        Show-Failure
         exit 22
     }
 }
@@ -181,6 +234,8 @@ $backupDir = Split-Path $AppDir -Parent
 $backup = "$AppDir.old-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
 
 $movedOld = $false
+$new = $null
+$failureCode = "install_failed"
 try {
     Rename-Item -LiteralPath $AppDir -NewName (Split-Path $backup -Leaf)
     $movedOld = $true
@@ -188,9 +243,8 @@ try {
     Move-Item -LiteralPath $StagedDir -Destination $AppDir
     Write-Log "new moved"
 
-    # The Inno Setup uninstaller (unins000.exe/.dat) is not part of the update
-    # ZIP.  Copy it back from the backup so "Apps & Features" keeps working.
-    # Best effort only: a portable zip install has no uninstaller to preserve.
+    # The Inno Setup uninstaller is not part of the update ZIP. Copy it back
+    # so the Windows uninstall entry remains valid. Portable installs have none.
     foreach ($unins in @("unins000.exe", "unins000.dat")) {
         $src = Join-Path $backup $unins
         if (Test-Path -LiteralPath $src -PathType Leaf) {
@@ -199,32 +253,48 @@ try {
                 Write-Log "uninstaller preserved $unins"
             } catch {
                 Write-Log "uninstaller copy failed ${unins}: $_"
+                $failureCode = "uninstaller_preserve_failed"
+                throw
             }
         }
     }
 
-    $newExe = Join-Path $AppDir $ExeName
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $newExe
-    $psi.WorkingDirectory = $AppDir
-    $psi.UseShellExecute = $true
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
-    $new = [System.Diagnostics.Process]::Start($psi)
+    Remove-Item -LiteralPath $HealthFile -Force -ErrorAction SilentlyContinue
+    $new = Start-App $AppDir $true
     Write-Log "new process started pid=$($new.Id)"
 
-    $deadline = (Get-Date).AddSeconds(8)
+    $deadline = (Get-Date).AddSeconds(45)
     $ok = $false
     while ((Get-Date) -lt $deadline) {
         $new.Refresh()
         if ($new.HasExited) {
             Write-Log "new process exited early code=$($new.ExitCode)"
+            $failureCode = "new_process_exited"
             break
         }
+        if (Test-Path -LiteralPath $HealthFile -PathType Leaf) {
+            try {
+                $health = Get-Content -LiteralPath $HealthFile -Raw | ConvertFrom-Json
+                $actualVersion = [string]$health.version
+                # AppVersion contains the numeric build version. Release tags
+                # may add -rc/-pre labels, so compare their numeric base.
+                $expected = (($ExpectedVersion -replace '^[vV]', '') -split '-')[0]
+                if ([int]$health.pid -ne $new.Id) { throw "health pid mismatch" }
+                if ($expected -and $actualVersion -ne $expected) { throw "health version mismatch" }
+                $ok = $true
+                Write-Log "frontend healthy pid=$($new.Id) version=$actualVersion"
+                break
+            } catch {
+                Write-Log "health signal invalid: $_"
+                $failureCode = "health_mismatch"
+                break
+            }
+        }
         Start-Sleep -Milliseconds 250
-        $ok = $true
     }
     if (-not $ok) {
-        throw "new process exited early"
+        if ($failureCode -eq "install_failed") { $failureCode = "health_timeout" }
+        throw "new application did not report healthy"
     }
 
     Write-Log "install success pid=$($new.Id)"
@@ -237,18 +307,93 @@ try {
     exit 0
 } catch {
     Write-Log "install failed: $_"
+    if ($new -and -not $new.HasExited) {
+        try {
+            Stop-Process -Id $new.Id -Force -ErrorAction Stop
+            Wait-Process -Id $new.Id -Timeout 10 -ErrorAction SilentlyContinue
+            Write-Log "failed new process stopped pid=$($new.Id)"
+        } catch {
+            Write-Log "failed new process could not be stopped: $_"
+        }
+    }
+    $restored = $false
     if ($movedOld -and (Test-Path -LiteralPath $backup)) {
         try {
             if (Test-Path -LiteralPath $AppDir) { Remove-Item -LiteralPath $AppDir -Recurse -Force -ErrorAction Stop }
             Move-Item -LiteralPath $backup -Destination $AppDir
             Write-Log "old restored"
+            $restored = $true
         } catch {
             Write-Log "restore failed: $_"
+            $failureCode = "restore_failed"
+        }
+    } elseif (-not $movedOld -and (Test-Path -LiteralPath $AppDir)) {
+        $restored = $true
+    }
+    if ($restored) {
+        try {
+            $old = Start-App $AppDir $false
+            Write-Log "old process restarted pid=$($old.Id)"
+        } catch {
+            Write-Log "old process restart failed: $_"
+            $failureCode = "restart_failed"
         }
     }
+    Write-Result $failureCode
+    Show-Failure
     exit 23
 }
 '''
+
+
+def update_log_dir() -> Path:
+    """Persistent updater diagnostics directory, outside disposable staging."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / SETTINGS_DIR_NAME / SETTINGS_SUBDIR_NAME / UPDATE_LOG_DIR_NAME
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "can-host" / UPDATE_LOG_DIR_NAME
+
+
+def update_result_path() -> Path:
+    """One-shot result read by the app restarted after a rollback."""
+    return _user_settings_dir() / UPDATE_RESULT_NAME
+
+
+UPDATE_FAILURE_MESSAGES = {
+    "staged_exe_missing": "更新包不完整，已保留当前版本",
+    "old_process_stuck": "旧版本无法退出，更新已取消",
+    "new_process_exited": "新版本启动失败，已自动恢复并启动旧版本",
+    "health_timeout": "新版本界面未能正常启动，已自动恢复并启动旧版本",
+    "health_mismatch": "新版本启动确认不匹配，已自动恢复并启动旧版本",
+    "uninstaller_preserve_failed": "无法保留 Windows 卸载入口，已自动恢复并启动旧版本",
+    "restore_failed": "更新失败，且旧版本文件恢复失败",
+    "restart_failed": "已恢复旧版本文件，但未能自动重新打开",
+    "install_failed": "安装更新失败，已自动恢复并启动旧版本",
+}
+
+
+def consume_update_result() -> dict[str, Any] | None:
+    """Read and remove a helper failure so the rollback is reported once."""
+    target = update_result_path()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, TypeError):
+        return None
+    finally:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+    if not isinstance(payload, dict) or payload.get("ok") is not False:
+        return None
+    code = str(payload.get("code") or "install_failed")
+    return {
+        "ok": False,
+        "code": code,
+        "message": UPDATE_FAILURE_MESSAGES.get(code, UPDATE_FAILURE_MESSAGES["install_failed"]),
+        "log_path": str(payload.get("log_path") or ""),
+    }
 
 
 def _powershell() -> Path:
@@ -261,6 +406,7 @@ def launch_installer(
     app_dir: Path,
     stage_dir: Path,
     work_dir: Path,
+    expected_version: str,
     exe_name: str = APP_EXE_NAME,
     current_pid: int | None = None,
 ) -> Path:
@@ -269,9 +415,34 @@ def launch_installer(
         raise RuntimeError("源码运行只支持检查更新，不能替换安装目录")
     if not stage_dir.is_absolute() or not work_dir.is_absolute():
         raise ValueError("安装目录必须是绝对路径")
+    if not app_dir.is_absolute():
+        raise ValueError("应用目录必须是绝对路径")
+    if not (stage_dir / exe_name).is_file():
+        raise ValueError(f"已下载的更新包缺少 {exe_name}")
     script_path = work_dir / "install-helper.ps1"
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(INSTALLER_SCRIPT, encoding="utf-8")
+    log_dir = update_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_logs = sorted(
+            log_dir.glob("update-*.log"), key=lambda item: item.stat().st_mtime, reverse=True
+        )
+    except OSError:
+        existing_logs = []
+    for stale_log in existing_logs[19:]:
+        try:
+            stale_log.unlink()
+        except OSError:
+            pass
+    log_path = log_dir / f"update-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}.log"
+    health_file = work_dir / "update-health.json"
+    result_path = update_result_path()
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result_path.unlink()
+    except OSError:
+        pass
     command = [
         str(_powershell()),
         "-NoProfile",
@@ -283,6 +454,10 @@ def launch_installer(
         "-StagedDir", str(stage_dir),
         "-ExeName", exe_name,
         "-WorkDir", str(work_dir),
+        "-ExpectedVersion", expected_version,
+        "-LogPath", str(log_path),
+        "-HealthFile", str(health_file),
+        "-ResultPath", str(result_path),
         "-OldPid", str(current_pid or os.getpid()),
     ]
     kwargs: dict[str, Any] = {
@@ -466,7 +641,11 @@ def cleanup_old_backups(parent: Path, now: float | None = None, keep_seconds: in
     return removed
 
 
-def startup_cleanup(app_dir: Path, now: float | None = None) -> dict[str, int]:
+def startup_cleanup(
+    app_dir: Path,
+    now: float | None = None,
+    keep_temp_dirs: set[Path] | None = None,
+) -> dict[str, int]:
     """Remove update leftovers when the frozen app starts.
 
     Deletes sibling old-version backups past the rollback window and stale
@@ -474,7 +653,7 @@ def startup_cleanup(app_dir: Path, now: float | None = None) -> dict[str, int]:
     """
     removed_backups = cleanup_old_backups(app_dir.parent, now=now)
     temp_parent = Path(os.environ.get("TEMP") or tempfile.gettempdir())
-    removed_temp = cleanup_update_dirs(temp_parent)
+    removed_temp = cleanup_update_dirs(temp_parent, keep=keep_temp_dirs)
     return {"old_backups": removed_backups, "temp_dirs": removed_temp}
 
 
@@ -624,8 +803,10 @@ class HostUpdater:
                 return {"ok": False, "state": "install_failed",
                         "error": "已下载的更新目录不存在，请重新下载"}
             try:
+                latest = self._state.get("latest") or {}
                 launch_installer(app_dir=Path(app_dir).resolve(), stage_dir=stage_dir,
                                  work_dir=work_dir,
+                                 expected_version=str(latest.get("tag_name") or ""),
                                  current_pid=os.getpid())
             except Exception as exc:
                 self._set(state="install_failed", message="启动安装助手失败",

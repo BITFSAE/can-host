@@ -56,12 +56,22 @@ function setClass(idOrNode, className, enabled) {
   if (node) node.classList.toggle(className, !!enabled);
 }
 
-function toast(message, error = false) {
+function syncToastHost() {
+  const host = $("#toastStack");
+  if (!host) return null;
+  const openDialogs = $$("dialog[open]");
+  const target = openDialogs.length ? openDialogs[openDialogs.length - 1] : document.body;
+  if (host.parentElement !== target) target.append(host);
+  return host;
+}
+
+function toast(message, error = false, duration = null) {
   const node = document.createElement("div");
   node.className = `toast${error ? " error" : ""}`;
+  node.setAttribute("role", error ? "alert" : "status");
   node.textContent = message;
-  $("#toastStack").append(node);
-  setTimeout(() => node.remove(), 3600);
+  syncToastHost()?.append(node);
+  setTimeout(() => node.remove(), duration ?? (error ? 8000 : 3600));
 }
 
 function escapeHtml(value) {
@@ -153,6 +163,13 @@ async function init() {
     buildSwitchList();
     buildSwitchStatusList();
     await poll();
+    const health = await state.api.mark_frontend_ready();
+    if (health?.required && !health.ok) throw new Error(`更新启动确认失败：${health.error || "无法写入状态"}`);
+    const updateResult = state.bootstrap.startup_update_result;
+    if (updateResult?.ok === false) {
+      const logHint = updateResult.log_path ? `；日志：${updateResult.log_path}` : "";
+      toast(`${updateResult.message || "上次更新失败"}${logHint}`, true, 12000);
+    }
     if (typeof initUpdater === "function") initUpdater();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
@@ -208,6 +225,7 @@ function bindCoreControls() {
     $("#doConfirm").disabled = true;
     setConfirmModeBadge("待确认");
   });
+  $$("dialog").forEach(dialog => dialog.addEventListener("close", () => requestAnimationFrame(syncToastHost)));
   $("#doConfirm").addEventListener("click", sendPendingCommand);
   document.addEventListener("visibilitychange", () => schedulePoll(document.hidden ? 1000 : 0));
   window.addEventListener("resize", () => {
