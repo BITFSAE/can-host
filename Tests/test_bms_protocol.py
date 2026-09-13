@@ -696,11 +696,14 @@ class BmsProtocolTest(unittest.TestCase):
                 self.assertFalse(service.start_recording(str(path))["ok"])
                 self.assertTrue(service.connect({"mode": "simulation", "bus_profile": "can1", "bitrate": 500000})["ok"])
                 self.assertEqual(service.start_recording(str(path))["format"], "bmslog")
-                time.sleep(0.08)
+                deadline = time.monotonic() + 1.0
+                while (service.snapshot()["connection"]["rx_count"] <= 40
+                       and time.monotonic() < deadline):
+                    time.sleep(0.01)
                 service.stop_recording()
                 self.assertGreater(path.stat().st_size, 0)
                 result = service.load_replay(str(path))
-                self.assertTrue(result["ok"])
+                self.assertTrue(result["ok"], result)
                 self.assertGreater(result["frames"], 40)
                 self.assertEqual(service.snapshot()["connection"]["bus_profile"], "can1")
                 self.assertTrue(service.replay_control("seek", result["duration"])["ok"])
