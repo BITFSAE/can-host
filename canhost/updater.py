@@ -441,10 +441,10 @@ def release_record_for(version: str) -> dict[str, Any]:
     return record
 
 
-# 更新弹窗的历史版本列表只用于阅读说明，正文按下面的长度截断，避免每次轮询
-# 都把十份完整 Release 正文重新发过 JSBridge。
+# 历史版本列表只用于扫读每个版本改了什么，因此只保留条目，不带 Release 正文：
+# 这份列表每秒随状态轮询重新发过 JSBridge，带正文会把载荷抬高三倍，而界面
+# 从头到尾只读 changes。需要看全文时用 latest.body 或打开发布页。
 HISTORY_LIMIT = 8
-HISTORY_BODY_CHARS = 4000
 
 
 def _history_summary(release: dict[str, Any]) -> dict[str, Any]:
@@ -456,7 +456,6 @@ def _history_summary(release: dict[str, Any]) -> dict[str, Any]:
         "published_at": summary["published_at"],
         "prerelease": summary["prerelease"],
         "changes": summary["changes"],
-        "body": summary["body"][:HISTORY_BODY_CHARS],
     }
 
 

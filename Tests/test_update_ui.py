@@ -93,6 +93,11 @@ class ReleasePageApiTest(unittest.TestCase):
         self.assertTrue(merged["online"])
         self.assertEqual(merged["entries"][0]["notes"], ["在线条目"])
         self.assertEqual(merged["entries"][0]["source"], "release")
+        # 历史条目每秒随状态轮询重发，只保留扫读需要的字段。
+        self.assertEqual(
+            sorted(merged["entries"][0]),
+            ["date", "notes", "prerelease", "source", "url", "version"],
+        )
 
 
 if __name__ == "__main__":

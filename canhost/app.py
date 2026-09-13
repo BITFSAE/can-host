@@ -230,7 +230,6 @@ class Api:
                     "version": release_notes.base_version(tag),
                     "date": str(release.get("published_at") or "")[:10],
                     "notes": [str(note) for note in (release.get("changes") or [])],
-                    "body": str(release.get("body") or ""),
                     "url": str(release.get("html_url") or ""),
                     "prerelease": bool(release.get("prerelease")),
                     "source": "release",

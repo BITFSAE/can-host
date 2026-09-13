@@ -524,12 +524,17 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
                          ["v0.3.0", "v0.2.1", "v0.2.0"])
         self.assertEqual(recorded[0]["changes"], ["修复弹窗说明"])
 
-    def test_history_skips_drafts_and_truncates_long_bodies(self) -> None:
+    def test_history_skips_drafts_and_omits_the_release_body(self) -> None:
+        """历史列表只带条目：它每秒随轮询重发，带正文会把载荷抬高三倍。"""
         drafts = [{"tag_name": "v0.4.0", "draft": True, "assets": []},
                   {**_release("v0.3.0"), "body": "x" * 9000}]
         history = HostUpdater._history(drafts)
         self.assertEqual([item["tag_name"] for item in history], ["v0.3.0"])
-        self.assertEqual(len(history[0]["body"]), 4000)
+        self.assertNotIn("body", history[0])
+        # 覆盖成长正文后没有条目，说明列表确实只读条目、不再搬运正文。
+        self.assertEqual(history[0]["changes"], [])
+        self.assertEqual(HostUpdater._history([_release("v0.3.0")])[0]["changes"],
+                         ["修复弹窗说明"])
 
     def test_release_record_is_scoped_to_the_released_version(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
