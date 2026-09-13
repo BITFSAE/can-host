@@ -136,6 +136,21 @@ class TelemetryServiceTest(unittest.TestCase):
         client.disconnect.assert_called_once_with()
         client.loop_stop.assert_called_once_with()
 
+    @patch("canhost.telemetry.service.trust.https_ssl_context")
+    @patch("paho.mqtt.client.Client")
+    def test_tls_uses_bundled_trust_context(self, client_factory: MagicMock,
+                                            context_factory: MagicMock) -> None:
+        context = context_factory.return_value
+        client = client_factory.return_value
+        service = TelemetryService()
+
+        result = service.connect({"host": "broker.example", "tls": True})
+
+        self.assertTrue(result["ok"])
+        client.tls_set_context.assert_called_once_with(context)
+        self.assertFalse(client.tls_set.called)
+        service.disconnect()
+
     def test_fault_changes_build_bounded_session_history(self) -> None:
         monotonic = [10.0]
         wall = [1_800_000_000.0]

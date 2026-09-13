@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable
 import uuid
 
+from .. import trust
 from .protocol import decode_telemetry_payload
 
 
@@ -122,7 +123,7 @@ class TelemetryService:
             if username:
                 client.username_pw_set(username, password)
             if tls:
-                client.tls_set()
+                client.tls_set_context(trust.https_ssl_context())
         except Exception as exc:
             with self._lock:
                 self._connection.update(

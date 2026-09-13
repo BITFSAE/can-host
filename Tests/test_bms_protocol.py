@@ -137,7 +137,10 @@ class BmsProtocolTest(unittest.TestCase):
         clock[0] = 0.34
         self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
         clock[0] = 0.4
-        self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
+        stale_cell = protocol.snapshot({"connected": True})["cells"][0]
+        self.assertIsNone(stale_cell["value"])
+        self.assertEqual(stale_cell["last_valid_value"], 3700)
+        self.assertEqual(stale_cell["status"], "过期")
 
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 02 00 00 00 00 00 00"), True))
         clock[0] = 0.0
@@ -146,7 +149,25 @@ class BmsProtocolTest(unittest.TestCase):
         clock[0] = 0.34
         self.assertEqual(protocol.snapshot({"connected": True})["cells"][0]["value"], 3700)
         clock[0] = 0.36
-        self.assertIsNone(protocol.snapshot({"connected": True})["cells"][0]["value"])
+        stale_cell = protocol.snapshot({"connected": True})["cells"][0]
+        self.assertIsNone(stale_cell["value"])
+        self.assertEqual(stale_cell["last_valid_value"], 3700)
+
+    def test_stale_temperature_retains_only_the_last_valid_diagnostic_value(self) -> None:
+        clock = [0.0]
+        protocol = BmsProtocol(clock=lambda: clock[0])
+        protocol.ingest(CanFrame(0x184050F3, bytes((55, 56, 57, 58, 59, 60, 61, 62)), True))
+        clock[0] = 0.36
+        stale = protocol.snapshot({"connected": True})["temps"][0]
+        self.assertIsNone(stale["value"])
+        self.assertEqual(stale["last_valid_value"], 25)
+        self.assertEqual(stale["status"], "过期")
+
+        protocol.ingest(CanFrame(0x184050F3, bytes((0xFF, 56, 57, 58, 59, 60, 61, 62)), True))
+        invalid = protocol.snapshot({"connected": True})["temps"][0]
+        self.assertIsNone(invalid["value"])
+        self.assertEqual(invalid["last_valid_value"], 25)
+        self.assertEqual(invalid["status"], "断线")
 
     def test_canb_snapshot_does_not_invent_slave_data(self) -> None:
         protocol = BmsProtocol()
@@ -820,10 +841,22 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("event.target !== dialog", core_js)
         self.assertIn('dialog.close("cancel")', core_js)
 
-    def test_fan_js_defines_receiving_used_for_fresh_tag(self) -> None:
+    def test_fan_js_defines_known_sample_state_used_for_fresh_tag(self) -> None:
         js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")
-        self.assertIn("const receiving = statusFresh || diagFresh;", js)
+        self.assertIn("const receiving = statusKnown || diagKnown;", js)
         self.assertIn("text(\"#fanFreshTag\", receiving ?", js)
+
+    def test_cell_ui_labels_expired_last_valid_values_instead_of_flashing_blank(self) -> None:
+        web = Path(__file__).parents[1] / "canhost" / "web"
+        js = (web / "js" / "bms.js").read_text(encoding="utf-8")
+        css = (web / "styles.css").read_text(encoding="utf-8")
+        html = (web / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function hasRetainedStaleValue(item)", js)
+        self.assertIn("function measurementDisplayValue(item)", js)
+        self.assertIn('return item.status === "过期" && item.last_valid_value != null;', js)
+        self.assertIn('`${fmt(item.age, 1)} s 前`', js)
+        self.assertIn(".cell-item.stale", css)
+        self.assertIn("最近值 · 已过期", html)
 
     def test_alarm_detail_reports_whether_level_frame_was_received(self) -> None:
         protocol = BmsProtocol()

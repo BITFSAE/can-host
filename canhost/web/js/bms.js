@@ -246,17 +246,30 @@ function renderModules() {
   const modules = state.snapshot.modules || [];
   const cells = state.snapshot.cells || [], temps = state.snapshot.temps || [];
   $("#moduleAverages").innerHTML = modules.map(item => {
-    const cellValues = cells.filter(cell => cell.module === item.no && cell.value != null).map(cell => cell.value);
-    const tempValues = temps.filter(temp => temp.module === item.no && temp.value != null).map(temp => temp.value);
+    const moduleCells = cells.filter(cell => cell.module === item.no);
+    const moduleTemps = temps.filter(temp => temp.module === item.no);
+    const cellValues = moduleCells.map(measurementDisplayValue).filter(value => value != null);
+    const tempValues = moduleTemps.map(measurementDisplayValue).filter(value => value != null);
     const avgCell = cellValues.length ? cellValues.reduce((sum, value) => sum + value, 0) / cellValues.length : null;
     const avgTemp = tempValues.length ? tempValues.reduce((sum, value) => sum + value, 0) / tempValues.length : null;
     const delta = cellValues.length ? Math.max(...cellValues) - Math.min(...cellValues) : null;
-    return `<div class="${item.online ? "online" : "offline"}"><b>M${item.no}</b><span>${fmt(avgCell, 0)} mV</span>`
-      + `<span>${fmt(avgTemp, 1)} °C</span><span>${fmt(delta, 0)} mV</span><em>${item.online ? "正常" : "缺失"}</em></div>`;
+    const stale = [...moduleCells, ...moduleTemps].some(hasRetainedStaleValue);
+    const missing = [...moduleCells, ...moduleTemps].some(measurement =>
+      measurement.status !== "正常" && !hasRetainedStaleValue(measurement));
+    const ready = item.online && !stale && !missing;
+    const stateClass = ready ? "online" : stale && !missing ? "stale" : "offline";
+    const stateText = ready ? "新鲜" : stale && !missing ? "已过期" : "缺失";
+    return `<div class="${stateClass}"><b>M${item.no}</b><span>${fmt(avgCell, 0)} mV</span>`
+      + `<span>${fmt(avgTemp, 1)} °C</span><span>${fmt(delta, 0)} mV</span><em>${stateText}</em></div>`;
   }).join("");
-  const online = modules.filter(item => item.online).length;
-  text("#moduleSummary", `${online}/6 正常`);
-  $("#moduleSummary").className = `state-text ${online === 6 ? "ok" : "bad"}`;
+  const freshModules = modules.filter(item => {
+    const measurements = [...cells.filter(cell => cell.module === item.no),
+      ...temps.filter(temp => temp.module === item.no)];
+    return item.online && measurements.length > 0
+      && measurements.every(measurement => measurement.status === "正常");
+  }).length;
+  text("#moduleSummary", `${freshModules}/6 数据新鲜`);
+  $("#moduleSummary").className = `state-text ${freshModules === 6 ? "ok" : "bad"}`;
 }
 
 function durationLabel(totalSeconds) {
@@ -828,6 +841,7 @@ function buildAlarmMatrix() {
 
 /** Classify one cell or temperature against the thresholds currently reported by the master. */
 function cellStatus(item, voltage, thresholds) {
+  if (hasRetainedStaleValue(item)) return "stale";
   if (item.value == null) return "invalid";
   if (voltage) {
     if (thresholds.uv_mv != null && item.value <= thresholds.uv_mv) return "low";
@@ -839,11 +853,22 @@ function cellStatus(item, voltage, thresholds) {
   return "";
 }
 
+function hasRetainedStaleValue(item) {
+  return item.status === "过期" && item.last_valid_value != null;
+}
+
+/** A stale measurement is never restored as a current value. The diagnostic
+ * grid may, however, show its explicitly labelled last valid sample. */
+function measurementDisplayValue(item) {
+  if (item.value != null) return item.value;
+  return hasRetainedStaleValue(item) ? item.last_valid_value : null;
+}
+
 function extremes(items) {
-  const values = items.filter(item => item.value != null).map(item => item.value);
+  const values = items.map(measurementDisplayValue).filter(value => value != null);
   return values.length
-    ? { max: Math.max(...values), min: Math.min(...values), valid: values.length }
-    : { max: null, min: null, valid: 0 };
+    ? { max: Math.max(...values), min: Math.min(...values), available: values.length }
+    : { max: null, min: null, available: 0 };
 }
 
 /** Badge counts every cell and temperature the master is not currently reporting as valid. */
@@ -863,8 +888,8 @@ function makeCellItem(label, unit) {
 
 function cellDisplayValue(item) {
   if (item.status === "断线") return "断";
-  if (item.value == null) return "—";
-  return String(item.value);
+  const value = measurementDisplayValue(item);
+  return value == null ? "—" : String(value);
 }
 
 /** Build the fixed 6-module / 23-cell / 8-temp grid once so later polls only patch
@@ -905,11 +930,14 @@ function updateCellItem(item, ref, voltage, onlyAbnormal, thresholds) {
   const status = cellStatus(item, voltage, thresholds);
   ref.root.className = `cell-item ${status}`;
   ref.root.classList.toggle("hidden", onlyAbnormal && !status);
-  ref.root.title = `${item.status} · 最近数据 ${item.age ?? "—"} s`;
+  const ageText = item.age == null ? "尚未收到" : `最近数据 ${fmt(item.age, 1)} s 前`;
+  const retainedText = hasRetainedStaleValue(item) ? " · 显示最后有效值" : "";
+  ref.root.title = `${item.status} · ${ageText}${retainedText}`;
   ref.value.textContent = cellDisplayValue(item);
-  if (ref.unit) ref.unit.classList.toggle("hidden", item.value == null);
+  if (ref.unit) ref.unit.classList.toggle("hidden", measurementDisplayValue(item) == null);
   const captions = { low: voltage ? "欠压" : "低温", high: voltage ? "过压" : "过温", invalid: "失效 / 缺失" };
-  if (ref.stateCaption) ref.stateCaption.textContent = captions[status] || "";
+  if (ref.stateCaption) ref.stateCaption.textContent = status === "stale"
+    ? `${fmt(item.age, 1)} s 前` : captions[status] || "";
 }
 
 function renderCells() {
@@ -933,11 +961,17 @@ function renderCells() {
   text("#tempGridMax", tempTotal.max == null ? "—" : `${tempTotal.max} °C`);
   text("#tempGridMin", tempTotal.min == null ? "—" : `${tempTotal.min} °C`);
   text("#tempGridDelta", tempTotal.max == null ? "—" : `${fmt(tempTotal.max - tempTotal.min, 1)} °C`);
-  const missingCells = cells.length - cellTotal.valid;
-  const missingTemps = temps.length - tempTotal.valid;
+  const staleCells = cells.filter(hasRetainedStaleValue).length;
+  const staleTemps = temps.filter(hasRetainedStaleValue).length;
+  const missingCells = cells.filter(item => item.status !== "正常" && !hasRetainedStaleValue(item)).length;
+  const missingTemps = temps.filter(item => item.status !== "正常" && !hasRetainedStaleValue(item)).length;
   const dataIssue = $("#cellDataIssue");
-  dataIssue.classList.toggle("hidden", missingCells === 0 && missingTemps === 0);
-  dataIssue.textContent = `缺失 ${missingCells} 串 / ${missingTemps} 路`;
+  const issueParts = [];
+  if (staleCells || staleTemps) issueParts.push(`过期 ${staleCells} 串 / ${staleTemps} 路（显示最后有效值）`);
+  if (missingCells || missingTemps) issueParts.push(`失效或缺失 ${missingCells} 串 / ${missingTemps} 路`);
+  dataIssue.classList.toggle("hidden", issueParts.length === 0);
+  dataIssue.classList.toggle("warn", issueParts.length > 0 && missingCells === 0 && missingTemps === 0);
+  dataIssue.textContent = issueParts.join(" · ");
   const config = state.snapshot.config || {};
   const thresholds = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S) ? (config.thresholds || {}) : {};
   text("#displayOv", thresholds.ov_mv == null ? "等待数据" : `${thresholds.ov_mv} mV`);
@@ -963,12 +997,18 @@ function renderCells() {
       if (item.value == null || cellStatus(item, false, thresholds)) moduleAbnormal += 1;
     });
     abnormalTotal += moduleAbnormal;
-    const missing = cellGroup.length - cellStats.valid + tempGroup.length - tempStats.valid;
-    refs.issue.textContent = !module.online ? "通信中断" : missing > 0 ? `缺失 ${missing} 项` : "";
-    refs.issue.classList.toggle("hidden", module.online && missing === 0);
+    const stale = [...cellGroup, ...tempGroup].filter(hasRetainedStaleValue).length;
+    const missing = [...cellGroup, ...tempGroup].filter(item =>
+      item.status !== "正常" && !hasRetainedStaleValue(item)).length;
+    refs.issue.textContent = missing > 0 ? `失效或缺失 ${missing} 项`
+      : stale > 0 ? `过期 ${stale} 项 · 保留最近值` : "";
+    refs.issue.classList.toggle("warn", missing === 0 && stale > 0);
+    refs.issue.classList.toggle("hidden", missing === 0 && stale === 0);
     if (refs.stateNode) {
-      refs.stateNode.textContent = !module.online ? "离线" : missing > 0 ? "部分缺失" : "在线";
-      refs.stateNode.className = `module-state ${!module.online ? "bad" : missing > 0 ? "warn" : "ok"}`;
+      refs.stateNode.textContent = missing > 0 ? "部分失效" : stale > 0 ? "数据过期" : "数据新鲜";
+      refs.stateNode.className = `module-state ${missing > 0 ? "bad" : stale > 0 ? "warn" : "ok"}`;
+      refs.stateNode.title = module.age == null ? "尚未收到完整帧组"
+        : `完整帧组中最旧数据 ${fmt(module.age, 1)} s 前`;
     }
     refs.statBs[0].textContent = `${cellStats.min ?? "—"}–${cellStats.max ?? "—"} mV`;
     refs.statBs[1].textContent = cellStats.max == null ? "—" : `${cellStats.max - cellStats.min} mV`;

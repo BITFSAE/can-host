@@ -343,14 +343,17 @@ function renderFan() {
   const power = fan.power_status || {};
   const limits = fan.calib_limits || {};
   const calib = calibSession;
+  const statusKnown = hasDataAge(fan.status_age) && Object.keys(status).length > 0;
+  const diagKnown = hasDataAge(fan.diagnostic_age) && Object.keys(diag).length > 0;
+  const powerKnown = hasDataAge(fan.power_status_age) && Object.keys(power).length > 0;
   const statusFresh = isFresh(fan.status_age);
   const diagFresh = isFresh(fan.diagnostic_age);
   const powerFresh = isFresh(fan.power_status_age);
   const rpm = status.rpm || [];
   const duty = status.duty_pct || [];
-  const target = diagFresh ? (diag.target_pct || []) : [];
-  const faults = diagFresh ? (diag.faults || 0) : 0;
-  const receiving = statusFresh || diagFresh;
+  const target = diagKnown ? (diag.target_pct || []) : [];
+  const faults = diagKnown ? (diag.faults || 0) : 0;
+  const receiving = statusKnown || diagKnown;
   const pdmBus = snapshot.pdm?.bus || {};
   const pdmBattery = snapshot.pdm?.battery || {};
   const pdmValuesValid = [pdmBus.voltage_v, pdmBus.current_a, pdmBus.power_w]
@@ -372,15 +375,19 @@ function renderFan() {
   ];
 
   tachDefs.forEach(item => {
-    text(item.rpmId, statusFresh ? String(item.rpm) : "—");
+    text(item.rpmId, statusKnown ? String(item.rpm) : "—");
     const card = $(item.cardId);
     const stateNode = $(item.stateId);
     if (!card || !stateNode) return;
-    card.classList.remove("running", "stalled", "starting", "idle");
+    card.classList.remove("running", "stalled", "starting", "idle", "data-stale");
     stateNode.className = "fan-tach-state";
-    if (!statusFresh) {
+    if (!statusKnown) {
       stateNode.textContent = "—";
-    } else if (faults & (1 << item.faultBit)) {
+    } else if (!statusFresh) {
+      stateNode.textContent = "已过期";
+      stateNode.classList.add("data-stale");
+      card.classList.add("data-stale");
+    } else if (diagFresh && (faults & (1 << item.faultBit))) {
       stateNode.textContent = "停转故障";
       stateNode.classList.add("bad");
       card.classList.add("stalled");
@@ -402,17 +409,23 @@ function renderFan() {
   // Render PWM Duty progress bars and text
   for (let index = 0; index < 2; index++) {
     const bar = $(`#fanDuty${index + 1}Bar`);
-    if (bar) bar.style.width = statusFresh ? `${Math.max(0, Math.min(100, duty[index] ?? 0))}%` : "0%";
-    text(`#fanDuty${index + 1}Text`, !statusFresh ? "等待数据"
-      : `${duty[index] ?? 0}%${target.length ? ` · 目标 ${target[index] ?? 0}%` : ""}`);
+    if (bar) {
+      bar.style.width = statusKnown ? `${Math.max(0, Math.min(100, duty[index] ?? 0))}%` : "0%";
+      bar.classList.toggle("data-stale", statusKnown && !statusFresh);
+    }
+    text(`#fanDuty${index + 1}Text`, !statusKnown ? "等待数据"
+      : `${duty[index] ?? 0}%${target.length ? ` · ${diagFresh ? "目标" : "上次目标"} ${target[index] ?? 0}%` : ""}`);
+    markStaleData(`#fanDuty${index + 1}Text`, statusKnown && (!statusFresh || (target.length && !diagFresh)));
   }
 
   // Render Temperatures & Source Indicators
-  text("#fanModeText", diagFresh ? diag.mode_name || "未知" : "等待数据");
-  text("#fanMotorTemp", !diagFresh ? "等待数据"
+  text("#fanModeText", diagKnown ? diag.mode_name || "未知" : "等待数据");
+  text("#fanMotorTemp", !diagKnown ? "等待数据"
     : diag.motor_temp_c == null ? "失联" : `${fmt(diag.motor_temp_c, 1)} °C`);
-  text("#fanControllerTemp", !diagFresh ? "等待数据"
+  text("#fanControllerTemp", !diagKnown ? "等待数据"
     : diag.controller_temp_c == null ? "失联" : `${fmt(diag.controller_temp_c, 1)} °C`);
+  ["#fanModeText", "#fanMotorTemp", "#fanControllerTemp"].forEach(id =>
+    markStaleData(id, diagKnown && !diagFresh));
 
   const tempChips = [
     ["#fanTempChip506", diag.motor_temp_valid],
@@ -425,16 +438,21 @@ function renderFan() {
   });
 
   // Render 0x5A8 Power Status & Arbitration
-  text("#fanPowerStatusFresh", powerFresh ? `0x5A8 · ${fmt(fan.power_status_age, 1)} s 前` : "未收到 0x5A8");
-  text("#fanPowerSupplyState", powerFresh ? (power.power_supply_name || "未知") : "—");
-  text("#fanPowerLimitReason", powerFresh ? (power.power_limit_name || "未知") : "—");
-  text("#fanCurrentBudget", powerFresh && power.current_budget_a != null ? `${power.current_budget_a} A` : "—");
-  text("#fanPredictedCurrent", powerFresh && power.predicted_current_a != null ? `${power.predicted_current_a} A` : "—");
+  text("#fanPowerStatusFresh", powerKnown ? `0x5A8 · ${dataAgeText(fan.power_status_age)}` : "未收到 0x5A8");
+  markStaleData("#fanPowerStatusFresh", powerKnown && !powerFresh);
+  text("#fanPowerSupplyState", powerKnown ? (power.power_supply_name || "未知") : "—");
+  text("#fanPowerLimitReason", powerKnown ? (power.power_limit_name || "未知") : "—");
+  text("#fanCurrentBudget", powerKnown && power.current_budget_a != null ? `${power.current_budget_a} A` : "—");
+  text("#fanPredictedCurrent", powerKnown && power.predicted_current_a != null ? `${power.predicted_current_a} A` : "—");
+  ["#fanPowerSupplyState", "#fanPowerLimitReason", "#fanCurrentBudget", "#fanPredictedCurrent"].forEach(id =>
+    markStaleData(id, powerKnown && !powerFresh));
+  const limitsKnown = hasDataAge(fan.calib_limits_age) && Object.keys(limits).length > 0;
   const limitsFresh = isFresh(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S);
   const fanSuggested = (calib && calib.suggested_caps) || {};
   const fanChannelCaps = (calib && calib.channel_caps) || {};
-  let capsReportText = limitsFresh
+  let capsReportText = limitsKnown
     ? "0x5AE · " + (limits.calibrated ? "已标定" : "未标定") + " · 电池 " + limits.battery_cap_pct + "% · DCDC " + limits.dcdc_cap_pct + "% · 当前 " + limits.active_cap_pct + "%" + (limits.flash_error ? " · Flash错误" : "")
+      + (limitsFresh ? "" : ` · ${dataAgeText(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S)}`)
     : "未收到 0x5AE；保存前应先分别完成两档扫频。";
   if (calibStatus === "completed") {
     const suggestions = [];
@@ -464,11 +482,12 @@ function renderFan() {
         $("#fanDcdcCapInput").value = fanSuggested.dcdc_cap_pct;
       }
     }
-  } else if (limitsFresh && !state.dirty.fanCaps) {
+  } else if (limitsKnown && !state.dirty.fanCaps) {
     if (document.activeElement !== $("#fanBatteryCapInput")) $("#fanBatteryCapInput").value = limits.battery_cap_pct;
     if (document.activeElement !== $("#fanDcdcCapInput")) $("#fanDcdcCapInput").value = limits.dcdc_cap_pct;
   }
   text("#fanCapsReport", capsReportText);
+  markStaleData("#fanCapsReport", limitsKnown && !limitsFresh);
 
   // Render Fault Badges
   $$("#page-fan [data-fan-fault]").forEach(chip => {
@@ -478,43 +497,52 @@ function renderFan() {
 
   const diagSummaryNode = $("#fanDiagStatus");
   if (diagSummaryNode) {
-    diagSummaryNode.className = "fan-diag-summary " + (!diagFresh ? "" : faults !== 0 ? "bad" : "ok");
-    diagSummaryNode.textContent = !diagFresh ? "等待数据"
-      : faults === 0 ? "自检全部通过 (正常)" : `${diag.fault_names.length} 项故障活动`;
+    diagSummaryNode.className = "fan-diag-summary " + (!diagKnown ? "" : !diagFresh ? "data-stale" : faults !== 0 ? "bad" : "ok");
+    const diagText = faults === 0 ? "上次自检全部通过" : `上次有 ${diag.fault_names.length} 项故障`;
+    diagSummaryNode.textContent = !diagKnown ? "等待数据"
+      : diagFresh ? (faults === 0 ? "自检全部通过 (正常)" : `${diag.fault_names.length} 项故障活动`)
+        : `已过期 · ${diagText} · ${fmt(fan.diagnostic_age, 1)} s 前`;
   }
 
-  const newestFanAge = Math.min(...[fan.status_age, fan.diagnostic_age].filter(age => age != null));
-  text("#fanFreshTag", receiving ? `0x5A2/0x5A3 · ${fmt(newestFanAge, 1)} s 前` : "未收到状态帧");
+  const fanAges = [fan.status_age, fan.diagnostic_age].filter(hasDataAge);
+  const fanTelemetryStale = (statusKnown && !statusFresh) || (diagKnown && !diagFresh);
+  const fanDisplayAge = fanAges.length ? (fanTelemetryStale ? Math.max(...fanAges) : Math.min(...fanAges)) : null;
+  text("#fanFreshTag", receiving ? `0x5A2/0x5A3 · ${fanTelemetryStale ? "部分已过期 · 最旧 " : ""}${fmt(fanDisplayAge, 1)} s 前` : "未收到状态帧");
+  markStaleData("#fanFreshTag", fanTelemetryStale);
 
   // Policies (Curves & Failsafe)
   const curve = fan.curve || {};
+  const curveKnown = hasDataAge(fan.curve_age) && Object.keys(curve).length > 0;
   const curveFresh = isFresh(fan.curve_age, SLOW_DATA_FRESH_MAX_S);
   const failsafe = fan.failsafe || {};
+  const failsafeKnown = hasDataAge(fan.failsafe_age) && Object.keys(failsafe).length > 0;
   const failsafeFresh = isFresh(fan.failsafe_age, SLOW_DATA_FRESH_MAX_S);
-  text("#fanCurveReport", curveFresh
-    ? `${curve.temp_off_c}/${curve.temp_on_c}/${curve.temp_full_c} ℃ · ${curve.min_duty_pct}% · ${curve.ramp_up_pct_per_s}%/s`
+  text("#fanCurveReport", curveKnown
+    ? `${curve.temp_off_c}/${curve.temp_on_c}/${curve.temp_full_c} ℃ · ${curve.min_duty_pct}% · ${curve.ramp_up_pct_per_s}%/s${curveFresh ? "" : ` · ${dataAgeText(fan.curve_age, SLOW_DATA_FRESH_MAX_S)}`}`
     : "当前值未读取");
-  text("#fanFailsafeReport", failsafeFresh
-    ? `${failsafe.failsafe_name} · 保底 ${failsafe.fallback1_duty_pct}/${failsafe.fallback2_duty_pct}% · 保持 ${failsafe.stale_hold_s}s`
+  text("#fanFailsafeReport", failsafeKnown
+    ? `${failsafe.failsafe_name} · 保底 ${failsafe.fallback1_duty_pct}/${failsafe.fallback2_duty_pct}% · 保持 ${failsafe.stale_hold_s}s${failsafeFresh ? "" : ` · ${dataAgeText(fan.failsafe_age, SLOW_DATA_FRESH_MAX_S)}`}`
     : "当前值未读取");
+  markStaleData("#fanCurveReport", curveKnown && !curveFresh);
+  markStaleData("#fanFailsafeReport", failsafeKnown && !failsafeFresh);
 
   // Autofill form if user hasn't edited
   const fill = (id, value) => { if (document.activeElement !== $(id)) $(id).value = value; };
-  if (curveFresh && !state.dirty.fan) {
+  if (curveKnown && !state.dirty.fan) {
     fill("#fanTempOffInput", curve.temp_off_c);
     fill("#fanTempOnInput", curve.temp_on_c);
     fill("#fanTempFullInput", curve.temp_full_c);
     fill("#fanMinDutyInput", curve.min_duty_pct);
     fill("#fanRampUpInput", curve.ramp_up_pct_per_s);
   }
-  if (failsafeFresh && !state.dirty.fan) {
+  if (failsafeKnown && !state.dirty.fan) {
     fill("#fanStrategySelect", String(failsafe.failsafe));
     fill("#fanFallback1Input", failsafe.fallback1_duty_pct);
     fill("#fanFallback2Input", failsafe.fallback2_duty_pct);
     fill("#fanHoldInput", failsafe.stale_hold_s);
     fill("#fanRampDownInput", failsafe.ramp_down_pct_per_s);
   }
-  if (!curveFresh && !failsafeFresh && !state.dirty.fan) {
+  if (!curveKnown && !failsafeKnown && !state.dirty.fan) {
     ["#fanTempOffInput", "#fanTempOnInput", "#fanTempFullInput", "#fanMinDutyInput", "#fanRampUpInput",
      "#fanFallback1Input", "#fanFallback2Input", "#fanHoldInput", "#fanRampDownInput"].forEach(id => { if ($(id)) $(id).value = ""; });
     $("#fanStrategySelect").value = "1";
@@ -619,17 +647,25 @@ function renderFan() {
   const batteryFan = snapshot.battery_fan || {};
   const batteryStatus = batteryFan.status || {};
   const batteryCalib = batteryFan.calibration || {};
+  const batteryKnown = hasDataAge(batteryFan.status_age) && Object.keys(batteryStatus).length > 0;
   const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
-  text("#batteryFanFreshTag", batteryFresh ? `0x5AA · ${fmt(batteryFan.status_age, 1)} s 前` : "等待查询");
+  text("#batteryFanFreshTag", batteryKnown
+    ? `0x5AA · ${dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S)}` : "等待查询");
+  markStaleData("#batteryFanFreshTag", batteryKnown && !batteryFresh);
   const batteryNote = $("#batteryFanStatusText");
-  if (batteryNote) batteryNote.className = batteryFresh ? "fan-inline-note is-active" : "fan-inline-note";
-  text("#batteryFanStatusText", batteryFresh
-    ? `${batteryStatus.mode_name} · ${batteryStatus.power_source_name} · ${batteryStatus.actual_duty_pct}% / 上限 ${batteryStatus.active_limit_pct}% · ${batteryStatus.rpm} RPM`
+  if (batteryNote) batteryNote.className = batteryKnown
+    ? `fan-inline-note is-active${batteryFresh ? "" : " data-stale"}` : "fan-inline-note";
+  text("#batteryFanStatusText", batteryKnown
+    ? `${batteryStatus.mode_name} · ${batteryStatus.power_source_name} · ${batteryStatus.actual_duty_pct}% / 上限 ${batteryStatus.active_limit_pct}% · ${batteryStatus.rpm} RPM${batteryFresh ? "" : ` · ${dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S)}`}`
     : "发送查询后，F405 在限时窗口内回报状态。");
   const batteryValue = $("#batteryFanStatusValue");
-  if (batteryValue) batteryValue.textContent = batteryFresh ? String(batteryStatus.actual_duty_pct) : "等待";
+  if (batteryValue) {
+    batteryValue.textContent = batteryKnown ? String(batteryStatus.actual_duty_pct) : "等待";
+    batteryValue.classList.toggle("data-stale", batteryKnown && !batteryFresh);
+  }
+  const batteryCalibKnown = hasDataAge(batteryFan.calibration_age) && Object.keys(batteryCalib).length > 0;
   const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
-  if (batteryCalibFresh && !state.dirty.batteryFanCaps) {
+  if (batteryCalibKnown && !state.dirty.batteryFanCaps) {
     if (document.activeElement !== $("#batteryFanChromaCapInput")) {
       $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
     }
@@ -639,11 +675,14 @@ function renderFan() {
   }
   const saveNode = $("#batteryFanSaveState");
   if (saveNode) {
-    saveNode.textContent = batteryCalibFresh
-      ? batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存"
+    saveNode.textContent = batteryCalibKnown
+      ? (batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存")
+        + (batteryCalibFresh ? "" : ` · ${dataAgeText(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S)}`)
       : "等待回报";
     saveNode.className = "battery-fan-save-state"
-      + (batteryCalibFresh && batteryCalib.save_pending ? " warn" : batteryCalibFresh && batteryCalib.calibrated ? " ok" : "");
+      + (!batteryCalibFresh && batteryCalibKnown ? " data-stale"
+        : batteryCalibFresh && batteryCalib.save_pending ? " warn"
+          : batteryCalibFresh && batteryCalib.calibrated ? " ok" : "");
   }
   const batterySession = batteryFan.calib_session || {};
   const batteryRecords = batterySession.records || [];

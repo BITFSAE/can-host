@@ -922,6 +922,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .chip.normal::before { background: var(--surface-2); border-color: var(--line); }
 .chip.low::before { background: var(--accent-dim); border-color: var(--accent); }
 .chip.high::before { background: var(--warn-dim); border-color: var(--warn); }
+.chip.stale::before { background: transparent; border-color: var(--warn); }
 .chip.invalid::before { background: var(--fault-dim); border-color: var(--fault); }
 .legend-bar small { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
 
@@ -993,6 +994,8 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .cell-item.low b { color: var(--accent); }
 .cell-item.high { border-left-color: var(--warn); background: rgba(240, 180, 41, .07); }
 .cell-item.high b { color: var(--warn); }
+.cell-item.stale { border-left-color: var(--warn); background: rgba(240, 180, 41, .045); color: var(--warn); }
+.cell-item.stale b { color: var(--text-2); }
 .cell-item.invalid { border-left-color: var(--fault); background: rgba(242, 85, 77, .08); }
 .cell-item.invalid b { color: var(--fault); }
 .cell-grid .empty-state { grid-column: 1 / -1; background: var(--surface-1); }
@@ -1785,6 +1788,8 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .module-average-table b { font-size: 11px; }
 .module-average-table em { justify-self: end; color: var(--fault); font-style: normal; }
 .module-average-table .online em { color: var(--ok); }
+.module-average-table .stale { color: var(--text-2); }
+.module-average-table .stale em { color: var(--warn); }
 
 .imd-primary-grid { display: grid; grid-template-columns: 1fr 1.35fr; border-top: 1px solid var(--line-soft); }
 .imd-primary-grid > div { min-height: 61px; padding: 8px 10px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
@@ -1858,6 +1863,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .cell-summary-register dt { color: var(--text-3); font-size: 12px; }
 .cell-summary-register dd { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--text); }
 .cell-data-issue, .module-issue { color: var(--fault); font-family: var(--cjk); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.cell-data-issue.warn, .module-issue.warn { color: var(--warn); }
 .threshold-register { display: flex; align-items: center; gap: 22px; margin-bottom: 9px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface-1); }
 .threshold-register > strong { flex: none; font-family: var(--cjk); font-size: 13px; font-weight: 700; color: var(--text); }
 .threshold-register dl { display: flex; gap: 24px; }
@@ -1873,9 +1879,10 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 /* The ring is drawn outside the cell so neighbouring abnormal cells share one
    continuous outline instead of leaving dark 1px gaps between red boxes. */
 .cell-item { min-height: 58px; padding: 8px 10px; border-left: 0; }
-.cell-item.low, .cell-item.high, .cell-item.invalid { border-left: 0; box-shadow: 0 0 0 1px currentColor; }
+.cell-item.low, .cell-item.high, .cell-item.stale, .cell-item.invalid { border-left: 0; box-shadow: 0 0 0 1px currentColor; }
 .cell-item.low .cell-state-caption { color: var(--accent); }
 .cell-item.high .cell-state-caption { color: var(--warn); }
+.cell-item.stale .cell-state-caption { color: var(--warn); }
 .cell-item.invalid .cell-state-caption { color: var(--fault); }
 
 /* Read-only diagnostics */
@@ -2248,11 +2255,34 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.state-text.data-stale,
+.panel-context.data-stale,
+.policy-reported-tag.data-stale,
+.veh-channel-state.data-stale,
+.veh-tire-state.data-stale,
+.vehicle-flag-list dd.data-stale,
+.vehicle-ecu-ack em.data-stale,
+.vehicle-ecu-ack strong.data-stale,
+.vehicle-ecu-ack small.data-stale,
+.veh-ecu-row span.data-stale,
+.veh-state-text.data-stale,
+.fan-mode-val.data-stale,
+.fan-temp-val.data-stale,
+.fan-power-val.data-stale,
+.fan-duty-text.data-stale,
+.fan-tach-state.data-stale,
+.fan-diag-summary.data-stale,
+.fan-inline-note.data-stale,
+.battery-fan-status-value.data-stale,
+.battery-fan-save-state.data-stale,
+.tag.data-stale {
+  color: var(--warn);
+}
 
-#page-bench, #page-ivt { padding-top: 18px; }
-#page-bench .panel, #page-ivt .panel { margin-bottom: 10px; }
-#page-bench .panel-body, #page-ivt .panel-body { padding: 13px 14px; }
-#page-bench .panel-head, #page-ivt .panel-head { min-height: 44px; }
+#page-bench, #page-ivt, #page-simulator { padding-top: 18px; }
+#page-bench .panel, #page-ivt .panel, #page-simulator .panel { margin-bottom: 10px; }
+#page-bench .panel-body, #page-ivt .panel-body, #page-simulator .panel-body { padding: 13px 14px; }
+#page-bench .panel-head, #page-ivt .panel-head, #page-simulator .panel-head { min-height: 44px; }
 .bench-summary {
   margin-bottom: 12px;
   color: var(--text-2);
@@ -2398,6 +2428,64 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .bench-layout { grid-template-columns: minmax(0, 1fr); align-items: start; }
 .bench-layout .bench-state-panel { grid-column: 1 / -1; }
 .tool-layout .panel { margin-bottom: 0 !important; }
+.simulator-layout { grid-template-columns: minmax(0, 1.1fr) minmax(420px, .9fr); align-items: start; }
+.simulator-counter-panel { grid-column: 1 / -1; }
+.simulator-output-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.simulator-output-card {
+  display: grid;
+  min-width: 0;
+  min-height: 94px;
+  align-content: center;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: rgba(255,255,255,.018);
+}
+.simulator-output-card > span { color: var(--text-3); font-size: 10.5px; font-weight: 600; }
+.simulator-output-card > b { color: var(--text-2); font-size: 12.5px; font-weight: 650; }
+.simulator-output-card > small {
+  overflow: hidden;
+  color: var(--text-3);
+  font: 9.5px/1.4 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.simulator-output-card.active { border-color: rgba(62, 207, 142, .36); background: var(--ok-dim); }
+.simulator-output-card.active > b { color: var(--ok); }
+.simulator-output-card.failed { border-color: rgba(242, 85, 77, .42); background: var(--fault-dim); }
+.simulator-output-card.failed > b { color: var(--fault); }
+.simulator-readout-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 0 !important; }
+.simulator-readout-grid > div { display: grid; min-width: 0; min-height: 75px; align-content: center; gap: 3px; padding: 10px 13px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.simulator-readout-grid > div:nth-child(3n) { border-right: 0; }
+.simulator-readout-grid > div:nth-last-child(-n+3) { border-bottom: 0; }
+.simulator-readout-grid span { color: var(--text-3); font-size: 10px; }
+.simulator-readout-grid b { overflow: hidden; font: 15px var(--mono); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.simulator-readout-grid small { color: var(--text-3); font: 9.5px var(--mono); }
+.simulator-counter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 0 !important; }
+.simulator-counter-grid > div { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-right: 1px solid var(--line-soft); }
+.simulator-counter-grid > div:last-child { border-right: 0; }
+.simulator-counter-grid span { color: var(--text-3); font-size: 10.5px; }
+.simulator-counter-grid b { font: 14px var(--mono); font-weight: 700; }
+.simulator-runtime-error { padding: 9px 14px; border-top: 1px solid rgba(242, 85, 77, .42); background: var(--fault-dim); color: var(--fault); font-size: 11.5px; }
+
+.simulator-modal { width: 720px; }
+.simulator-output-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
+.simulator-output-choices legend { margin-bottom: 8px; color: var(--text-2); font-size: 11px; font-weight: 650; }
+.simulator-output-choices label { display: flex; min-height: 58px; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); cursor: pointer; }
+.simulator-output-choices input { width: 16px; height: 16px; flex: none; accent-color: var(--accent); }
+.simulator-output-choices span { display: grid; gap: 2px; min-width: 0; }
+.simulator-output-choices b { font-size: 12px; font-weight: 650; }
+.simulator-output-choices small { color: var(--text-3); font-size: 9.5px; line-height: 1.35; }
+.simulator-config-section { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(255,255,255,.014); transition: opacity .15s ease; }
+.simulator-config-section.disabled { opacity: .42; }
+.simulator-config-section > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.simulator-config-section > header b { font-size: 12px; font-weight: 650; }
+.simulator-config-section > header span { color: var(--text-3); font-size: 9.5px; }
+.simulator-credential-fields, .simulator-pcan-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.simulator-serial-fields { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(120px, .7fr) minmax(120px, .7fr); gap: 10px; }
+.simulator-tls-switch { justify-self: start; }
+.simulator-pcan-confirm { margin-top: 1px; }
 .tool-connection-panel { grid-column: 1 / -1; }
 .tool-connection-row { display: flex; align-items: end; gap: 12px; }
 .tool-connection-row .compact-field { flex: 0 1 270px; min-width: 190px; }
@@ -2464,7 +2552,9 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .ivt-advanced.panel .tool-note { margin-bottom: 12px; }
 
 @media (max-width: 1080px) {
-  .bench-layout, .ivt-layout { grid-template-columns: 1fr; }
+  .bench-layout, .ivt-layout, .simulator-layout { grid-template-columns: 1fr; }
+  .simulator-output-grid { grid-template-columns: 1fr; }
+  .simulator-counter-panel { grid-column: auto; }
   .bench-slave-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
@@ -2968,6 +3058,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   background: var(--ok);
   transition: width .2s ease;
 }
+.fan-duty-progress .meter i.data-stale { background: var(--warn); }
 
 .fan-tach-row {
   display: grid;
@@ -3001,6 +3092,11 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .fan-tach-card.starting {
   border-color: rgba(240, 180, 41, .35);
 }
+.fan-tach-card.data-stale {
+  border-color: rgba(240, 180, 41, .34);
+  background: rgba(240, 180, 41, .045);
+}
+.fan-tach-card.data-stale .fan-tach-val b { color: var(--text-2); }
 
 .fan-tach-meta {
   display: flex;
@@ -3402,6 +3498,19 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   color: var(--text);
 }
 .quick-cell em { font-style: normal; font-size: 9.5px; color: var(--text-3); }
+.quick-cell.data-stale b,
+.quick-cell.data-stale em { color: var(--warn); }
+.quick-cell.data-stale::after {
+  content: "旧";
+  align-self: center;
+  padding: 1px 4px;
+  border: 1px solid rgba(240, 180, 41, .5);
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.25;
+}
 .quick-divider { width: 1px; height: 16px; flex: none; background: var(--line-soft); }
 
 /* 状态栏内的整车连接按钮 */
@@ -3563,6 +3672,14 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   background: var(--surface-2);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
+}
+.vehicle-pdm-side.data-stale,
+.veh-tire-group.data-stale {
+  border-color: rgba(240, 180, 41, .34);
+}
+.vehicle-pdm-side.data-stale .vehicle-limit-grid b,
+.veh-tire-group.data-stale .veh-tire-point b {
+  color: var(--text-2);
 }
 .vehicle-pdm-head {
   display: flex;

@@ -67,6 +67,10 @@
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>
               <span>IVT配置</span>
             </button>
+            <button class="nav-item" id="telemetrySimulatorNav" type="button" data-page="simulator" title="本地遥测模拟器">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5h16M6.5 14.5a7 7 0 0 1 11 0M9.2 11.5a3.8 3.8 0 0 1 5.6 0"/><path d="M12 4.5v4M10 6.5h4"/><circle cx="12" cy="17.5" r="1.3"/></svg>
+              <span>遥测数据模拟</span>
+            </button>
           </div>
         </details>
       </nav>
@@ -215,7 +219,8 @@
             <span class="chip normal">正常</span>
             <span class="chip low">低于下限</span>
             <span class="chip high">高于上限</span>
-            <span class="chip invalid">断线 / 过期 / 缺失</span>
+            <span class="chip stale">最近值 · 已过期</span>
+            <span class="chip invalid">断线 / 失效 / 缺失</span>
             </div>
           </div>
 
@@ -606,6 +611,56 @@
               </div>
             </div>
           </details>
+        </section>
+
+        <section class="page" id="page-simulator" aria-label="本地遥测模拟器">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>本地遥测模拟器</h2>
+              <span class="tool-header-desc">TelemetryFrame 10 Hz · BMS 明细 2 Hz · MQTT / 串口 / PCAN</span>
+            </div>
+            <div class="tool-header-connection">
+              <span id="simulatorStatus" class="tag neutral" role="status" aria-live="polite">已停止</span>
+              <div class="tool-connection-controls">
+                <button class="action-button" type="button" id="configureSimulatorButton">配置并启动</button>
+                <button class="danger-outline hidden" type="button" id="stopSimulatorButton">停止</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tool-layout simulator-layout">
+            <article class="panel simulator-output-panel">
+              <header class="panel-head"><h3>输出路径</h3><span id="simulatorOutputSummary" class="panel-context">等待配置</span></header>
+              <div class="panel-body simulator-output-grid">
+                <div class="simulator-output-card" id="simulatorMqttCard"><span>MQTT</span><b id="simulatorMqttState">未启用</b><small id="simulatorMqttDetail">—</small></div>
+                <div class="simulator-output-card" id="simulatorSerialCard"><span>串口</span><b id="simulatorSerialState">未启用</b><small id="simulatorSerialDetail">—</small></div>
+                <div class="simulator-output-card" id="simulatorPcanCard"><span>PCAN · CAN1</span><b id="simulatorPcanState">未启用</b><small id="simulatorPcanDetail">—</small></div>
+              </div>
+            </article>
+
+            <article class="panel simulator-live-panel">
+              <header class="panel-head"><h3>当前模拟帧</h3><span id="simulatorRunAge" class="panel-context">等待启动</span></header>
+              <div class="panel-body simulator-readout-grid">
+                <div><span>车辆状态</span><b id="simulatorVehicleState">等待数据</b><small id="simulatorSequence">SEQ —</small></div>
+                <div><span>电机转速</span><b id="simulatorRpm">—</b><small>RPM</small></div>
+                <div><span>车速</span><b id="simulatorSpeed">—</b><small>km/h</small></div>
+                <div><span>高压电压</span><b id="simulatorVoltage">—</b><small>V</small></div>
+                <div><span>高压电流</span><b id="simulatorCurrent">—</b><small>A</small></div>
+                <div><span>SOC</span><b id="simulatorSoc">—</b><small>%</small></div>
+              </div>
+            </article>
+
+            <article class="panel simulator-counter-panel">
+              <header class="panel-head"><h3>发送统计</h3><span>当前运行周期</span></header>
+              <div class="panel-body simulator-counter-grid">
+                <div><span>生成帧</span><b id="simulatorGeneratedCount">0</b></div>
+                <div><span>MQTT 帧</span><b id="simulatorMqttCount">0</b></div>
+                <div><span>串口帧</span><b id="simulatorSerialCount">0</b></div>
+                <div><span>CAN 帧</span><b id="simulatorPcanCount">0</b></div>
+              </div>
+              <div id="simulatorRuntimeError" class="simulator-runtime-error hidden" role="alert"></div>
+            </article>
+          </div>
         </section>
 
         <section class="page" id="page-fan" aria-label="整车风扇">
@@ -1194,6 +1249,60 @@
     </form>
   </dialog>
 
+  <dialog id="telemetrySimulatorDialog" class="modal simulator-modal" data-backdrop-close>
+    <form method="dialog">
+      <header><h2>配置本地遥测模拟器</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
+      <div class="modal-body">
+        <fieldset class="simulator-output-choices">
+          <legend>输出路径</legend>
+          <label><input id="simulatorUseMqtt" type="checkbox" checked><span><b>MQTT</b><small>发布完整 TelemetryFrame</small></span></label>
+          <label><input id="simulatorUseSerial" type="checkbox"><span><b>串口</b><small>发送 Protobuf 原始字节</small></span></label>
+          <label><input id="simulatorUsePcan" type="checkbox"><span><b>PCAN</b><small>向 CAN1 注入模拟 BMS 帧</small></span></label>
+        </fieldset>
+
+        <section class="simulator-config-section" id="simulatorMqttFields">
+          <header><b>MQTT 发布</b><span>账号密码可同时留空</span></header>
+          <div class="telemetry-endpoint-fields">
+            <label class="field"><span class="field-label">Broker</span><input id="simulatorMqttHost" value="bitfsae.com" autocomplete="off" required></label>
+            <label class="field"><span class="field-label">端口</span><input id="simulatorMqttPort" type="number" min="1" max="65535" value="1883" required></label>
+          </div>
+          <label class="field"><span class="field-label">Topic</span><input id="simulatorMqttTopic" value="fsae/telemetry" autocomplete="off" required></label>
+          <div class="simulator-credential-fields">
+            <label class="field"><span class="field-label">发布账号</span><input id="simulatorMqttUsername" value="vehicle_gateway" autocomplete="username"></label>
+            <label class="field"><span class="field-label">密码</span><input id="simulatorMqttPassword" type="password" autocomplete="off"></label>
+          </div>
+          <label class="switch simulator-tls-switch"><input id="simulatorMqttTls" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>启用 TLS</span></label>
+        </section>
+
+        <section class="simulator-config-section disabled" id="simulatorSerialFields">
+          <header><b>串口输出</b><span>8-N-1 · 超时 1 s</span></header>
+          <div class="simulator-serial-fields">
+            <label class="field"><span class="field-label">串口</span><input id="simulatorSerialPort" list="simulatorSerialPortList" placeholder="例如 /dev/cu.usbserial-0001" autocomplete="off"><datalist id="simulatorSerialPortList"></datalist></label>
+            <label class="field"><span class="field-label">波特率</span><input id="simulatorSerialBaudrate" type="number" min="1200" max="4000000" value="115200"></label>
+            <label class="field"><span class="field-label">包尾 HEX</span><input id="simulatorSerialSuffix" value="" placeholder="不追加" pattern="(?:[0-9A-Fa-f]{2}\s*)*"></label>
+          </div>
+        </section>
+
+        <section class="simulator-config-section disabled" id="simulatorPcanFields">
+          <header><b>PCAN 输出</b><span>独立通道 · CAN1 模拟帧</span></header>
+          <div class="simulator-pcan-fields">
+            <label class="field"><span class="field-label">PCAN 通道</span><select id="simulatorPcanChannel"></select></label>
+            <label class="field"><span class="field-label">位率</span><select id="simulatorPcanBitrate"><option value="500000">500 kbit/s</option></select></label>
+          </div>
+          <label class="checkbox simulator-pcan-confirm hidden" id="simulatorPcanConfirmRow">
+            <input id="simulatorPcanConfirm" type="checkbox">
+            <span>我已确认所选通道连接的是测试总线；启动后会持续发送 CAN1 模拟帧。</span>
+          </label>
+        </section>
+        <div id="simulatorConfigError" class="modal-error hidden" role="alert"></div>
+      </div>
+      <footer>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="startSimulatorButton">启动模拟</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
       <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭">×</button></header>
@@ -1313,6 +1422,7 @@
   <script src="js/bench.js"></script>
   <script src="js/ivt.js"></script>
   <script src="js/telemetry.js"></script>
+  <script src="js/telemetry-simulator.js"></script>
   <script src="js/updater.js"></script>
 </body>
 </html>

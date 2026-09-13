@@ -10,7 +10,7 @@ var state = {
   api: null,
   bootstrap: null,
   snapshot: null,
-  toolSnapshots: { bench: null, ivt: null },
+  toolSnapshots: { bench: null, ivt: null, simulator: null },
   vehicleSnapshot: null,
   telemetrySnapshot: null,
   quickSnapshot: null,
@@ -41,8 +41,8 @@ window.state = state;
 const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
 
-const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "telemetry"];
-const TOOL_PAGES = ["bench", "ivt"];
+const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "simulator", "telemetry"];
+const TOOL_PAGES = ["bench", "ivt", "simulator"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
 const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
@@ -53,6 +53,21 @@ function fmt(value, digits = 1, fallback = "—") {
 function isFresh(age, limit = DATA_FRESH_MAX_S) {
   const value = Number(age);
   return age != null && Number.isFinite(value) && value >= 0 && value <= limit;
+}
+function hasDataAge(age) {
+  const value = Number(age);
+  return age != null && Number.isFinite(value) && value >= 0;
+}
+function isStaleData(age, limit = DATA_FRESH_MAX_S) {
+  return hasDataAge(age) && !isFresh(age, limit);
+}
+function dataAgeText(age, limit = DATA_FRESH_MAX_S) {
+  if (!hasDataAge(age)) return "等待数据";
+  return `${isStaleData(age, limit) ? "已过期 · " : ""}${fmt(age, 1)} s 前`;
+}
+function markStaleData(idOrNode, stale) {
+  const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
+  if (node) node.classList.toggle("data-stale", !!stale);
 }
 function text(id, value) { const node = $(id); if (node) node.textContent = value; }
 function setClass(idOrNode, className, enabled) {
@@ -149,6 +164,7 @@ async function init() {
   bindBenchControls();
   bindIvtControls();
   bindTelemetryControls();
+  bindTelemetrySimulatorControls();
   buildAlarmMatrix();
   buildVehicleStatics();
   try {
@@ -160,6 +176,7 @@ async function init() {
       "hidden",
       state.bootstrap.simulation_enabled !== true && state.bootstrap.vehicle_simulation_enabled !== true
     );
+    $("#telemetrySimulatorNav")?.classList.toggle("hidden", state.bootstrap.telemetry_simulator_enabled !== true);
     populateConnectionOptions();
     populateToolChannelOptions();
     populateVehicleOptions();
@@ -524,6 +541,9 @@ async function poll() {
       await optionalSnapshot(state.api.get_bench_snapshot, value => { state.toolSnapshots.bench = value; });
     } else if (page === "ivt" && state.api.get_ivt_snapshot) {
       await optionalSnapshot(state.api.get_ivt_snapshot, value => { state.toolSnapshots.ivt = value; });
+    } else if (page === "simulator" && state.api.get_telemetry_simulator_snapshot) {
+      await optionalSnapshot(state.api.get_telemetry_simulator_snapshot,
+        value => { state.toolSnapshots.simulator = value; });
     }
     if ((page === "vehicle" || page === "fan"
          || (page === "frames" && state.frameSource === "vehicle"))
@@ -573,6 +593,8 @@ function render() {
     renderBench();
   } else if (state.page === "ivt") {
     renderIvtConfig();
+  } else if (state.page === "simulator") {
+    renderTelemetrySimulator();
   } else if (state.page === "fan") {
     renderFan();
   } else if (state.page === "frames") {
@@ -656,43 +678,86 @@ function setConfirmModeBadge(label, mode) {
   }
 }
 
-/** Always-visible quick values: LV from the vehicle connection, HV/SOC from the
- *  main connection with the vehicle 0x4B0 mirror as fallback. */
+/** Always-visible quick values: prefer fresh sources, then keep the last valid
+ *  sample visible with an explicit stale state.  This strip is diagnostic only;
+ *  control paths keep their own strict freshness gates. */
 function renderQuickBar() {
   const quick = state.quickSnapshot?.vehicle;
   const main = state.snapshot || {};
   const overview = main.overview || {};
   const mainConnection = main.connection || {};
+  const mainSummaryKnown = hasDataAge(mainConnection.summary_age) && overview.voltage_valid !== undefined;
   const mainSummaryFresh = isFresh(mainConnection.summary_age) && overview.voltage_valid !== undefined;
   const vehiclePack = quick?.pack || {};
+  const vehiclePackKnown = hasDataAge(vehiclePack.age);
   const vehiclePackFresh = isFresh(vehiclePack.age);
   const useMainHv = mainSummaryFresh && overview.voltage_valid;
   const useMainSoc = mainSummaryFresh && overview.soc_valid;
 
+  const setQuickValue = (id, value, known, fresh, age) => {
+    const node = $(id);
+    if (!node) return;
+    node.textContent = known && value != null ? value : "等待";
+    const cell = node.closest(".quick-cell");
+    const stale = known && !fresh;
+    cell?.classList.toggle("data-stale", stale);
+    if (cell) cell.title = known ? dataAgeText(age, 4.0) : "等待数据";
+  };
+  const choosePackSource = (mainKnown, mainFresh, vehicleKnown, vehicleFresh) => {
+    if (mainFresh) return { data: overview, age: mainConnection.summary_age, fresh: true };
+    if (vehicleFresh) return { data: vehiclePack, age: vehiclePack.age, fresh: true };
+    if (mainKnown && vehicleKnown) {
+      return Number(mainConnection.summary_age) <= Number(vehiclePack.age)
+        ? { data: overview, age: mainConnection.summary_age, fresh: false }
+        : { data: vehiclePack, age: vehiclePack.age, fresh: false };
+    }
+    if (mainKnown) return { data: overview, age: mainConnection.summary_age, fresh: false };
+    if (vehicleKnown) return { data: vehiclePack, age: vehiclePack.age, fresh: false };
+    return null;
+  };
+
   const pdm = quick?.pdm || {};
+  const lvKnown = hasDataAge(pdm.age) && !pdm.bus_offline;
   const lvFresh = isFresh(pdm.age, 4.0) && !pdm.bus_offline;
-  text("#quickLvV", lvFresh ? fmt(pdm.bus_voltage_v, 1) : "等待");
-  text("#quickLvI", lvFresh ? fmt(pdm.bus_current_a, 1) : "等待");
-  text("#quickLvP", lvFresh ? fmt(pdm.bus_power_w, 0) : "等待");
+  setQuickValue("#quickLvV", fmt(pdm.bus_voltage_v, 1), lvKnown && pdm.bus_voltage_v != null, lvFresh, pdm.age);
+  setQuickValue("#quickLvI", fmt(pdm.bus_current_a, 1), lvKnown && pdm.bus_current_a != null, lvFresh, pdm.age);
+  setQuickValue("#quickLvP", fmt(pdm.bus_power_w, 0), lvKnown && pdm.bus_power_w != null, lvFresh, pdm.age);
 
   const vehicleVoltageFresh = vehiclePackFresh && vehiclePack.voltage_valid;
-  const voltageSource = useMainHv ? overview : vehicleVoltageFresh ? vehiclePack : null;
-  text("#quickHvV", voltageSource ? fmt(voltageSource.voltage_v, 1) : "等待");
+  const mainVoltageKnown = mainSummaryKnown && overview.voltage_valid;
+  const vehicleVoltageKnown = vehiclePackKnown && vehiclePack.voltage_valid;
+  const voltageSource = choosePackSource(mainVoltageKnown, useMainHv,
+    vehicleVoltageKnown, vehicleVoltageFresh);
+  setQuickValue("#quickHvV", voltageSource && fmt(voltageSource.data.voltage_v, 1),
+    !!voltageSource, voltageSource?.fresh, voltageSource?.age);
   const useMainCurrent = mainSummaryFresh && overview.current_valid;
   const vehicleCurrentFresh = vehiclePackFresh && vehiclePack.current_valid;
-  const currentSource = useMainCurrent ? overview : vehicleCurrentFresh ? vehiclePack : null;
-  text("#quickHvI", currentSource ? fmt(currentSource.current_a, 1) : "等待");
+  const mainCurrentKnown = mainSummaryKnown && overview.current_valid;
+  const vehicleCurrentKnown = vehiclePackKnown && vehiclePack.current_valid;
+  const currentSource = choosePackSource(mainCurrentKnown, useMainCurrent,
+    vehicleCurrentKnown, vehicleCurrentFresh);
+  setQuickValue("#quickHvI", currentSource && fmt(currentSource.data.current_a, 1),
+    !!currentSource, currentSource?.fresh, currentSource?.age);
   const vehicleSocFresh = vehiclePackFresh && vehiclePack.soc_valid;
-  const socSource = useMainSoc ? overview : vehicleSocFresh ? vehiclePack : null;
-  text("#quickSoc", socSource ? fmt(socSource.soc_pct, 0) : "等待");
+  const mainSocKnown = mainSummaryKnown && overview.soc_valid;
+  const vehicleSocKnown = vehiclePackKnown && vehiclePack.soc_valid;
+  const socSource = choosePackSource(mainSocKnown, useMainSoc,
+    vehicleSocKnown, vehicleSocFresh);
+  setQuickValue("#quickSoc", socSource && fmt(socSource.data.soc_pct, 0),
+    !!socSource, socSource?.fresh, socSource?.age);
 
   const sop = quick?.sop || {};
+  const sopKnown = hasDataAge(sop.age);
   const sopFresh = isFresh(sop.age, 4.0);
-  text("#quickSopDis", sopFresh ? fmt(sop.discharge_power_kw, 1) : "等待");
-  text("#quickSopChg", sopFresh ? fmt(sop.charge_power_kw, 1) : "等待");
+  setQuickValue("#quickSopDis", fmt(sop.discharge_power_kw, 1), sopKnown && sop.discharge_power_kw != null,
+    sopFresh, sop.age);
+  setQuickValue("#quickSopChg", fmt(sop.charge_power_kw, 1), sopKnown && sop.charge_power_kw != null,
+    sopFresh, sop.age);
 
+  const fanKnown = hasDataAge(quick?.fan_age) && quick?.fan_rpm_max != null;
   const fanFresh = isFresh(quick?.fan_age, 4.0);
-  text("#quickFanRpm", fanFresh && quick.fan_rpm_max != null ? String(quick.fan_rpm_max) : "等待");
+  setQuickValue("#quickFanRpm", fanKnown ? String(quick.fan_rpm_max) : null,
+    fanKnown, fanFresh, quick?.fan_age);
 }
 
 /* ---------------- shared confirm dialog ---------------- */

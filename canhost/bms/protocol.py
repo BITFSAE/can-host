@@ -160,9 +160,11 @@ class BmsProtocol:
         self.cells: list[int | None] = [None] * CELL_COUNT
         self.cell_seen: list[float | None] = [None] * CELL_COUNT
         self.cell_reason: list[str | None] = [None] * CELL_COUNT
+        self.cell_last_valid: list[int | None] = [None] * CELL_COUNT
         self.temps: list[int | None] = [None] * TEMP_COUNT
         self.temp_seen: list[float | None] = [None] * TEMP_COUNT
         self.temp_reason: list[str | None] = [None] * TEMP_COUNT
+        self.temp_last_valid: list[int | None] = [None] * TEMP_COUNT
         self.volt_frame_seen: list[list[float | None]] = [[None] * 6 for _ in range(6)]
         self.temp_frame_seen: list[float | None] = [None] * 6
         self.overview: dict[str, Any] = {
@@ -521,6 +523,8 @@ class BmsProtocol:
                 self.cells[cell] = raw_value
                 self.cell_seen[cell] = now
                 self.cell_reason[cell] = "断线" if bms_cell_voltage_is_open(raw_value) else None
+                if not bms_cell_voltage_is_open(raw_value):
+                    self.cell_last_valid[cell] = raw_value
             self.volt_frame_seen[slave][frame_index] = now
             return True
         delta = can_id - CAN1_CELL_TEMP_BASE
@@ -540,6 +544,8 @@ class BmsProtocol:
                 self.temps[index] = value
                 self.temp_seen[index] = now
                 self.temp_reason[index] = None if (value == 0xFF or value <= 129) else "范围错误"
+                if value != 0xFF and value <= 129:
+                    self.temp_last_valid[index] = value - 30
             self.temp_frame_seen[slave] = now
             return True
         return False
@@ -590,14 +596,18 @@ class BmsProtocol:
                          and cell_age is not None
                          and cell_age <= self.slave_sample_timeout_s)
                 cell_values.append({"no": index + 1, "module": index // 23 + 1, "local": index % 23 + 1,
-                                    "value": value if valid else None, "raw": value, "age": cell_age,
+                                    "value": value if valid else None,
+                                    "last_valid_value": self.cell_last_valid[index],
+                                    "raw": value, "age": cell_age,
                                     "status": self.cell_reason[index] or ("过期" if value is not None and not valid else "正常" if valid else "未收到")})
             for index, value in enumerate(self.temps):
                 temp_age = age(now, self.temp_seen[index])
                 valid = (value is not None and value != 0xFF and value <= 129 and temp_age is not None
                          and temp_age <= self.slave_sample_timeout_s)
                 temp_values.append({"no": index + 1, "module": index // 8 + 1, "local": index % 8 + 1,
-                                    "value": value - 30 if valid else None, "raw": value, "age": temp_age,
+                                    "value": value - 30 if valid else None,
+                                    "last_valid_value": self.temp_last_valid[index],
+                                    "raw": value, "age": temp_age,
                                     "status": self.temp_reason[index] or ("断线" if value == 0xFF else ("过期" if value is not None and not valid else "正常" if valid else "未收到"))})
             for slave in range(6):
                 ages = [age(now, seen) for seen in self.volt_frame_seen[slave]]

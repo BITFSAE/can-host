@@ -122,14 +122,18 @@ function setVehChannel(gridId, channels, data, freshLimit) {
     const node = grid.querySelector(`[data-channel="${channel.key}"]`);
     if (!node) return;
     const entry = data?.[channel.key] || {};
+    const known = hasDataAge(entry.age);
     const fresh = isFresh(entry.age, freshLimit);
-    const value = fresh && entry.value != null ? fmt(entry.value, channel.digits) : "等待数据";
-    node.querySelector("b").textContent = channel.optional && !fresh ? "未发送" : value;
+    const stale = isStaleData(entry.age, freshLimit);
+    const value = known && entry.value != null ? fmt(entry.value, channel.digits) : "等待数据";
+    node.querySelector("b").textContent = channel.optional && !known ? "未发送" : value;
     const stateNode = node.querySelector(".veh-channel-state");
     const status = entry.status;
-    stateNode.textContent = !fresh ? "未收到" : status === 0 ? `${fmt(entry.age, 1)} s 前` : "结果异常";
-    stateNode.className = `veh-channel-state${fresh ? (status === 0 ? " ok" : " bad") : ""}`;
-    node.classList.toggle("stale", !fresh);
+    stateNode.textContent = !known ? "未收到" : stale
+      ? `${dataAgeText(entry.age, freshLimit)}${status === 0 ? "" : " · 上次结果异常"}`
+      : status === 0 ? `${fmt(entry.age, 1)} s 前` : "结果异常";
+    stateNode.className = `veh-channel-state${fresh ? (status === 0 ? " ok" : " bad") : stale ? " data-stale" : ""}`;
+    node.classList.toggle("stale", stale);
   });
 }
 
@@ -149,99 +153,142 @@ function renderVehicle() {
   const sop = snapshot.sop || {};
   const limits = sop.limits || {};
   const sopStatus = sop.status || {};
-  const limitsFresh = isFresh(sop.limits_age);
-  text("#vehSopDisA", limitsFresh ? fmt(limits.discharge_current_a, 1) : "等待数据");
-  text("#vehSopChgA", limitsFresh ? fmt(limits.charge_current_a, 1) : "等待数据");
-  text("#vehSopDisKw", limitsFresh ? fmt(limits.discharge_power_kw, 1) : "等待数据");
-  text("#vehSopChgKw", limitsFresh ? fmt(limits.charge_power_kw, 1) : "等待数据");
-  text("#vehSopAge", limitsFresh ? `0x4A0/0x4A3 · ${fmt(sop.status_age, 1)} s 前` : "等待数据");
+  const limitsKnown = hasDataAge(sop.limits_age) && Object.keys(limits).length > 0;
+  text("#vehSopDisA", limitsKnown ? fmt(limits.discharge_current_a, 1) : "等待数据");
+  text("#vehSopChgA", limitsKnown ? fmt(limits.charge_current_a, 1) : "等待数据");
+  text("#vehSopDisKw", limitsKnown ? fmt(limits.discharge_power_kw, 1) : "等待数据");
+  text("#vehSopChgKw", limitsKnown ? fmt(limits.charge_power_kw, 1) : "等待数据");
+  const statusKnown = hasDataAge(sop.status_age) && Object.keys(sopStatus).length > 0;
   const statusFresh = isFresh(sop.status_age);
-  const flagText = value => statusFresh ? (value ? "是" : "否") : "—";
+  const sopAges = [sop.limits_age, sop.status_age].filter(hasDataAge);
+  const sopStale = isStaleData(sop.limits_age) || isStaleData(sop.status_age);
+  const sopDisplayAge = sopAges.length ? (sopStale ? Math.max(...sopAges) : Math.min(...sopAges)) : null;
+  text("#vehSopAge", sopAges.length
+    ? `0x4A0/0x4A3 · ${sopStale ? "部分已过期 · 最旧 " : ""}${fmt(sopDisplayAge, 1)} s 前`
+    : "等待数据");
+  markStaleData("#vehSopAge", sopStale);
+  const flagText = value => statusKnown ? (value ? "是" : "否") : "—";
   text("#vehSopLimitsValid", flagText(sopStatus.limits_valid));
   text("#vehSopDrive", flagText(sopStatus.drive_allowed));
   text("#vehSopRegen", flagText(sopStatus.regen_allowed));
-  text("#vehSopIntervention", statusFresh ? VEH_INTERVENTION_NAMES[sopStatus.intervention_level] ?? "—" : "—");
-  text("#vehSopCrc", statusFresh ? (sopStatus.crc_valid ? "通过" : "失败") : "—");
+  text("#vehSopIntervention", statusKnown ? VEH_INTERVENTION_NAMES[sopStatus.intervention_level] ?? "—" : "—");
+  text("#vehSopCrc", statusKnown ? (sopStatus.crc_valid ? "通过" : "失败") : "—");
   setClass("#vehSopCrc", "bad", statusFresh && sopStatus.crc_valid === false);
   setClass("#vehSopCrc", "ok", statusFresh && sopStatus.crc_valid === true);
-  text("#vehSopBmsState", statusFresh ? VEH_STATE_NAMES[sopStatus.bms_state] ?? sopStatus.bms_state ?? "—" : "—");
+  markStaleData("#vehSopCrc", statusKnown && !statusFresh);
+  text("#vehSopBmsState", statusKnown ? VEH_STATE_NAMES[sopStatus.bms_state] ?? sopStatus.bms_state ?? "—" : "—");
+  ["#vehSopLimitsValid", "#vehSopDrive", "#vehSopRegen", "#vehSopIntervention", "#vehSopBmsState"]
+    .forEach(id => markStaleData(id, statusKnown && !statusFresh));
   const ack = sop.ecu_ack || {};
+  const ackKnown = hasDataAge(sop.ecu_ack_age) && Object.keys(ack).length > 0;
   const ackFresh = isFresh(sop.ecu_ack_age);
-  const ackState = !ackFresh ? "等待数据"
-    : ack.pair_valid && ack.limits_applied ? "已采用新限值"
+  const ackStateBase = ack.pair_valid && ack.limits_applied ? "已采用新限值"
     : ack.ecu_fault ? "ECU 故障" : ack.pair_valid ? "校验通过 · 未确认采用" : "校验未通过";
+  const ackState = !ackKnown ? "等待数据"
+    : ackFresh ? ackStateBase : `已过期 · ${ackStateBase}`;
   text("#vehEcuAckState", ackState);
   setClass("#vehEcuAckState", "ok", ackFresh && ack.pair_valid && ack.limits_applied);
   setClass("#vehEcuAckState", "bad", ackFresh && (ack.ecu_fault || (ack.pair_valid === false)));
-  text("#vehEcuPowers", ackFresh ? `${fmt(ack.discharge_power_kw, 1)} / ${fmt(ack.regen_power_kw, 1)} kW` : "—");
-  text("#vehEcuMeta", ackFresh ? `序号 ${ack.sequence ?? "—"} · 来源 ${ack.limit_source ?? "—"}` : "—");
+  markStaleData("#vehEcuAckState", ackKnown && !ackFresh);
+  text("#vehEcuPowers", ackKnown ? `${fmt(ack.discharge_power_kw, 1)} / ${fmt(ack.regen_power_kw, 1)} kW` : "—");
+  text("#vehEcuMeta", ackKnown ? `序号 ${ack.sequence ?? "—"} · 来源 ${ack.limit_source ?? "—"} · ${dataAgeText(sop.ecu_ack_age)}` : "—");
+  markStaleData("#vehEcuPowers", ackKnown && !ackFresh);
+  markStaleData("#vehEcuMeta", ackKnown && !ackFresh);
 
   // -- BMS mirror ---------------------------------------------------------
   const pack = snapshot.pack || {};
+  const packKnown = hasDataAge(pack.age);
   const packFresh = isFresh(pack.age);
-  text("#vehPackV", packFresh && pack.voltage_valid ? fmt(pack.voltage_v, 1) : "等待数据");
-  text("#vehPackI", packFresh && pack.current_valid ? fmt(pack.current_a, 1) : "等待数据");
-  text("#vehPackSoc", packFresh && pack.soc_valid ? fmt(pack.soc_pct, 0) : "等待数据");
+  text("#vehPackV", packKnown && pack.voltage_valid ? fmt(pack.voltage_v, 1) : "等待数据");
+  text("#vehPackI", packKnown && pack.current_valid ? fmt(pack.current_a, 1) : "等待数据");
+  text("#vehPackSoc", packKnown && pack.soc_valid ? fmt(pack.soc_pct, 0) : "等待数据");
   const packStateNode = $("#vehPackState");
-  text("#vehPackState", packFresh ? VEH_STATE_NAMES[pack.state] ?? pack.state ?? "—" : "等待数据");
+  text("#vehPackState", packKnown ? VEH_STATE_NAMES[pack.state] ?? pack.state ?? "—" : "等待数据");
   packStateNode.className = `veh-state-text ${packFresh ? (pack.state === 7 ? "bad" : pack.state === 5 ? "ok" : "") : ""}`;
-  text("#vehPackAge", packFresh ? `0x4B0 · ${fmt(pack.age, 1)} s 前` : "0x4B0 · 等待数据");
+  markStaleData(packStateNode, packKnown && !packFresh);
+  text("#vehPackAge", packKnown ? `0x4B0 · ${dataAgeText(pack.age)}` : "0x4B0 · 等待数据");
+  markStaleData("#vehPackAge", packKnown && !packFresh);
   const fault = snapshot.fault || {};
-  const faultFresh = fault.received === true && isFresh(fault.age);
-  text("#vehPackAlarm", faultFresh ? fault.alarm_level_name || "—" : "—");
-  text("#vehFaultCode", faultFresh ? fault.code_hex : "等待数据");
+  const faultKnown = fault.received === true && hasDataAge(fault.age);
+  const faultFresh = faultKnown && isFresh(fault.age);
+  text("#vehPackAlarm", faultKnown ? fault.alarm_level_name || "—" : "—");
+  text("#vehFaultCode", faultKnown ? `${fault.code_hex}${faultFresh ? "" : ` · ${fmt(fault.age, 1)} s 前`}` : "等待数据");
+  markStaleData("#vehPackAlarm", faultKnown && !faultFresh);
+  markStaleData("#vehFaultCode", faultKnown && !faultFresh);
 
   // -- Competition meter ---------------------------------------------------
   setVehChannel("#vehMeterGrid", VEH_METER_CHANNELS, snapshot.meter, SLOW_DATA_FRESH_MAX_S);
-  const meterFresh = VEH_METER_CHANNELS.some(channel => isFresh(snapshot.meter?.[channel.key]?.age, SLOW_DATA_FRESH_MAX_S));
-  text("#vehMeterNote", meterFresh ? "0x521/0x522 · 大端" : "0x521/0x522 · 等待数据");
+  const meterAges = VEH_METER_CHANNELS.map(channel => snapshot.meter?.[channel.key]?.age).filter(hasDataAge);
+  const meterStale = meterAges.some(ageValue => isStaleData(ageValue, SLOW_DATA_FRESH_MAX_S));
+  text("#vehMeterNote", meterAges.length
+    ? `0x521/0x522 · 大端${meterStale ? ` · 部分已过期 · 最旧 ${fmt(Math.max(...meterAges), 1)} s 前` : ""}`
+    : "0x521/0x522 · 等待数据");
+  markStaleData("#vehMeterNote", meterStale);
 
   // -- PDM -----------------------------------------------------------------
   const pdm = snapshot.pdm || {};
   const renderPdmSide = (side, prefix) => {
     const entry = pdm[side] || {};
-    const fresh = isFresh(entry.age, SLOW_DATA_FRESH_MAX_S) && !entry.offline;
-    text(`#${prefix}V`, fresh ? fmt(entry.voltage_v, 1) : "等待数据");
-    text(`#${prefix}I`, fresh ? fmt(entry.current_a, 1) : "等待数据");
-    text(`#${prefix}P`, fresh ? fmt(entry.power_w, 0) : "等待数据");
-    text(`#${prefix}Wh`, fresh ? fmt(entry.energy_wh, 2) : "等待数据");
+    const received = hasDataAge(entry.age);
+    const known = received && !entry.offline;
+    const stale = received && isStaleData(entry.age, SLOW_DATA_FRESH_MAX_S);
+    text(`#${prefix}V`, known ? fmt(entry.voltage_v, 1) : "等待数据");
+    text(`#${prefix}I`, known ? fmt(entry.current_a, 1) : "等待数据");
+    text(`#${prefix}P`, known ? fmt(entry.power_w, 0) : "等待数据");
+    text(`#${prefix}Wh`, known ? fmt(entry.energy_wh, 2) : "等待数据");
     const stateNode = $(`#${prefix}State`);
     if (stateNode) {
-      const label = entry.offline ? "INA226 离线" : !isFresh(entry.age, SLOW_DATA_FRESH_MAX_S) ? "数据超时" : `${fmt(entry.age, 1)} s 前`;
+      const label = entry.offline
+        ? stale ? `${dataAgeText(entry.age, SLOW_DATA_FRESH_MAX_S)} · 上次 INA226 离线` : "INA226 离线"
+        : known ? dataAgeText(entry.age, SLOW_DATA_FRESH_MAX_S) : "等待数据";
       stateNode.textContent = label;
-      stateNode.className = `state-text${entry.offline ? " bad" : ""}`;
+      stateNode.className = `state-text${stale ? " data-stale" : entry.offline ? " bad" : ""}`;
     }
+    const sideNode = stateNode?.closest(".vehicle-pdm-side");
+    if (sideNode) sideNode.classList.toggle("data-stale", stale);
   };
   renderPdmSide("bus", "vehPdmBus");
   renderPdmSide("battery", "vehPdmBat");
-  const anyPdm = ["bus", "battery"].some(side => isFresh(pdm[side]?.age, SLOW_DATA_FRESH_MAX_S));
-  text("#vehPdmNote", anyPdm ? "0x5A0/0x5A1 · 2 Hz" : "0x5A0/0x5A1 · 等待数据");
+  const pdmAges = ["bus", "battery"].map(side => pdm[side]?.age).filter(hasDataAge);
+  const pdmStale = pdmAges.some(ageValue => isStaleData(ageValue, SLOW_DATA_FRESH_MAX_S));
+  text("#vehPdmNote", pdmAges.length
+    ? `0x5A0/0x5A1 · 2 Hz${pdmStale ? " · 部分数据已过期" : ""}`
+    : "0x5A0/0x5A1 · 等待数据");
+  markStaleData("#vehPdmNote", pdmStale);
 
   // -- ECU ------------------------------------------------------------------
   const ecu = snapshot.ecu || {};
-  const ecuAges = Object.values(ecu.age || {});
-  const ecuFresh = ecuAges.some(ageValue => isFresh(ageValue));
+  const ecuAges = Object.values(ecu.age || {}).filter(hasDataAge);
+  const ecuStale = ecuAges.some(ageValue => isStaleData(ageValue));
   $$("#vehEcuTable .veh-ecu-row").forEach(row => {
     const index = +row.dataset.wheel;
     ["torque_pct", "velocity_rpm", "motor_temp_c", "inverter_temp_c", "igbt_temp_c"].forEach(field => {
       const node = row.querySelector(`[data-field="${field}"]`);
-      const fresh = isFresh(ecu.age?.[ecuAgeKey(field)]);
+      const fieldAge = ecu.age?.[ecuAgeKey(field)];
+      const known = hasDataAge(fieldAge);
       const values = ecu[field] || [];
-      node.textContent = fresh && values[index] != null ? fmt(values[index], field === "velocity_rpm" ? 0 : 1) : "等待数据";
+      node.textContent = known && values[index] != null ? fmt(values[index], field === "velocity_rpm" ? 0 : 1) : "等待数据";
+      markStaleData(node, isStaleData(fieldAge));
     });
   });
   const ecuStatus = ecu.status || {};
+  const statusKnownEcu = hasDataAge(ecu.age?.status) && Object.keys(ecuStatus).length > 0;
   const statusFreshEcu = isFresh(ecu.age?.status);
   const wheelFlagText = flags => ["FR", "FL", "RR", "RL"].map(wheel => `${wheel}${flags?.[wheel] ? "✓" : "—"}`).join(" ");
-  text("#vehEcuReady", statusFreshEcu ? wheelFlagText(ecuStatus.system_ready) : "—");
-  text("#vehEcuEnable", statusFreshEcu ? wheelFlagText(ecuStatus.enable) : "—");
-  text("#vehEcuError", statusFreshEcu ? wheelFlagText(ecuStatus.error) : "—");
+  text("#vehEcuReady", statusKnownEcu ? wheelFlagText(ecuStatus.system_ready) : "—");
+  text("#vehEcuEnable", statusKnownEcu ? wheelFlagText(ecuStatus.enable) : "—");
+  text("#vehEcuError", statusKnownEcu ? wheelFlagText(ecuStatus.error) : "—");
   setClass("#vehEcuError", "bad", statusFreshEcu && Object.values(ecuStatus.error || {}).some(Boolean));
-  text("#vehEcuNote", ecuFresh ? "0x502–0x509 · 10 ms" : "0x502–0x509 · 等待数据");
+  ["#vehEcuReady", "#vehEcuEnable", "#vehEcuError"].forEach(id => markStaleData(id, statusKnownEcu && !statusFreshEcu));
+  text("#vehEcuNote", !ecuAges.length ? "0x502–0x509 · 等待数据"
+    : ecuStale ? `0x502–0x509 · 部分已过期 · 最旧 ${fmt(Math.max(...ecuAges), 1)} s 前`
+      : "0x502–0x509 · 10 ms");
+  markStaleData("#vehEcuNote", ecuStale);
 
   // -- Tyres ------------------------------------------------------------------
   const tires = snapshot.tires || {};
   const tireFresh = isFresh(tires.age, SLOW_DATA_FRESH_MAX_S);
+  const tireKnown = hasDataAge(tires.age);
   $$("#vehTireGrid .veh-tire-group").forEach(group => {
     const frameId = group.dataset.frame;
     const values = tires[frameId];
@@ -249,17 +296,22 @@ function renderVehicle() {
     if (!Array.isArray(values)) {
       stateNode.textContent = "未收到";
       stateNode.className = "veh-tire-state";
+      group.classList.remove("data-stale");
       group.querySelectorAll(".veh-tire-point b").forEach(node => node.textContent = "—");
       return;
     }
-    stateNode.textContent = tireFresh ? `${fmt(tires.age, 1)} s 前` : "数据超时";
-    stateNode.className = `veh-tire-state${tireFresh ? " ok" : ""}`;
+    stateNode.textContent = dataAgeText(tires.age, SLOW_DATA_FRESH_MAX_S);
+    stateNode.className = `veh-tire-state${tireFresh ? " ok" : " data-stale"}`;
+    group.classList.toggle("data-stale", !tireFresh);
     group.querySelectorAll(".veh-tire-point").forEach(point => {
       const value = values[+point.dataset.point];
       point.querySelector("b").textContent = value == null ? "—" : fmt(value, 2);
     });
   });
-  text("#vehTireNote", tireFresh ? "0x071–0x074 · 轮位映射待实物确认" : "0x071–0x074 · 等待数据");
+  text("#vehTireNote", tireKnown
+    ? `0x071–0x074 · ${tireFresh ? "轮位映射待实物确认" : dataAgeText(tires.age, SLOW_DATA_FRESH_MAX_S)}`
+    : "0x071–0x074 · 等待数据");
+  markStaleData("#vehTireNote", tireKnown && !tireFresh);
 
   drawVehicleTrend();
 }

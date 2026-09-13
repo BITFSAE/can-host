@@ -93,6 +93,15 @@ class Api:
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()
+        # The local telemetry publisher is a development/commissioning tool.
+        # Keep it in source runs and the transitional macOS build only; it is
+        # not a replacement for the release tool's physical PCAN connection.
+        self._telemetry_simulator: Any = None
+        self._serial_port_provider: Any = None
+        if simulation_available:
+            from .telemetry.simulator import TelemetrySimulatorService, available_serial_ports
+            self._telemetry_simulator = TelemetrySimulatorService()
+            self._serial_port_provider = available_serial_ports
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
                                     cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
@@ -130,6 +139,8 @@ class Api:
             "vehicle_enabled": True,
             "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
             "telemetry_enabled": True,
+            "telemetry_simulator_enabled": self._telemetry_simulator is not None,
+            "serial_ports": self._serial_port_provider() if self._serial_port_provider else [],
             "updater_enabled": install_ready(),
             "updater_check_enabled": True,
             "updater_repo": DEFAULT_REPO,
@@ -283,6 +294,22 @@ class Api:
 
     def get_telemetry_snapshot(self) -> dict[str, Any]:
         return self._telemetry_service.snapshot()
+
+    def start_telemetry_simulator(self, config: dict[str, Any]) -> dict[str, Any]:
+        if self._telemetry_simulator is None:
+            return {"ok": False, "error": "当前发布版本未包含本地遥测模拟器"}
+        return self._telemetry_simulator.start(config)
+
+    def stop_telemetry_simulator(self) -> dict[str, Any]:
+        if self._telemetry_simulator is None:
+            return {"ok": True, "unchanged": True}
+        return self._telemetry_simulator.stop()
+
+    def get_telemetry_simulator_snapshot(self) -> dict[str, Any]:
+        if self._telemetry_simulator is None:
+            return {"state": "unavailable", "running": False,
+                    "error": "当前发布版本未包含本地遥测模拟器"}
+        return self._telemetry_simulator.snapshot()
 
     def send_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self._vehicle_service.send_fan_command(name, values, acknowledged)
@@ -471,6 +498,8 @@ class Api:
         self._ivt_service.disconnect()
         self._vehicle_service.disconnect()
         self._telemetry_service.disconnect()
+        if self._telemetry_simulator is not None:
+            self._telemetry_simulator.stop()
 
 
 def _run_startup_update_cleanup(keep_temp_dir: Path | None = None) -> None:
@@ -527,6 +556,13 @@ def main() -> None:
                 raise SystemExit("打包自检失败：缺少实体 PCAN 通道配置")
             if sys.platform == "darwin" and not bootstrap["simulation_enabled"]:
                 raise SystemExit("打包自检失败：macOS 过渡版本未包含临时模拟通道")
+            if sys.platform == "darwin":
+                from .telemetry.simulator import TelemetryFrameGenerator
+                if not bootstrap["telemetry_simulator_enabled"]:
+                    raise SystemExit("打包自检失败：macOS 过渡版本未包含本地遥测模拟器")
+                simulator_frame = TelemetryFrameGenerator().generate_frame()
+                if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
+                    raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
             bms_result = api.connect_can({
                 "mode": "simulation", "bus_profile": "can1", "bitrate": 500000,
             })

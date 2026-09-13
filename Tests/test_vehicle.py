@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 import unittest
 
@@ -111,6 +112,34 @@ class VehicleProtocolTest(unittest.TestCase):
         trends = protocol.snapshot({"connected": True})["trends"]
         self.assertEqual(trends[-1]["hv_voltage"], 570.0)
         self.assertEqual(trends[-1]["lv_voltage"], 24.0)
+
+    def test_pdm_and_fan_last_samples_remain_available_after_freshness_window(self) -> None:
+        clock = [0.0]
+        protocol = VehicleProtocol(clock=lambda: clock[0])
+        protocol.ingest(CanFrame(0x5A0, bytes.fromhex("5D C0 00 96 01 68 00 7B"), False))
+        protocol.ingest(CanFrame(0x5A2, bytes([0x0B, 0xB8, 0x0D, 0x48, 0x00, 0x00, 50, 60]), False))
+
+        clock[0] = 8.0
+        snapshot = protocol.snapshot({"connected": True})
+
+        self.assertEqual(snapshot["pdm"]["bus"]["voltage_v"], 24.0)
+        self.assertEqual(snapshot["pdm"]["bus"]["age"], 8.0)
+        self.assertEqual(snapshot["fan"]["status"]["rpm"], [3000, 3400, 0])
+        self.assertEqual(snapshot["fan"]["status_age"], 8.0)
+
+    def test_monitor_ui_retains_stale_values_but_control_gates_require_fresh_frames(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        core_js = (root / "canhost/web/js/core.js").read_text(encoding="utf-8")
+        vehicle_js = (root / "canhost/web/js/vehicle.js").read_text(encoding="utf-8")
+        fan_js = (root / "canhost/web/js/fan.js").read_text(encoding="utf-8")
+
+        self.assertIn('cell?.classList.toggle("data-stale", stale)', core_js)
+        self.assertIn('node.textContent = known && value != null ? value : "等待"', core_js)
+        self.assertIn("const known = hasDataAge(entry.age);", vehicle_js)
+        self.assertIn("text(`#${prefix}V`, known ? fmt(entry.voltage_v, 1) : \"等待数据\")", vehicle_js)
+        self.assertIn("const statusKnown = hasDataAge(fan.status_age)", fan_js)
+        self.assertIn("const fanStartReady = available && fanFramesFresh && pdmFresh", fan_js)
+        self.assertIn("const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)", fan_js)
 
 
 class VehicleSimulatorTest(unittest.TestCase):

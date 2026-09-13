@@ -24,7 +24,7 @@ a = Analysis(
     # The updater uses only the standard library; keep it in frozen builds so
     # the release can check GitHub, verify and replace itself.  The field tool
     # deliberately does not ship the simulator.
-    excludes=["canhost.simulator"],
+    excludes=["canhost.simulator", "canhost.telemetry.simulator", "serial"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

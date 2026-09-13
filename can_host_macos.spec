@@ -18,6 +18,10 @@ a = Analysis(
         "cli.pcan_bms_bench",
         "paho.mqtt.client",
         "canhost.telemetry.fsae_telemetry_pb2",
+        "canhost.telemetry.simulator",
+        "serial",
+        "serial.tools.list_ports",
+        "serial.tools.list_ports_osx",
         # HTTPS 更新检查在 macOS 上依赖随包的 CA 证书，必须真正打进去。
         "certifi",
         # This first macOS field release temporarily keeps both lazily imported
