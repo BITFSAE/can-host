@@ -10,7 +10,7 @@
 | 整车 CANB | SOP、BMS 镜像、PDM、ECU、胎温、赛会能量计和两套风扇已接入 |
 | 工程工具 | CAN 监视与发送、F405 从控台架、IVT 配置、风扇标定和本地遥测模拟已接入 |
 | 遥测 | MQTT 只读订阅、BMS 故障变化记录及 MQTT/串口/PCAN 本地模拟已接入 |
-| 发布 | v0.9.5 代码与本地验证已完成，等待 GitHub/CNB 双平台标签发布；目标机实体硬件验收仍待完成 |
+| 发布 | v0.9.5 已完成 GitHub/CNB 双平台发布；目标机实体硬件验收仍待完成 |
 
 当前协议边界：F405 工具协议版本 5，告警开关帧版本 7；上位机不定义新 CAN 契约。精确帧定义以固件和 vehicle-interfaces 为准。
 
@@ -68,6 +68,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-13 | 发布 v0.9.5：Windows 与 macOS 构建、GitHub Release、CNB 同步及匿名下载校验全部成功，两端均有 Windows ZIP/校验/Setup、macOS DMG/校验 5 个附件；将发布首轮暴露的 `.bmslog` 模拟录制固定延时测试改为等待可观测帧数，避免 CI 调度抖动 | 本机未连接 PCAN-USB 或 USB-RS485；实体 CAN 收发、串口目标设备、Broker 认证、Windows PyWebView 和软件内升级仍待目标环境验收 |
 | 2026-09-13 | 将两处内容一致的 `local_sim2.py` 整合为工程工具“遥测数据模拟”，支持 MQTT、串口、PCAN 任意组合；源代码 PyWebView 用 `/dev/ttys013` 环回连续运行 41 秒、发送 398 帧并正常停止；MQTT TLS 复用随包 CA 并等待 Broker 确认；225 项测试通过（1 项平台跳过），Python/JavaScript/差异检查通过；v0.9.5 Apple Silicon DMG 构建、冻结包自检、最低系统版本、签名、校验文件及本机 `libPCBUSB` 加载通过 | 本机未连接 PCAN-USB 或 USB-RS485，实体 CAN 收发、串口目标设备、Broker 认证与组合输出仍待硬件/现网验收 |
 | 2026-09-13 | 将监视值留存与控制新鲜度分离：电芯、整车、PDM、两套风扇及快捷栏在过期后保留最后有效值并显示年龄/“旧”，断线、离线、无效值和活动故障不冒充当前状态；218 项测试通过（1 项平台跳过），Python 编译、全量 JavaScript 语法、差异检查和 macOS PyWebView 的整车/风扇模拟页面通过 | 实体 F405、PDM、FanController 的间歇丢帧、从控 70 ms/帧调试模式与 Windows PyWebView 视觉核对 |
 | 2026-09-12 | 发布 v0.9.4：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端均生成 5 个正式附件；版本包含 v0.9.3 的更新助手修复及普通弹窗遮罩关闭交互 | v0.9.1/v0.9.2 仍需手动运行 v0.9.4 Setup；Windows PyWebView 实测弹窗交互和后续软件内升级 |
