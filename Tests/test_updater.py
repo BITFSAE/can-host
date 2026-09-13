@@ -35,7 +35,9 @@ from canhost.updater import (
     find_zip_asset,
     is_github_url,
     launch_installer,
+    release_record_for,
     read_sha256_digest,
+    remember_release_record,
     release_is_newer,
     startup_cleanup,
     version_key,
@@ -54,7 +56,8 @@ def _release(tag: str, zip_name: str | None = None, with_checksum: bool = True) 
                        "browser_download_url": f"https://example/{zip_name}.sha256"})
     return {"tag_name": tag, "name": tag, "html_url": f"https://example/{tag}",
             "published_at": "2026-08-27T00:00:00Z", "prerelease": False,
-            "body": "release notes", "assets": assets}
+            "body": "# 标题\n\n## 本次更新\n\n- 修复弹窗说明\n\n## 下载\n\n- `x.zip`\n",
+            "assets": assets}
 
 
 def _write_update_zip(path: Path) -> None:
@@ -66,6 +69,25 @@ def _write_update_zip(path: Path) -> None:
 def _make_update_zip(path: Path) -> bytes:
     _write_update_zip(path)
     return path.read_bytes()
+
+
+class IsolatedSettingsTestCase(unittest.TestCase):
+    """把更新器设置重定向到临时目录，任何用例都不许碰真实用户设置。
+
+    ``_check_worker`` 成功时会经 ``remember_release_record`` 落盘“最近一次
+    检查到的 Release”；没有重定向的用例会把假发布写进 ``~/.config/can-host``。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._settings_dir.cleanup)
+        root = Path(self._settings_dir.name)
+        for target, name in (("settings_path", "settings.json"),
+                             ("installed_version_path", "installed-version.json")):
+            patcher = patch(f"canhost.updater.{target}", return_value=root / name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
 
 class VersionAndAssetTest(unittest.TestCase):
@@ -299,7 +321,7 @@ class InstallerPackagingTest(unittest.TestCase):
         self.assertIn("BITFSAE_CAN_Host.old-*", text)
 
 
-class HostUpdaterTest(unittest.TestCase):
+class HostUpdaterTest(IsolatedSettingsTestCase):
     def test_check_worker_reports_update_or_up_to_date(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
         with patch.object(updater, "_fetch_json", return_value=[_release("v0.3.0")]):
@@ -488,6 +510,38 @@ class HostUpdaterTest(unittest.TestCase):
         self.assertEqual(DEFAULT_REPO, "BITFSAE/can-host")
         self.assertEqual(DEFAULT_CNB_REPO, "totok22/can-host")
 
+    def test_check_records_notes_and_recent_releases_for_the_dialog(self) -> None:
+        """升级后的弹窗和版本历史都读检查阶段留下的条目与列表。"""
+        updater = HostUpdater(current_version="0.2.0")
+        releases = [_release("v0.3.0"), _release("v0.2.1"), _release("v0.2.0")]
+        recorded: list[dict] = []
+        with patch.object(updater, "_releases_from", return_value=releases), \
+             patch("canhost.updater.remember_release_record", side_effect=recorded.append):
+            updater._check_worker(False)
+        status = updater.status()
+        self.assertEqual(status["latest"]["changes"], ["修复弹窗说明"])
+        self.assertEqual([item["tag_name"] for item in status["history"]],
+                         ["v0.3.0", "v0.2.1", "v0.2.0"])
+        self.assertEqual(recorded[0]["changes"], ["修复弹窗说明"])
+
+    def test_history_skips_drafts_and_truncates_long_bodies(self) -> None:
+        drafts = [{"tag_name": "v0.4.0", "draft": True, "assets": []},
+                  {**_release("v0.3.0"), "body": "x" * 9000}]
+        history = HostUpdater._history(drafts)
+        self.assertEqual([item["tag_name"] for item in history], ["v0.3.0"])
+        self.assertEqual(len(history[0]["body"]), 4000)
+
+    def test_release_record_is_scoped_to_the_released_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Path(directory) / "settings.json"
+            with patch("canhost.updater.settings_path", return_value=settings):
+                remember_release_record({"tag_name": "v0.3.0", "name": "v0.3.0",
+                                         "changes": ["新条目"], "html_url": "https://example/v0.3.0"})
+                self.assertEqual(release_record_for("0.3.0")["notes"], ["新条目"])
+                # 预发布标签回落到同一版本的正式条目上。
+                self.assertEqual(release_record_for("v0.3.0-rc1")["notes"], ["新条目"])
+                self.assertEqual(release_record_for("0.2.9"), {})
+
 
 def _cnb_channel(tag: str = "v0.3.0", prerelease: bool = False) -> dict:
     zip_name = f"{APP_FOLDER_NAME}_{tag}.zip"
@@ -514,7 +568,7 @@ def _cnb_channel(tag: str = "v0.3.0", prerelease: bool = False) -> dict:
     }
 
 
-class CnbMirrorSourceTest(unittest.TestCase):
+class CnbMirrorSourceTest(IsolatedSettingsTestCase):
     """国内镜像优先、GitHub 回退的检查与下载路径。"""
 
     def test_channel_url_is_anonymous_cnb_raw(self) -> None:

@@ -192,6 +192,7 @@ async function init() {
       toast(`${updateResult.message || "上次更新失败"}${logHint}`, true, 12000);
     }
     if (typeof initUpdater === "function") initUpdater();
+    await reportStartupUpdate();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
     const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [
@@ -203,6 +204,19 @@ async function init() {
     populateToolChannelOptions(fallback);
     restoreConnectionPreferences();
   }
+}
+
+/* 启动升级确认：安装包升级和软件内更新都要显示本次改了什么。 */
+async function reportStartupUpdate() {
+  if (typeof showUpdateResult !== "function" || !state.api?.startup_update_state) return;
+  let result = null;
+  try {
+    result = await state.api.startup_update_state();
+  } catch (error) {
+    return;
+  }
+  state.startupUpdate = result || null;
+  if (result?.upgraded) showUpdateResult(result);
 }
 
 function bindNavigation() {

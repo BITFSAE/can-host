@@ -116,14 +116,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="$GITHUB_REF_NAME"
-          notes_file="$(mktemp)"
-          cat > "$notes_file" <<EOF
-          Windows 首次安装：下载 BITFSAE_CAN_Host_${tag}_setup.exe。便携方式使用 BITFSAE_CAN_Host_${tag}.zip；已安装版本可从软件左下角执行软件内更新。
-
-          macOS Apple Silicon：下载 BITFSAE_CAN_Host_macOS_arm64_${tag}.dmg，将应用拖入“应用程序”。连接实体 PCAN-USB 前安装 0.13 或更新版、包含 arm64 的 MacCAN libPCBUSB；先用 MacCAN Monitor 验证适配器收发。此包为团队内部 ad-hoc 签名，未做 Apple 公证；首次启动如被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
-
-          两个平台的发布包都用于实体 PCAN 联调。Windows 安装 PEAK PCAN-Basic 与驱动；macOS 安装 MacCAN libPCBUSB。本次 macOS 过渡版本暂时保留调试模拟入口，它不能代替驱动、接线和实际总线验证；Windows 发布版不包含模拟器。
-          EOF
+          mkdir -p build/release-notes
+          notes_file="build/release-notes/release_notes.md"
+          python scripts/release_notes.py --version "${tag#v}" \
+            --output "$notes_file" \
+            --json-output build/release-notes/release_notes.json
           prerelease=()
           if [[ "${tag#v}" == *-* ]]; then prerelease+=(--prerelease); fi
           if gh release view "$tag" >/dev/null 2>&1; then

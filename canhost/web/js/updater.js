@@ -5,10 +5,13 @@ var updaterPollTimer = null;
 var updaterAutoStarted = false;
 var updaterClosing = false;
 var updaterDownloadStarted = false;
+var updateResultShown = false;
+var updaterExternalLinksBound = false;
 
 function initUpdater() {
   if (!state.api || !state.bootstrap) return;
   bindUpdaterControls();
+  bindExternalLinks();
   if (updaterPollTimer) return;
   updaterPollTimer = setInterval(pollUpdaterStatus, 1000);
   if (state.bootstrap.updater_check_enabled !== false && state.bootstrap.updater_repo && !updaterAutoStarted) {
@@ -38,6 +41,18 @@ function bindUpdaterControls() {
     install.dataset.bound = "1";
     install.addEventListener("click", startUpdateIntent);
   }
+  const releasePage = $("#updaterReleasePage");
+  if (releasePage && !releasePage.dataset.bound) {
+    releasePage.dataset.bound = "1";
+    releasePage.addEventListener("click", () => openReleasePage(currentReleaseUrl()));
+  }
+  const history = $("#updaterHistory");
+  if (history && !history.dataset.bound) {
+    history.dataset.bound = "1";
+    history.addEventListener("click", () => openReleaseHistoryDialog());
+  }
+  bindUpdateResultControls();
+  bindReleaseHistoryControls();
   const saveToken = $("#updaterSaveToken");
   if (saveToken && !saveToken.dataset.bound) {
     saveToken.dataset.bound = "1";
@@ -66,6 +81,145 @@ function bindUpdaterControls() {
       }
     });
   }
+}
+
+function bindUpdateResultControls() {
+  const releasePage = $("#updateResultReleasePage");
+  if (releasePage && !releasePage.dataset.bound) {
+    releasePage.dataset.bound = "1";
+    releasePage.addEventListener("click", () => openReleasePage(currentReleaseUrl()));
+  }
+  const history = $("#updateResultHistory");
+  if (history && !history.dataset.bound) {
+    history.dataset.bound = "1";
+    history.addEventListener("click", () => openReleaseHistoryDialog());
+  }
+}
+
+function bindReleaseHistoryControls() {
+  const fetchButton = $("#releaseHistoryFetch");
+  if (fetchButton && !fetchButton.dataset.bound) {
+    fetchButton.dataset.bound = "1";
+    fetchButton.addEventListener("click", () => loadReleaseHistory(true));
+  }
+}
+
+/* 更新完成弹窗：安装包升级和软件内更新走同一条路径，必须显示版本变化和本次改了什么。 */
+function showUpdateResult(data) {
+  const dialog = $("#updateResultDialog");
+  if (!dialog || !data || updateResultShown) return;
+  updateResultShown = true;
+  state.updateResult = data;
+  text("#updateResultPrevious", data.previous_version ? "v" + data.previous_version : "首次安装");
+  text("#updateResultCurrent", data.current_version ? "v" + data.current_version : "等待数据");
+  text("#updateResultDate", String(data.version_date || data.published_at || "").slice(0, 10) || "—");
+  renderReleaseNotes($("#updateResultNotes"), data.notes || []);
+  const fallback = $("#updateResultFallback");
+  if (fallback) {
+    const notes = (data.notes || []).filter(note => String(note || "").trim());
+    fallback.innerHTML = notes.length
+      ? "完整说明见 " + linkMarkup(currentReleaseUrl(), "发布页") + "。"
+      : "此版本没有登记条目；" + linkMarkup(currentReleaseUrl(), "在发布页查看完整说明") + "。";
+    fallback.classList.remove("hidden");
+  }
+  if (!dialog.open) dialog.showModal();
+}
+
+function currentReleaseUrl() {
+  return state.updateResult?.release_url
+    || state.updater?.latest?.html_url
+    || state.bootstrap?.release_url
+    || "https://github.com/BITFSAE/can-host/releases";
+}
+
+function linkMarkup(url, label) {
+  const safe = /^https:\/\//i.test(String(url || "")) ? String(url) : "";
+  return safe
+    ? '<a href="' + escapeHtml(safe) + '" data-external="1">' + escapeHtml(label) + "</a>"
+    : escapeHtml(label);
+}
+
+function renderReleaseNotes(list, notes, emptyText) {
+  if (!list) return;
+  const items = (Array.isArray(notes) ? notes : [notes]).filter(note => String(note || "").trim());
+  list.innerHTML = items.length
+    ? items.map(note => "<li>" + escapeHtml(String(note)) + "</li>").join("")
+    : '<li class="release-notes-empty">' + escapeHtml(emptyText || "此版本没有登记条目。") + "</li>";
+}
+
+async function openReleasePage(url) {
+  if (!state.api?.open_release_page) { toast("当前版本无法打开浏览器", true); return; }
+  const result = await state.api.open_release_page(String(url || ""));
+  if (!result?.ok) toast(result?.error || "无法打开浏览器", true);
+}
+
+/* 版本历史：优先随包说明，按需联网核对最近发布。 */
+async function openReleaseHistoryDialog() {
+  const dialog = $("#releaseHistoryDialog");
+  if (!dialog) return;
+  if (!dialog.open) dialog.showModal();
+  await loadReleaseHistory(false);
+}
+
+async function loadReleaseHistory(online) {
+  if (!state.api?.release_history) return;
+  const list = $("#releaseHistoryList");
+  const error = $("#releaseHistoryError");
+  if (error) error.classList.add("hidden");
+  if (list && !list.childElementCount) list.innerHTML = '<p class="note tight">正在读取版本说明…</p>';
+  try {
+    const result = await state.api.release_history(!!online);
+    renderReleaseHistory(result);
+  } catch (failure) {
+    if (list) list.innerHTML = "";
+    if (error) {
+      error.textContent = failure?.message || "无法读取版本说明";
+      error.classList.remove("hidden");
+    }
+  }
+}
+
+function renderReleaseHistory(data) {
+  const list = $("#releaseHistoryList");
+  const error = $("#releaseHistoryError");
+  const hint = $("#releaseHistoryHint");
+  if (!list) return;
+  if (error) error.classList.add("hidden");
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  if (hint) {
+    hint.textContent = data?.online
+      ? "已合并随包说明和最近一次检查到的 Release。"
+      : "显示随包版本说明；联网获取可核对最新发布。";
+  }
+  if (!entries.length) {
+    list.innerHTML = '<p class="note tight">当前版本没有可显示的版本说明。</p>';
+    return;
+  }
+  const current = String(data?.current_version || "");
+  list.innerHTML = entries.map(entry => {
+    const version = String(entry.version || "");
+    const notes = (entry.notes || []).map(note => "<li>" + escapeHtml(String(note)) + "</li>").join("");
+    const source = entry.source === "release" ? '<em class="release-history-source">Release</em>' : "";
+    const isCurrent = version && version === current ? '<em class="release-history-current">当前</em>' : "";
+    return '<article class="release-history-entry' + (version === current ? " current" : "") + '">'
+      + "<header><b>v" + escapeHtml(version) + "</b>" + isCurrent + source
+      + "<span>" + escapeHtml(String(entry.date || "")) + "</span></header>"
+      + (notes ? "<ul>" + notes + "</ul>" : '<p class="note tight">该版本没有登记条目。</p>')
+      + "</article>";
+  }).join("");
+}
+
+function bindExternalLinks() {
+  // core.js 的首次初始化与 DOMContentLoaded 都会走到 initUpdater()；重复
+  // 注册会让一次点击调用两次后端，打开两个浏览器标签，因此只绑定一次。
+  if (updaterExternalLinksBound) return;
+  updaterExternalLinksBound = true;
+  document.addEventListener("click", event => {
+    const link = event.target.closest("a[data-external]");
+    if (!link) return;
+    event.preventDefault();
+    openReleasePage(link.getAttribute("href"));
+  });
 }
 
 async function openUpdaterDialog(startDownload = false) {
@@ -168,9 +322,21 @@ function updaterRenderUpdaterStatus() {
 
   const notes = $("#updaterNotes");
   if (notes) {
-    notes.textContent = latest?.body
-      ? String(latest.body).trim().slice(0, 600)
-      : latest ? "此次 Release 未填写说明。" : "检查完成后会在这里显示版本说明。";
+    const changes = latest?.changes || [];
+    const body = String(latest?.body || "").trim();
+    renderReleaseNotes(
+      notes,
+      changes,
+      latest
+        ? (body ? "该 Release 未填写逐条说明，展开下方原文查看。" : "此次 Release 未填写说明。")
+        : "检查完成后会在这里显示本版本的更新内容。",
+    );
+    // 逐条条目已经覆盖了正文里的“本次更新”小节，原文折叠保留给需要看全文的人。
+    const rawPanel = $("#updaterNotesRawPanel");
+    const raw = $("#updaterNotesRaw");
+    const showRaw = !changes.length && !!body;
+    if (rawPanel) rawPanel.classList.toggle("hidden", !showRaw);
+    if (raw) raw.textContent = showRaw ? body.slice(0, 4000) : "";
   }
 
   const size = latest?.assets?.find(item => String(item.name).toLowerCase().endsWith(".zip"))?.size;

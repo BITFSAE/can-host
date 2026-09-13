@@ -1366,7 +1366,11 @@
               <div><dt>安装包</dt><dd id="updaterSize">—</dd></div>
             </dl>
           </div>
-          <pre id="updaterNotes">此次 Release 未填写说明。</pre>
+          <ul id="updaterNotes" class="release-notes"><li class="release-notes-empty">检查完成后会在这里显示本版本的更新内容。</li></ul>
+          <details id="updaterNotesRawPanel" class="updater-notes-raw hidden">
+            <summary>Release 原文</summary>
+            <pre id="updaterNotesRaw"></pre>
+          </details>
         </section>
 
         <div id="updaterProgressPanel" class="updater-progress hidden">
@@ -1407,8 +1411,77 @@
         </details>
       </div>
       <footer>
+        <button type="button" class="outline-button" id="updaterReleasePage">打开发布页</button>
+        <button type="button" class="outline-button" id="updaterHistory">版本历史</button>
         <button type="button" class="outline-button" id="updaterCheck">检查更新</button>
         <button type="button" class="action-button" id="updaterInstall">下载更新</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="updateResultDialog" class="modal update-result-dialog" data-backdrop-close>
+    <form method="dialog">
+      <header>
+        <div class="modal-heading">
+          <span class="modal-eyebrow">UPDATE COMPLETE</span>
+          <h2>更新完成</h2>
+        </div>
+        <button value="cancel" class="close" type="submit" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <section class="update-result-versions">
+          <div class="update-result-version">
+            <span>更新前</span>
+            <strong id="updateResultPrevious">等待数据</strong>
+          </div>
+          <span class="update-result-arrow" aria-hidden="true">→</span>
+          <div class="update-result-version current">
+            <span>当前版本</span>
+            <strong id="updateResultCurrent">等待数据</strong>
+          </div>
+          <dl class="update-result-meta">
+            <div><dt>更新时间</dt><dd id="updateResultDate">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="update-result-notes">
+          <div class="updater-section-heading">
+            <div>
+              <span class="updater-notes-label">WHAT CHANGED</span>
+              <strong>本次更新内容</strong>
+            </div>
+          </div>
+          <ul id="updateResultNotes" class="release-notes"></ul>
+          <p id="updateResultFallback" class="note tight hidden"></p>
+        </section>
+
+        <div id="updateResultError" class="modal-error hidden"></div>
+      </div>
+      <footer>
+        <button type="button" class="outline-button" id="updateResultReleasePage">打开发布页</button>
+        <button type="button" class="outline-button" id="updateResultHistory">查看历史版本</button>
+        <button value="confirm" class="action-button" type="submit">继续使用</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="releaseHistoryDialog" class="modal release-history-dialog" data-backdrop-close>
+    <form method="dialog">
+      <header>
+        <div class="modal-heading">
+          <span class="modal-eyebrow">RELEASE HISTORY</span>
+          <h2>版本历史</h2>
+        </div>
+        <button value="cancel" class="close" type="submit" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <p class="note tight" id="releaseHistoryHint">每个版本只列出面向使用者的变化。</p>
+        <div id="releaseHistoryList" class="release-history-list"></div>
+        <div id="releaseHistoryError" class="modal-error hidden"></div>
+      </div>
+      <footer>
+        <button type="button" class="outline-button" id="releaseHistoryFetch">联网获取历史版本</button>
+        <button value="confirm" class="action-button" type="submit">关闭</button>
       </footer>
     </form>
   </dialog>

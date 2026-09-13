@@ -27,9 +27,9 @@ Push-Location $ProjectRoot
 try {
     & $Python -m unittest discover -s Tests -p "test_*.py" -v
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $Python -m PyInstaller --noconfirm --clean (Join-Path $ProjectRoot "can_host.spec")
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    # 版本与更新说明必须在打包前落盘：PyInstaller 会把 release_info.py 嵌进程序，
+    # 更新完成弹窗和“版本历史”都读它。标签缺省时取 canhost/__init__.py 的版本号。
     if (-not $Label) {
         $Label = (& $Python -c "from canhost import __version__; print(__version__)").Trim()
         if ($LASTEXITCODE -ne 0 -or -not $Label) {
@@ -41,10 +41,29 @@ try {
     # 产物命名统一为 BITFSAE_CAN_Host_v<版本>.*，与软件内更新器附件约定一致。
     if ($Label.StartsWith("v") -or $Label.StartsWith("V")) { $Label = $Label.Substring(1) }
 
-    # 发布产物命名与软件内更新器约定一致（canhost/updater.py）：
-    # ZIP 内层必须是 BITFSAE_CAN_Host/ 目录，附件名 BITFSAE_CAN_Host_v<标签>.zip 与 .sha256。
     $ReleaseDir = Join-Path $ProjectRoot "release"
     New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+    # 说明文件放在 build\ 下：release\ 只允许出现更新器认识的发布附件。
+    $NotesDir = Join-Path $ProjectRoot "build\release-notes"
+    New-Item -ItemType Directory -Force -Path $NotesDir | Out-Null
+
+    # 写版本号、随包更新说明和版本历史；非 vX.Y.Z 标签（手动触发的短 SHA）
+    # 跳过写入，避免把构建号当成版本号嵌进程序。
+    if ($Label -match '^\d+\.\d+\.\d+$') {
+        & $Python (Join-Path $ProjectRoot "scripts\set_version.py") $Label
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $Python (Join-Path $ProjectRoot "scripts\release_notes.py") `
+            --version $Label `
+            --output (Join-Path $NotesDir "release_notes.md") `
+            --json-output (Join-Path $NotesDir "release_notes.json")
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+
+    & $Python -m PyInstaller --noconfirm --clean (Join-Path $ProjectRoot "can_host.spec")
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    # 发布产物命名与软件内更新器约定一致（canhost/updater.py）：
+    # ZIP 内层必须是 BITFSAE_CAN_Host/ 目录，附件名 BITFSAE_CAN_Host_v<标签>.zip 与 .sha256。
     $Base = "BITFSAE_CAN_Host_v$Label"
     $ZipPath = Join-Path $ReleaseDir "$Base.zip"
     if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }

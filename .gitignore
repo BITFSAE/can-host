@@ -14,8 +14,15 @@ build/
 dist/
 release/
 
+# 发布时由 scripts/set_version.py 生成（版本号 + 随包更新说明 + 版本历史），
+# 发布链路之外由 CHANGELOG.md 兜底，因此不入库，避免两处内容不一致。
+canhost/release_info.py
+
 # Windows WebView2 运行时调试日志
 debug.log
 
 # Local AI/agent workspace files
 .zcode/
+
+# Playwright CLI 的截图与快照
+.playwright-cli/

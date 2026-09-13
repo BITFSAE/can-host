@@ -18,6 +18,7 @@
 
 ### 发布与平台
 
+- [ ] 用真实 `vX.Y.Z` 标签跑一次发布，核对 GitHub Release 正文、CNB 频道和更新弹窗显示同一份条目。
 - [ ] 在干净 Windows 10/11 验证发布目录离线完整性、安装、快捷方式、WebView2、PCAN、软件更新、失败回滚和卸载。
 - [ ] 在干净 Apple Silicon Mac 验证 DMG 安装、Gatekeeper、覆盖升级和文件对话框。
 - [ ] 发布包含 certifi 的包后，在 macOS 实机验证更新检查不再报证书错误；在此之前的过渡期，手动下载新 DMG 覆盖安装。
@@ -68,6 +69,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-13 | 更新说明链路补齐：升级后显示“更新完成”弹窗（更新前后版本、日期、本次条目、发布页与历史入口），软件更新弹窗改为逐条说明并新增版本历史；说明统一由 `CHANGELOG.md` 经 `scripts/set_version.py`（写入随包说明与历史）和 `scripts/release_notes.py`（生成 Release 正文）产出，两个平台的构建脚本和 `release.yml` 自动调用；新增 `Tests/test_release_notes.py` 与 `Tests/test_update_ui.py`，252 项测试通过（1 项平台跳过），Python/JavaScript 编译检查与发布自检通过；用 Playwright 打开真实页面截图核对三个弹窗的暗色排版与超长条目换行 | 未在 Windows PyWebView 实机核对弹窗；未用真实 vX.Y.Z 标签跑一次完整发布验证 Release 正文与弹窗条目一致 |
 | 2026-09-13 | 发布 v0.9.5：Windows 与 macOS 构建、GitHub Release、CNB 同步及匿名下载校验全部成功，两端均有 Windows ZIP/校验/Setup、macOS DMG/校验 5 个附件；将发布首轮暴露的 `.bmslog` 模拟录制固定延时测试改为等待可观测帧数，避免 CI 调度抖动 | 本机未连接 PCAN-USB 或 USB-RS485；实体 CAN 收发、串口目标设备、Broker 认证、Windows PyWebView 和软件内升级仍待目标环境验收 |
 | 2026-09-13 | 将两处内容一致的 `local_sim2.py` 整合为工程工具“遥测数据模拟”，支持 MQTT、串口、PCAN 任意组合；源代码 PyWebView 用 `/dev/ttys013` 环回连续运行 41 秒、发送 398 帧并正常停止；MQTT TLS 复用随包 CA 并等待 Broker 确认；225 项测试通过（1 项平台跳过），Python/JavaScript/差异检查通过；v0.9.5 Apple Silicon DMG 构建、冻结包自检、最低系统版本、签名、校验文件及本机 `libPCBUSB` 加载通过 | 本机未连接 PCAN-USB 或 USB-RS485，实体 CAN 收发、串口目标设备、Broker 认证与组合输出仍待硬件/现网验收 |
 | 2026-09-13 | 将监视值留存与控制新鲜度分离：电芯、整车、PDM、两套风扇及快捷栏在过期后保留最后有效值并显示年龄/“旧”，断线、离线、无效值和活动故障不冒充当前状态；218 项测试通过（1 项平台跳过），Python 编译、全量 JavaScript 语法、差异检查和 macOS PyWebView 的整车/风扇模拟页面通过 | 实体 F405、PDM、FanController 的间歇丢帧、从控 70 ms/帧调试模式与 Windows PyWebView 视觉核对 |

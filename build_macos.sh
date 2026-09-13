@@ -28,6 +28,26 @@ PYTHON="$VENV_DIR/bin/python"
 
 cd "$PROJECT_ROOT"
 "$PYTHON" -m unittest discover -s Tests -p "test_*.py" -v
+
+# 版本与随包更新说明必须在打包前落盘：PyInstaller 会把 release_info.py 嵌进 .app，
+# 更新完成弹窗和“版本历史”都读它。
+if [[ -z "$LABEL" ]]; then
+  LABEL="$($PYTHON -c 'from canhost import __version__; print(__version__)')"
+fi
+LABEL_BASE="${LABEL#v}"
+LABEL_BASE="${LABEL_BASE#V}"
+mkdir -p "$PROJECT_ROOT/release"
+# 说明文件放在 build/ 下：release/ 只允许出现更新器认识的发布附件。
+NOTES_DIR="$PROJECT_ROOT/build/release-notes"
+mkdir -p "$NOTES_DIR"
+if [[ "$LABEL_BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  "$PYTHON" "$PROJECT_ROOT/scripts/set_version.py" "$LABEL_BASE"
+  "$PYTHON" "$PROJECT_ROOT/scripts/release_notes.py" \
+    --version "$LABEL_BASE" \
+    --output "$NOTES_DIR/release_notes.md" \
+    --json-output "$NOTES_DIR/release_notes.json"
+fi
+
 "$PYTHON" -m PyInstaller --noconfirm --clean "$PROJECT_ROOT/can_host_macos.spec"
 
 APP="$PROJECT_ROOT/dist/BITFSAE CAN Host.app"
@@ -100,11 +120,7 @@ PY
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-if [[ -z "$LABEL" ]]; then
-  LABEL="$($PYTHON -c 'from canhost import __version__; print(__version__)')"
-fi
-LABEL="${LABEL#v}"
-LABEL="${LABEL#V}"
+LABEL="$LABEL_BASE"
 
 RELEASE_DIR="$PROJECT_ROOT/release"
 DMG_NAME="BITFSAE_CAN_Host_macOS_arm64_v${LABEL}.dmg"

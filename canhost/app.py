@@ -19,9 +19,13 @@ from .updater import (
     DEFAULT_REPO,
     HostUpdater,
     consume_update_result,
+    installed_update_state,
     install_ready,
+    record_installed_version,
     startup_cleanup,
     update_log_dir,
+    changelog_page_url,
+    release_page_url,
 )
 from .updater import _read_settings, settings_path
 
@@ -105,7 +109,10 @@ class Api:
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
                                     cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
-        self._startup_update_result = consume_update_result() if install_ready() else None
+        self._startup_update_result = consume_update_result()
+        # 每次启动判定一次“这次启动是否发生了升级”，安装包升级和软件内更新
+        # 走同一条路径；结果只在本次进程内有效。
+        self._startup_update_state = installed_update_state(__version__, __version_date__)
         self._update_health_path = update_health_path
         self._shutdown_finished = threading.Event()
         self._window: Any = None
@@ -157,6 +164,8 @@ class Api:
 
     def mark_frontend_ready(self) -> dict[str, Any]:
         """Complete the updater health handshake after the first UI poll."""
+        # 界面已经跑起来，这时才确认“本次启动的新版本可用”，供下一次升级对照。
+        record_installed_version(__version__)
         if self._update_health_path is None:
             return {"ok": True, "required": False}
         try:
@@ -171,6 +180,86 @@ class Api:
         status["install_supported"] = install_ready()
         status["auto_checked"] = self._updater_auto_checked
         return status
+
+    def startup_update_state(self) -> dict[str, Any]:
+        """本次启动的版本信息与更新说明，供启动弹窗和侧栏使用。
+
+        只读取启动时记录的版本标记和检查阶段缓存下来的 Release 记录，不再联网；
+        说明缺失时界面按 ``release_url`` 引导到对应版本的 Release 页面。
+        """
+        state = dict(self._startup_update_state)
+        state["latest"] = self._latest_release_summary()
+        return state
+
+    def _latest_release_summary(self) -> dict[str, Any]:
+        """检查阶段留下的最新 Release 摘要；未检查过时字段为空。"""
+        latest = self._updater.status().get("latest") or {}
+        return {
+            "tag_name": str(latest.get("tag_name") or ""),
+            "name": str(latest.get("name") or ""),
+            "html_url": str(latest.get("html_url") or ""),
+            "published_at": str(latest.get("published_at") or ""),
+            "body": str(latest.get("body") or ""),
+            "changes": [str(item) for item in (latest.get("changes") or [])],
+        }
+
+    def release_history(self, online: bool = False) -> dict[str, Any]:
+        """版本说明历史：默认读随包数据，``online`` 时用最近一次检查的发布列表。
+
+        离线数据来自构建时写进程序的 ``RELEASE_HISTORY``，因此全新安装的机器
+        或断网的车间笔记本也能回看每个版本改了什么。
+        """
+        from . import release_notes
+
+        entries: list[dict[str, Any]] = [
+            {
+                "version": str(item["version"]),
+                "date": str(item["date"]),
+                "notes": [str(note) for note in item["notes"]],
+                "source": "embedded",
+            }
+            for item in release_notes.history()
+        ]
+        online_entries: list[dict[str, Any]] = []
+        if online:
+            for release in self._updater.status().get("history") or []:
+                tag = str(release.get("tag_name") or "")
+                if not tag:
+                    continue
+                online_entries.append({
+                    "version": release_notes.base_version(tag),
+                    "date": str(release.get("published_at") or "")[:10],
+                    "notes": [str(note) for note in (release.get("changes") or [])],
+                    "body": str(release.get("body") or ""),
+                    "url": str(release.get("html_url") or ""),
+                    "prerelease": bool(release.get("prerelease")),
+                    "source": "release",
+                })
+        return {
+            "current_version": __version__,
+            "entries": self._merge_history(entries, online_entries),
+            "online": bool(online_entries),
+            "release_url": release_page_url(__version__),
+            "changelog_url": changelog_page_url(),
+        }
+
+    @staticmethod
+    def _merge_history(
+        offline: list[dict[str, Any]], online: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """同名版本以在线内容为准，其余按版本号从新到旧排列。"""
+        from . import release_notes
+
+        merged: dict[str, dict[str, Any]] = {str(item["version"]): item for item in offline}
+        for item in online:
+            merged[str(item["version"])] = {**merged.get(str(item["version"]), {}), **item}
+        # 非 vX.Y.Z 的标签（历史发布或手工预发布）排在可解析版本之后。
+        ordered = sorted(
+            merged.values(),
+            key=lambda item: release_notes.version_sort_key(str(item["version"])),
+            reverse=True,
+        )
+        return ordered
 
     def check_for_updates(self, include_prerelease: bool = False) -> dict[str, Any]:
         result = self._updater.check(bool(include_prerelease))
@@ -233,6 +322,28 @@ class Api:
 
     def clear_update_token(self) -> dict[str, Any]:
         return self._updater.clear_token()
+
+    def open_release_page(self, url: str) -> dict[str, Any]:
+        """Open a release/changelog page in the system browser.
+
+        Only the two published project hosts are accepted: the UI must not be
+        able to hand an arbitrary string to the shell.
+        """
+        import webbrowser
+        from urllib.parse import urlsplit
+
+        allowed = ("github.com", "cnb.cool")
+        parts = urlsplit(str(url or ""))
+        host = (parts.hostname or "").lower()
+        if parts.scheme != "https" or not any(
+            host == item or host.endswith("." + item) for item in allowed
+        ):
+            return {"ok": False, "error": "只能打开项目发布页"}
+        try:
+            webbrowser.open(parts.geturl())
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
 
     def connect_can(self, config: dict[str, Any]) -> dict[str, Any]:
         result = self._service.connect(config)
@@ -549,6 +660,15 @@ def main() -> None:
             raise SystemExit("打包自检失败：certifi CA 证书未完整加载")
         if not (WEB_DIR / "index.html").is_file():
             raise SystemExit("打包自检失败：缺少 canhost/web/index.html")
+        # 更新完成弹窗和“版本历史”读随包说明；标签构建写了版本号却没有条目，
+        # 说明 CHANGELOG 与构建标签脱节，必须在发布前拦下。
+        from . import release_notes
+        embedded = release_notes.embedded_release()
+        if embedded["version"] == __version__ and not embedded["notes"]:
+            raise SystemExit(
+                f"打包自检失败：随包更新说明为空（版本 {__version__}）；"
+                f"请检查 CHANGELOG.md 是否有该版本小节"
+            )
         api = Api()
         try:
             bootstrap = api.bootstrap()

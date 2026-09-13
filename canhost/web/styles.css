@@ -1473,6 +1473,128 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   word-break: break-word;
   overflow: auto;
 }
+/* 版本说明按条目展示：每条变化一行，可快速扫读，长条目自动换行。 */
+.release-notes {
+  display: grid;
+  gap: 6px;
+  max-height: 208px;
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: auto;
+}
+.release-notes li {
+  position: relative;
+  padding-left: 13px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.release-notes li::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--action);
+}
+.release-notes-empty { color: var(--text-3) !important; }
+.release-notes-empty::before { background: var(--idle) !important; }
+
+.updater-notes-raw { border-top: 1px solid var(--line-soft); }
+.updater-notes-raw > summary {
+  padding: 8px 1px 0;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.updater-notes-raw > summary:hover { color: var(--text-2); }
+.updater-notes-raw pre { margin-top: 8px; }
+
+.release-history-list {
+  display: grid;
+  gap: 9px;
+  max-height: 320px;
+  padding: 2px 0 2px;
+  overflow: auto;
+}
+.release-history-entry {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.release-history-entry.current { border-color: rgba(58, 181, 197, .34); background: rgba(58, 181, 197, .05); }
+.release-history-entry > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.release-history-entry > header > b { font-family: var(--mono); font-size: 12.5px; }
+.release-history-entry > header > span { margin-left: auto; color: var(--text-3); font-family: var(--mono); font-size: 10.5px; }
+.release-history-entry > ul { display: grid; gap: 5px; }
+.release-history-entry > ul > li {
+  position: relative;
+  padding-left: 13px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.release-history-entry > ul > li::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--idle);
+}
+.release-history-current,
+.release-history-source {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+.release-history-current { background: rgba(58, 181, 197, .16); color: var(--action); }
+.release-history-source { background: var(--idle-dim); color: var(--text-3); }
+
+.release-history-dialog { width: 660px; max-width: calc(100vw - 24px); }
+.update-result-dialog { width: 640px; max-width: calc(100vw - 24px); }
+.update-result-versions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(135deg, rgba(62, 207, 142, .1), transparent 58%),
+    var(--surface-2);
+}
+.update-result-version { display: grid; gap: 2px; min-width: 0; }
+.update-result-version > span { color: var(--text-3); font-size: 10.5px; }
+.update-result-version > strong { font-family: var(--mono); font-size: 19px; line-height: 1.2; }
+.update-result-version.current > strong { color: var(--ok); }
+.update-result-arrow { color: var(--text-3); font-family: var(--mono); font-size: 17px; }
+.update-result-meta { display: grid; gap: 1px; text-align: right; }
+.update-result-meta dt { color: var(--text-3); font-size: 9.5px; }
+.update-result-meta dd { font-family: var(--mono); font-size: 11px; font-weight: 600; }
+.update-result-notes { display: grid; gap: 9px; }
+.release-notes a, .note a { color: var(--action); }
+
 .updater-release-meta { display: flex; align-items: end; gap: 14px; }
 .updater-release-meta > div { display: grid; gap: 1px; text-align: right; }
 .updater-release-meta dt { color: var(--text-3); font-size: 9.5px; }

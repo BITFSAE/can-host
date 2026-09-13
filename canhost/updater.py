@@ -30,6 +30,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from . import trust
+from .release_notes import release_notes_from_body
 
 
 DEFAULT_REPO = "BITFSAE/can-host"
@@ -70,6 +71,8 @@ BACKUP_KEEP_SECONDS = 15 * 60
 # staging directory. Otherwise cleanup removes the only useful failure record.
 UPDATE_LOG_DIR_NAME = "update-logs"
 UPDATE_RESULT_NAME = "last-update-result.json"
+# 上一次成功启动的版本，用来判断这次启动是不是软件内更新或安装包升级后的首启。
+INSTALLED_VERSION_NAME = "installed-version.json"
 
 
 def is_github_url(url: str) -> bool:
@@ -384,6 +387,142 @@ def update_result_path() -> Path:
     return _user_settings_dir() / UPDATE_RESULT_NAME
 
 
+def installed_version_path() -> Path:
+    """Marker holding the version that last started successfully."""
+    return _user_settings_dir() / INSTALLED_VERSION_NAME
+
+
+def release_page_url(version: str, repo: str = DEFAULT_REPO) -> str:
+    """Version-specific GitHub Release page, used as the update-notes fallback."""
+    tag = f"v{str(version).strip().lstrip('vV')}" if str(version).strip() else ""
+    return f"https://github.com/{repo}/releases/tag/{tag}" if tag else f"https://github.com/{repo}/releases"
+
+
+def changelog_page_url(repo: str = DEFAULT_REPO) -> str:
+    return f"https://github.com/{repo}/blob/main/CHANGELOG.md"
+
+
+def remember_release_record(latest: dict[str, Any]) -> None:
+    """Persist the checked release notes so the next launch can show them.
+
+    The updater only knows the release body while it is online; the update
+    dialog that runs after an in-app restart must still be able to show what
+    changed without another network round trip.
+    """
+    record = {
+        "tag_name": str(latest.get("tag_name") or ""),
+        "name": str(latest.get("name") or ""),
+        "published_at": str(latest.get("published_at") or ""),
+        "html_url": str(latest.get("html_url") or ""),
+        "notes": [str(item) for item in (latest.get("changes") or [])][:40],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload = _read_settings()
+    payload["last_release"] = record
+    try:
+        _write_settings(payload)
+    except OSError:
+        pass
+
+
+def release_record() -> dict[str, Any]:
+    """Last checked release record, including its extracted notes."""
+    payload = _read_settings().get("last_release")
+    return payload if isinstance(payload, dict) else {}
+
+
+def release_record_for(version: str) -> dict[str, Any]:
+    """Release record that belongs to ``version``; otherwise an empty dict."""
+    record = release_record()
+    tag = str(record.get("tag_name") or "").lstrip("vV")
+    wanted = str(version or "").strip().lstrip("vV").split("-")[0]
+    if not tag or not wanted or tag.split("-")[0] != wanted:
+        return {}
+    return record
+
+
+# 更新弹窗的历史版本列表只用于阅读说明，正文按下面的长度截断，避免每次轮询
+# 都把十份完整 Release 正文重新发过 JSBridge。
+HISTORY_LIMIT = 8
+HISTORY_BODY_CHARS = 4000
+
+
+def _history_summary(release: dict[str, Any]) -> dict[str, Any]:
+    summary = _release_summary(release)
+    return {
+        "tag_name": summary["tag_name"],
+        "name": summary["name"],
+        "html_url": summary["html_url"],
+        "published_at": summary["published_at"],
+        "prerelease": summary["prerelease"],
+        "changes": summary["changes"],
+        "body": summary["body"][:HISTORY_BODY_CHARS],
+    }
+
+
+def record_installed_version(version: str) -> None:
+    """Remember which version started, so the next upgrade can report the change.
+
+    Best effort: a failure here only costs a future update dialog, never startup.
+    """
+    target = installed_version_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": str(version), "at": datetime.now(timezone.utc).isoformat()}
+        temporary = target.with_name(f".{target.name}-{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, target)
+    except OSError:
+        pass
+
+
+def previous_installed_version() -> str:
+    """Version recorded by the last successful start, or an empty string."""
+    try:
+        payload = json.loads(installed_version_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(payload.get("version") or "") if isinstance(payload, dict) else ""
+
+
+def installed_update_state(
+    current_version: str,
+    version_date: str = "",
+) -> dict[str, Any]:
+    """Report what this launch changed, for both in-app updates and installers.
+
+    Read-only: the marker file is committed by ``Api.mark_frontend_ready`` once
+    the UI has actually loaded, so a build that dies during startup cannot claim
+    the upgrade was completed and silence the next launch's report.
+    """
+    from . import release_notes
+
+    previous = previous_installed_version()
+    try:
+        upgraded = bool(previous) and release_is_newer(current_version, previous)
+    except ValueError:
+        previous, upgraded = "", False
+    notes: list[str] = []
+    source = ""
+    record = release_record_for(current_version)
+    if not previous or upgraded:
+        cached = [str(item) for item in (record.get("notes") or [])]
+        notes, source = release_notes.notes_for_release(current_version, cached)
+    return {
+        "upgraded": upgraded,
+        "first_launch": not previous,
+        "previous_version": previous,
+        "current_version": str(current_version),
+        "version_date": release_notes.release_date_for(current_version) or version_date,
+        "notes": notes,
+        "notes_source": source,
+        "release_name": str(record.get("name") or ""),
+        "published_at": str(record.get("published_at") or ""),
+        "release_url": release_page_url(current_version),
+        "changelog_url": changelog_page_url(),
+    }
+
+
 UPDATE_FAILURE_MESSAGES = {
     "staged_exe_missing": "更新包不完整，已保留当前版本",
     "old_process_stuck": "旧版本无法退出，更新已取消",
@@ -531,13 +670,17 @@ def release_is_newer(remote_tag: str, current_version: str) -> bool:
     return version_key(remote_tag) > version_key(current_version)
 
 def _release_summary(release: dict[str, Any]) -> dict[str, Any]:
+    body = str(release.get("body") or "")
     return {
         "tag_name": str(release.get("tag_name") or ""),
         "name": str(release.get("name") or ""),
         "html_url": str(release.get("html_url") or ""),
         "published_at": str(release.get("published_at") or ""),
         "prerelease": bool(release.get("prerelease", False)),
-        "body": str(release.get("body") or "")[:12000],
+        "body": body[:12000],
+        # The dialog lists these entries directly; the raw body stays for the
+        # technical panel where the full release text is still useful.
+        "changes": release_notes_from_body(body),
         "assets": [
             {
                 "id": asset.get("id"),
@@ -717,6 +860,7 @@ class HostUpdater:
             "download_speed_bps": 0.0,
             "download_stage": "",
             "latest": None,
+            "history": [],
             "source": None,
             "downloaded_zip": "",
             "stage_dir": "",
@@ -776,6 +920,7 @@ class HostUpdater:
                 "download_speed_bps": 0.0,
                 "download_stage": "",
                 "latest": None,
+                "history": [],
                 "source": None,
                 "include_prerelease": bool(include_prerelease),
             })
@@ -935,6 +1080,12 @@ class HostUpdater:
         )
 
     @staticmethod
+    def _history(releases: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Recent releases for the update dialog's history list, newest first."""
+        items = [release for release in releases if isinstance(release, dict) and not release.get("draft")]
+        return [_history_summary(item) for item in items[:HISTORY_LIMIT]]
+
+    @staticmethod
     def _http_error_message(exc: urllib.error.HTTPError, source: str = SOURCE_GITHUB) -> str:
         code = exc.code
         if source == SOURCE_CNB:
@@ -1004,11 +1155,13 @@ class HostUpdater:
                     problems.append(f"{label}：{exc}")
                     continue
                 if newer:
+                    remember_release_record(summary)
                     self._set(
                         state="update_available",
                         message=f"发现新版本 {tag}（{label}）",
                         error=None,
                         latest=summary,
+                        history=self._history(releases),
                         source=source,
                         checked_at=time.time(),
                     )
@@ -1018,6 +1171,7 @@ class HostUpdater:
                         message=f"当前已是 {self.current_version}，无需更新",
                         error=None,
                         latest=summary,
+                        history=self._history(releases),
                         source=source,
                         checked_at=time.time(),
                     )
