@@ -440,7 +440,7 @@
               <header><h3>PDM 低压配电</h3><span id="vehPdmNote" class="state-text" title="来源 0x5A0 / 0x5A1 · 2 Hz">等待数据</span></header>
               <div class="vehicle-pdm-grid">
                 <div class="vehicle-pdm-side">
-                  <div class="sub-head vehicle-pdm-head"><b>低压总线侧</b><span id="vehPdmBusState" class="state-text">OR-RING 后整车负载</span></div>
+                  <div class="sub-head vehicle-pdm-head"><b>低压总线侧</b><span id="vehPdmBusState" class="state-text">OR-ing 后的整车负载</span></div>
                   <div class="readout-grid vehicle-limit-grid">
                     <div><span>电压</span><b id="vehPdmBusV">等待数据</b><em>V</em></div>
                     <div><span>电流</span><b id="vehPdmBusI">等待数据</b><em>A</em></div>
@@ -687,7 +687,7 @@
                     <span>控制器最高温度</span><b id="fanControllerTemp">—</b><em>°C</em>
                     <div class="cell-tail fan-chip-group"><i class="fan-source-chip" id="fanTempChip507" aria-hidden="true"></i><i class="fan-source-chip" id="fanTempChip508" aria-hidden="true"></i></div>
                   </div>
-                  <div title="来源 0x5A8 · 供电仲裁结果">
+                  <div title="来源 0x5A8 · 供电来源与限功率判定">
                     <span>供电状态</span><b id="fanPowerSupplyState">—</b>
                     <small id="fanPowerStatusFresh" class="cell-tail">等待数据</small>
                   </div>
@@ -912,7 +912,7 @@
                   </div>
 
                   <div class="sub-head fan-step-head">
-                    <b title="用 PDM 功率读数扣除 0% 基线上限；停止会话后再提交"><span class="step-badge">2</span>保存上限</b>
+                    <b title="由 PDM 功率读数扣除 0% 基线后给出；停止扫频会话后再提交"><span class="step-badge">2</span>保存上限</b>
                   </div>
                   <div class="field-grid cols-2 fan-mode-fields">
                     <label class="field"><span class="field-label">35W Chroma 上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
