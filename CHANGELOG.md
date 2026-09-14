@@ -4,6 +4,13 @@
 
 ## 未发布
 
+本地遥测模拟器进入 Windows 发布包，并清掉打包规格里失效的排除项：
+
+- “工程工具 → 遥测数据模拟”不再只随源码运行和 macOS 过渡版发布：Windows 安装版同样带这一页（MQTT / 串口 / 独立 PCAN 三种输出齐全）。它此前被 `_simulation_available()` 连带挡住，而这个判定服务的是另一件事——实体 CAN 的调试模拟通道。现在两者分开：遥测模拟器无条件随包，调试模拟通道仍只在源码运行和 macOS 过渡版提供，Windows 发布版保持硬件专用（界面不显示“调试模拟”开关，后端对 `mode=simulation` 仍返回“当前发布版仅支持真实 PCAN 设备”）。
+- Windows 打包规格随之补齐：`hiddenimports` 增加 `canhost.telemetry.simulator`、`canhost.bms.simulator`（遥测模拟器的 CAN 帧定义来源）、`serial` 与 `serial.tools.list_ports_windows`。此前 `excludes` 里的 `canhost.simulator` 是个在 `canhost/bms/simulator.py` 重命名后就失效的名字，规则一直空转，所以 BMS 与整车模拟器其实都进了 Windows 包且从未被核对；现在排除项改为真实存在的 `canhost.vehicle.simulator`，本机对改后的规格跑 PyInstaller 分析确认：整车模拟器不在包内，BMS 模拟器、遥测模拟器和 pyserial 都在。
+- Windows 构建补上冻结包自检（此前只有 macOS 构建运行）：`build_windows.ps1` 打包后以 `--packaging-smoke-test` 运行产物并核对退出码。自检本身也按平台分开——两个平台都要有可用的遥测模拟器、pyserial 和完整 `TelemetryFrame`，macOS 还要能启动调试模拟通道，Windows 则必须既不开放该通道标志、又要真的拒绝 `mode=simulation` 连接。
+- 新增 `Tests/test_packaging_spec.py`：断言两个 spec 的 `excludes` 只能写真实存在的模块（防止同类失效名字再出现），且两个发布包的 `hiddenimports` 必须显式包含遥测模拟器与 pyserial。
+
 修正表头与读数错列、分组标题缩进和分割线两侧间距：
 
 - 整车总览“ECU 四轮状态”表的表头与读数错开一列宽：表头标签左对齐（`扭矩 %Mn` 起于列首），四行读数右对齐（按列宽贴到列尾），实测两者在同一列内相差约 170px。读数改为与表头同边左对齐。曾用于右对齐表头的 `.veh-ecu-head .num` 从未被任何标记使用，一并删除。右对齐表头同样能对齐，但窗口 1460px（整车两列布局）时列宽只剩约 85px，右对齐会让读数与右邻表头只隔 8px，所以统一取左对齐。

@@ -38,6 +38,7 @@
 
 - [ ] 用实体 USB-RS485 验证本地遥测模拟器串口输出的连续帧边界、目标波特率和可选包尾。
 - [ ] 用独立实体 PCAN 测试总线验证本地遥测模拟器的 CAN1 输出、停止收尾和通道占用提示。
+- [ ] 在 Windows 安装版上打开“工程工具 → 遥测数据模拟”，确认三种输出（MQTT / 串口 / PCAN）都能选到设备并启动；下次 Windows 构建会先跑冻结包自检，本机只验证过 macOS 分支与规格分析。
 - [ ] 用真实 IVT 完成读取、配置、重启、周期核对和 CAN1 接入。
 - [ ] 用真实 FanController 验证两档扫频、租约、参数拒绝、保存和断电加载。
 - [ ] 用真实 F405 验证电池箱风扇查询窗口、高压标定、安全中止、保存等待和断电加载。
@@ -70,6 +71,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-14 | 遥测模拟器进 Windows 发布包并清理打包规格：把“遥测模拟器可用”和“实体 CAN 调试模拟通道可用”拆成两个判定，前者两个平台都随包，后者仍只给源码运行与 macOS 过渡版；`can_host.spec` 的 `hiddenimports` 增加 `canhost.telemetry.simulator` / `canhost.bms.simulator` / `serial` / `serial.tools.list_ports_windows`，`excludes` 里失效的 `canhost.simulator` 换成真实存在的 `canhost.vehicle.simulator`；Windows 构建补上冻结包自检，自检按平台分别核对（两平台都要遥测模拟器与完整 TelemetryFrame，macOS 还要能开调试模拟通道，Windows 必须拒绝 `mode=simulation`）。本机用改后的规格跑 PyInstaller 分析（输出到临时目录，不动 `dist/`）：整车模拟器不在包内，BMS 模拟器、遥测模拟器、pyserial 及其 Windows 后端都在；257 项测试通过（1 项平台跳过，新增 `Tests/test_packaging_spec.py` 3 项与冻结 Windows 分支 2 项）；源码级 `--packaging-smoke-test` 在 macOS 分支全流程通过（含 pyserial、帧生成与模拟通道数据） | Windows 分支的自检只能在 Windows 构建上跑（本机把 `sys.platform` 打桩会被 Python 自身 ssl 与 pyserial 的平台分支挡住，无法真实执行）；`.venv-canhost` 未安装 pyserial，本机源码运行看不到串口设备列表；Windows 安装版页面入口与三种输出未实机核对 |
 | 2026-09-14 | 修正表头与读数错列及分组标题缩进：ECU 四轮状态表读数改与表头同边左对齐（此前表头左对齐、读数右对齐，同一列内相差约 170px），删除从未被标记使用的 `.veh-ecu-head .num`；六个模组表“状态”表头改为与该列贴右端的读数同边；`.panel-body` 内的分组标题去掉叠加的 12px 缩进（此前标题文字比字段标签右移 38px，涉风扇页 6 处），标题下边框与首行内容之间留 `--sp-2`。252 项测试通过（1 项平台跳过）；用 `scripts/ui_preview.py` 的 live 与 calib 快照在 2400/1600/1460px 下逐块量测：表头与读数左边界差 0px、分组标题与字段标签左边界差 0px、分割线到首行 8.8px、标题/字段网格/进度条/记录表共用 256.2–1416.2 内容边界，无横向越界、无脚本错误。另按“双重缩进”与“贴线元素”两类特征扫描 11 个页面，未再发现同类问题 | 未在 Windows PyWebView 的 100%/125%/150% 缩放下复核；未连接实体 PCAN，真实长数值（三位小数温度、四位转速）下的列宽与换行未复核 |
 | 2026-09-14 | 发布 v0.9.6：Windows 与 macOS 构建、GitHub Release、CNB 同步及匿名下载校验全部成功，两端均有 Windows ZIP/校验、Setup、macOS DMG/校验 5 个附件（GitHub 与 CNB 的字节数一致）；发布说明由 CHANGELOG 的 v0.9.6 小节生成，共 15 条。发布链路首次在 Windows CI 上暴露 `scripts/set_version.py` / `scripts/release_notes.py` 打印中文时的 UnicodeEncodeError（英文 Windows 与 CI 的控制台为 cp1252）：两个脚本改为探测当前编码、装不下中文才切 UTF-8，测试按 UTF-8 解码子进程输出；修复随本版本一并发布，因只影响构建与测试工具，未列入随包更新说明 | 本机未连接 PCAN-USB；实体 CAN 收发、Windows PyWebView 与软件内升级仍待目标环境验收 |
 | 2026-09-14 | 界面改动复核与失效样式清理：按“选择器里只要有一个类名在前端任何文件里都不存在”扫出 29 处失效规则（`connect-button`、`hv-link`、`tool-connection-*`、`span-8` 等旧标记），删除 24 条规则、改写 5 条选择器；为证明只删了不可能命中的部分，清理前后各自记录 11 个页面、约 5000 个元素的逐元素计算样式快照（字号/颜色/背景/内外边距/边框/圆角/网格/宽高/对齐等 26 项），结果逐页逐元素完全一致。另修掉两处删除规则后残留的空 `@media` 块与拆成两行的 `background` 声明 | HTML 校验只覆盖标签闭合与失效选择器两类问题，未做逐条规则的语义审查 |
