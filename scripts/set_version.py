@@ -29,7 +29,29 @@ def _version_pattern() -> re.Pattern[str]:
     return re.compile(r'^__version__ = "[^"]+"', re.MULTILINE)
 
 
+def _configure_stdout() -> None:
+    """控制台编码装不下中文时（英文 Windows、CI）改用 UTF-8，装得下就保持原样。
+
+    Windows 的 cp936 控制台能正常显示中文，不需要改；cp1252 会直接抛
+    UnicodeEncodeError，必须换成 UTF-8 并替换无法编码的字符。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            "中文输出".encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # pragma: no cover - 环境不支持时保持原样
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdout()
     parser = argparse.ArgumentParser(description="写入上位机版本与更新说明")
     parser.add_argument("version", help="版本号，可带 v 前缀，如 v0.9.6")
     parser.add_argument("--date", default="", help="发布日期 YYYY-MM-DD；留空取 CHANGELOG 或今天")

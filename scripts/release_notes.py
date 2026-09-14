@@ -39,7 +39,29 @@ def _app_links(version: str) -> str:
     )
 
 
+def _configure_stdout() -> None:
+    """控制台编码装不下中文时（英文 Windows、CI）改用 UTF-8，装得下就保持原样。
+
+    Windows 的 cp936 控制台能正常显示中文，不需要改；cp1252 会直接抛
+    UnicodeEncodeError，必须换成 UTF-8 并替换无法编码的字符。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            "中文输出".encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # pragma: no cover - 环境不支持时保持原样
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdout()
     parser = argparse.ArgumentParser(description="生成上位机 Release 说明")
     parser.add_argument("--version", required=True, help="版本号，可带 v 前缀")
     parser.add_argument("--changelog", default=str(ROOT / "CHANGELOG.md"))

@@ -92,7 +92,7 @@ class EmbeddedNotesTest(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(SCRIPTS_DIR / "set_version.py"), "v0.9.5",
                  "--changelog", str(changelog), "--package-root", str(work)],
-                capture_output=True, text=True, cwd=str(ROOT),
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             generated = (work / "canhost" / "release_info.py").read_text(encoding="utf-8")
@@ -183,7 +183,7 @@ class ReleaseNotesScriptTest(unittest.TestCase):
                 [sys.executable, str(SCRIPTS_DIR / "release_notes.py"),
                  "--version", "v0.9.5", "--changelog", str(changelog),
                  "--output", str(markdown), "--json-output", str(payload)],
-                capture_output=True, text=True, cwd=str(ROOT),
+                capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             text = markdown.read_text(encoding="utf-8")
