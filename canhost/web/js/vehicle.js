@@ -108,9 +108,9 @@ function buildVehicleStatics() {
     + `<span>电机 °C</span><span>逆变器 °C</span><span>IGBT °C</span></div>` + wheelRows;
 
   const tireGroups = ["0x071", "0x072", "0x073", "0x074"].map((frameId, group) =>
-    `<div class="veh-tire-group" data-frame="${frameId}"><div class="veh-tire-head">`
+    `<div class="veh-tire-group" data-frame="${frameId}"><div class="sub-head veh-tire-head">`
     + `<b>${frameId} · 测点 ${group * 4 + 1}–${group * 4 + 4}</b><span class="veh-tire-state">未收到</span></div>`
-    + `<div class="veh-tire-points">` + [0, 1, 2, 3].map(point =>
+    + `<div class="readout-grid cols-2 veh-tire-points">` + [0, 1, 2, 3].map(point =>
       `<div class="veh-tire-point" data-point="${point}"><small>${group * 4 + point + 1}</small><b>—</b><em>°C</em></div>`).join("")
     + `</div></div>`).join("");
   $("#vehTireGrid").innerHTML = tireGroups;
@@ -164,7 +164,7 @@ function renderVehicle() {
   const sopStale = isStaleData(sop.limits_age) || isStaleData(sop.status_age);
   const sopDisplayAge = sopAges.length ? (sopStale ? Math.max(...sopAges) : Math.min(...sopAges)) : null;
   text("#vehSopAge", sopAges.length
-    ? `0x4A0/0x4A3 · ${sopStale ? "部分已过期 · 最旧 " : ""}${fmt(sopDisplayAge, 1)} s 前`
+    ? `${sopStale ? "部分已过期 · 最旧 " : ""}${fmt(sopDisplayAge, 1)} s 前`
     : "等待数据");
   markStaleData("#vehSopAge", sopStale);
   const flagText = value => statusKnown ? (value ? "是" : "否") : "—";
@@ -206,7 +206,7 @@ function renderVehicle() {
   text("#vehPackState", packKnown ? VEH_STATE_NAMES[pack.state] ?? pack.state ?? "—" : "等待数据");
   packStateNode.className = `veh-state-text ${packFresh ? (pack.state === 7 ? "bad" : pack.state === 5 ? "ok" : "") : ""}`;
   markStaleData(packStateNode, packKnown && !packFresh);
-  text("#vehPackAge", packKnown ? `0x4B0 · ${dataAgeText(pack.age)}` : "0x4B0 · 等待数据");
+  text("#vehPackAge", packKnown ? dataAgeText(pack.age) : "等待数据");
   markStaleData("#vehPackAge", packKnown && !packFresh);
   const fault = snapshot.fault || {};
   const faultKnown = fault.received === true && hasDataAge(fault.age);
@@ -220,9 +220,10 @@ function renderVehicle() {
   setVehChannel("#vehMeterGrid", VEH_METER_CHANNELS, snapshot.meter, SLOW_DATA_FRESH_MAX_S);
   const meterAges = VEH_METER_CHANNELS.map(channel => snapshot.meter?.[channel.key]?.age).filter(hasDataAge);
   const meterStale = meterAges.some(ageValue => isStaleData(ageValue, SLOW_DATA_FRESH_MAX_S));
+  // 帧来源写在标题的悬浮提示里，这里只报告数据本身是否可用。
   text("#vehMeterNote", meterAges.length
-    ? `0x521/0x522 · 大端${meterStale ? ` · 部分已过期 · 最旧 ${fmt(Math.max(...meterAges), 1)} s 前` : ""}`
-    : "0x521/0x522 · 等待数据");
+    ? meterStale ? `部分已过期 · 最旧 ${fmt(Math.max(...meterAges), 1)} s 前` : `${fmt(Math.min(...meterAges), 1)} s 前`
+    : "等待数据");
   markStaleData("#vehMeterNote", meterStale);
 
   // -- PDM -----------------------------------------------------------------
@@ -252,8 +253,8 @@ function renderVehicle() {
   const pdmAges = ["bus", "battery"].map(side => pdm[side]?.age).filter(hasDataAge);
   const pdmStale = pdmAges.some(ageValue => isStaleData(ageValue, SLOW_DATA_FRESH_MAX_S));
   text("#vehPdmNote", pdmAges.length
-    ? `0x5A0/0x5A1 · 2 Hz${pdmStale ? " · 部分数据已过期" : ""}`
-    : "0x5A0/0x5A1 · 等待数据");
+    ? pdmStale ? "部分数据已过期" : `${fmt(Math.min(...pdmAges), 1)} s 前`
+    : "等待数据");
   markStaleData("#vehPdmNote", pdmStale);
 
   // -- ECU ------------------------------------------------------------------
@@ -280,9 +281,9 @@ function renderVehicle() {
   text("#vehEcuError", statusKnownEcu ? wheelFlagText(ecuStatus.error) : "—");
   setClass("#vehEcuError", "bad", statusFreshEcu && Object.values(ecuStatus.error || {}).some(Boolean));
   ["#vehEcuReady", "#vehEcuEnable", "#vehEcuError"].forEach(id => markStaleData(id, statusKnownEcu && !statusFreshEcu));
-  text("#vehEcuNote", !ecuAges.length ? "0x502–0x509 · 等待数据"
-    : ecuStale ? `0x502–0x509 · 部分已过期 · 最旧 ${fmt(Math.max(...ecuAges), 1)} s 前`
-      : "0x502–0x509 · 10 ms");
+  text("#vehEcuNote", !ecuAges.length ? "等待数据"
+    : ecuStale ? `部分已过期 · 最旧 ${fmt(Math.max(...ecuAges), 1)} s 前`
+      : `${fmt(Math.min(...ecuAges), 1)} s 前`);
   markStaleData("#vehEcuNote", ecuStale);
 
   // -- Tyres ------------------------------------------------------------------
@@ -309,8 +310,8 @@ function renderVehicle() {
     });
   });
   text("#vehTireNote", tireKnown
-    ? `0x071–0x074 · ${tireFresh ? "轮位映射待实物确认" : dataAgeText(tires.age, SLOW_DATA_FRESH_MAX_S)}`
-    : "0x071–0x074 · 等待数据");
+    ? dataAgeText(tires.age, SLOW_DATA_FRESH_MAX_S)
+    : "等待数据");
   markStaleData("#vehTireNote", tireKnown && !tireFresh);
 
   drawVehicleTrend();

@@ -75,7 +75,7 @@ function bindFanControls() {
       + `保持 ${values.stale_hold_s} s · 下降 ${values.ramp_down_pct_per_s}%/s\n策略只保存在 RAM，复位后恢复默认。`);
   });
   $("#fanQueryButton")?.addEventListener("click", () => {
-    confirmFanCommand("fan_query", {}, "查询风扇当前策略", "发送操作码 0x05；FanController 随后回报温控曲线 0x5A6 和失联策略 0x5A7。");
+    confirmFanCommand("fan_query", {}, "查询风扇当前策略", "读取 FanController 的温控曲线和失联策略，结果随后回报到本页。");
   });
   $("#fanRestoreButton")?.addEventListener("click", () => {
     confirmFanCommand("fan_restore_defaults", {}, "恢复风扇默认策略",
@@ -305,14 +305,21 @@ function confirmFanAction(title, message, checkLabel, run, destructive = false) 
   $("#confirmDialog").showModal();
 }
 
+/* 过期只作用于整个读数单元：单元格退到次级灰、单位与尾注转告警色。
+   直接给单元格里的 <b> 加 data-stale 不会命中任何规则，必须落到单元上。 */
+function markFanCellStale(idOrNode, stale) {
+  const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
+  if (!node) return;
+  const cell = node.closest(".readout-grid > *") || node;
+  markStaleData(cell, stale);
+}
+
 function renderFanControlFields() {
   const mode = $("#fanModeSelect").value;
   const manual = mode === "1";
   $("#fanDuty1Input").disabled = !manual;
   $("#fanDuty2Input").disabled = !manual;
   $("#fanLeaseInput").disabled = mode === "0";
-  text("#fanModeNote", mode === "0" ? "自动温控 · 根据电机与逆变器温度自动计算目标占空比"
-    : mode === "1" ? "手动调速 · 设置固定占空比，到期自动恢复温控" : "强制停机 · 关闭两路输出，到期自动恢复温控");
 }
 
 function renderBatteryFanControlFields() {
@@ -380,7 +387,7 @@ function renderFan() {
     const stateNode = $(item.stateId);
     if (!card || !stateNode) return;
     card.classList.remove("running", "stalled", "starting", "idle", "data-stale");
-    stateNode.className = "fan-tach-state";
+    stateNode.className = "cell-tail fan-tach-state";
     if (!statusKnown) {
       stateNode.textContent = "—";
     } else if (!statusFresh) {
@@ -413,19 +420,21 @@ function renderFan() {
       bar.style.width = statusKnown ? `${Math.max(0, Math.min(100, duty[index] ?? 0))}%` : "0%";
       bar.classList.toggle("data-stale", statusKnown && !statusFresh);
     }
-    text(`#fanDuty${index + 1}Text`, !statusKnown ? "等待数据"
-      : `${duty[index] ?? 0}%${target.length ? ` · ${diagFresh ? "目标" : "上次目标"} ${target[index] ?? 0}%` : ""}`);
-    markStaleData(`#fanDuty${index + 1}Text`, statusKnown && (!statusFresh || (target.length && !diagFresh)));
+    text(`#fanDuty${index + 1}Text`, statusKnown ? String(duty[index] ?? 0) : "等待数据");
+    // 目标值贴在读数右端：实测值本身就是当前输出，两者不再串在一个字符串里。
+    text(`#fanDuty${index + 1}Target`, statusKnown && target.length
+      ? `${diagFresh ? "目标" : "上次目标"} ${target[index] ?? 0}%` : "");
+    markFanCellStale(`#fanDuty${index + 1}Text`, statusKnown && (!statusFresh || (target.length && !diagFresh)));
   }
 
   // Render Temperatures & Source Indicators
   text("#fanModeText", diagKnown ? diag.mode_name || "未知" : "等待数据");
   text("#fanMotorTemp", !diagKnown ? "等待数据"
-    : diag.motor_temp_c == null ? "失联" : `${fmt(diag.motor_temp_c, 1)} °C`);
+    : diag.motor_temp_c == null ? "失联" : fmt(diag.motor_temp_c, 1));
   text("#fanControllerTemp", !diagKnown ? "等待数据"
-    : diag.controller_temp_c == null ? "失联" : `${fmt(diag.controller_temp_c, 1)} °C`);
+    : diag.controller_temp_c == null ? "失联" : fmt(diag.controller_temp_c, 1));
   ["#fanModeText", "#fanMotorTemp", "#fanControllerTemp"].forEach(id =>
-    markStaleData(id, diagKnown && !diagFresh));
+    markFanCellStale(id, diagKnown && !diagFresh));
 
   const tempChips = [
     ["#fanTempChip506", diag.motor_temp_valid],
@@ -438,22 +447,23 @@ function renderFan() {
   });
 
   // Render 0x5A8 Power Status & Arbitration
-  text("#fanPowerStatusFresh", powerKnown ? `0x5A8 · ${dataAgeText(fan.power_status_age)}` : "未收到 0x5A8");
-  markStaleData("#fanPowerStatusFresh", powerKnown && !powerFresh);
+  text("#fanPowerStatusFresh", powerKnown ? dataAgeText(fan.power_status_age) : "等待数据");
+  markFanCellStale("#fanPowerSupplyState", powerKnown && !powerFresh);
   text("#fanPowerSupplyState", powerKnown ? (power.power_supply_name || "未知") : "—");
   text("#fanPowerLimitReason", powerKnown ? (power.power_limit_name || "未知") : "—");
-  text("#fanCurrentBudget", powerKnown && power.current_budget_a != null ? `${power.current_budget_a} A` : "—");
-  text("#fanPredictedCurrent", powerKnown && power.predicted_current_a != null ? `${power.predicted_current_a} A` : "—");
+  text("#fanCurrentBudget", powerKnown && power.current_budget_a != null ? String(power.current_budget_a) : "—");
+  text("#fanPredictedCurrent", powerKnown && power.predicted_current_a != null ? String(power.predicted_current_a) : "—");
   ["#fanPowerSupplyState", "#fanPowerLimitReason", "#fanCurrentBudget", "#fanPredictedCurrent"].forEach(id =>
-    markStaleData(id, powerKnown && !powerFresh));
+    markFanCellStale(id, powerKnown && !powerFresh));
   const limitsKnown = hasDataAge(fan.calib_limits_age) && Object.keys(limits).length > 0;
   const limitsFresh = isFresh(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S);
   const fanSuggested = (calib && calib.suggested_caps) || {};
   const fanChannelCaps = (calib && calib.channel_caps) || {};
+  const capsPendingText = "等待上限回报";
   let capsReportText = limitsKnown
-    ? "0x5AE · " + (limits.calibrated ? "已标定" : "未标定") + " · 电池 " + limits.battery_cap_pct + "% · DCDC " + limits.dcdc_cap_pct + "% · 当前 " + limits.active_cap_pct + "%" + (limits.flash_error ? " · Flash错误" : "")
+    ? (limits.calibrated ? "已标定" : "未标定") + " · 电池 " + limits.battery_cap_pct + "% · DCDC " + limits.dcdc_cap_pct + "% · 当前 " + limits.active_cap_pct + "%" + (limits.flash_error ? " · Flash错误" : "")
       + (limitsFresh ? "" : ` · ${dataAgeText(fan.calib_limits_age, SLOW_DATA_FRESH_MAX_S)}`)
-    : "未收到 0x5AE；保存前应先分别完成两档扫频。";
+    : capsPendingText;
   if (calibStatus === "completed") {
     const suggestions = [];
     if (fanSuggested.battery_cap_pct != null) suggestions.push("电池 " + fanSuggested.battery_cap_pct + "%");
@@ -507,7 +517,7 @@ function renderFan() {
   const fanAges = [fan.status_age, fan.diagnostic_age].filter(hasDataAge);
   const fanTelemetryStale = (statusKnown && !statusFresh) || (diagKnown && !diagFresh);
   const fanDisplayAge = fanAges.length ? (fanTelemetryStale ? Math.max(...fanAges) : Math.min(...fanAges)) : null;
-  text("#fanFreshTag", receiving ? `0x5A2/0x5A3 · ${fanTelemetryStale ? "部分已过期 · 最旧 " : ""}${fmt(fanDisplayAge, 1)} s 前` : "未收到状态帧");
+  text("#fanFreshTag", receiving ? `${fanTelemetryStale ? "部分已过期 · 最旧 " : ""}${fmt(fanDisplayAge, 1)} s 前` : "未收到状态帧");
   markStaleData("#fanFreshTag", fanTelemetryStale);
 
   // Policies (Curves & Failsafe)
@@ -550,18 +560,24 @@ function renderFan() {
 
   // ACK stream
   const acks = fan.ack_history || [];
+  // 模式命令应答码：只在收到应答后显示，避免常驻一个未使用的操作码。
+  text("#fanModeStatusTag", acks.length ? (acks[0].accepted ? "已接受" : "已拒绝") : "—");
+  setClass("#fanModeStatusTag", "ok", Boolean(acks.length && acks[0].accepted));
+  setClass("#fanModeStatusTag", "bad", Boolean(acks.length && !acks[0].accepted));
+  // 一条应答只留结论：模式/保底与输出/目标各归一组，不在窄卡片里堆成分行文字。
   $("#fanAckList").innerHTML = acks.length ? acks.slice(0, 8).map(item =>
     `<div class="event-item"><time>${item.time}</time><b>${item.opcode_name} · 序号 ${item.sequence}</b>`
-    + `<p class="${item.accepted ? "ok" : "bad"}">${item.result_name} · 模式 ${item.mode_name} · 失联 ${item.failsafe_name}`
-    + ` · 输出 ${item.duty_pct[0]}/${item.duty_pct[1]}% · 目标 ${item.target_pct[0]}/${item.target_pct[1]}%</p></div>`
-  ).join("") : '<div class="empty-state">尚未收到 0x5A5 应答。</div>';
+    + `<p class="${item.accepted ? "ok" : "bad"}">${item.result_name} · ${item.mode_name} · 保底 ${item.failsafe_name}`
+    + ` · 输出 ${item.duty_pct[0]}/${item.duty_pct[1]}% → 目标 ${item.target_pct[0]}/${item.target_pct[1]}%</p></div>`
+  ).join("") : '<div class="empty-state">尚未收到应答。</div>';
 
   // Calibration session state & table
   const calibRunning = calibStatus === "running";
   const tagMap = {
     idle: { text: "未激活", cls: "neutral" },
-    running: { text: `扫频中 (${calib.current_step || 0}/${calib.total_steps || 0})`, cls: "active" },
-    aborted: { text: `已中止: ${calib.abort_reason || "未知"}`, cls: "bad" },
+    // 扫频中的绿色与旁边进度条的运行色一致。
+    running: { text: `扫频中 (${calib.current_step || 0}/${calib.total_steps || 0})`, cls: "ok" },
+    aborted: { text: `已中止：${calib.abort_reason || "未知"}`, cls: "bad" },
     completed: { text: "已完成", cls: "ok" },
     stale: { text: "旧连接记录", cls: "neutral" },
   };
@@ -601,12 +617,12 @@ function renderFan() {
     && startCurrentReady && faults === 0 && temperaturesReady;
   let fanStartHint = "";
   if (!available) fanStartHint = "请先连接真实整车 CANB";
-  else if (!pdmFresh) fanStartHint = "等待新鲜的 PDM 0x5A0";
+  else if (!pdmFresh) fanStartHint = "等待 PDM 低压功率数据";
   else if (!fanFramesFresh) {
-    fanStartHint = "等待 0x5A2/0x5A3/0x5A8/0x5AE";
-  } else if (Number(limits.protocol_version) !== 3) fanStartHint = "0x5AE 协议版本必须为 3";
+    fanStartHint = "等待风扇遥测与标定上限帧";
+  } else if (Number(limits.protocol_version) !== 3) fanStartHint = "标定上限帧协议版本必须为 3";
   else if (!firmwareTierMatches) fanStartHint = "当前供电与所选标定档位不匹配";
-  else if (!dcdcMeasuredReady) fanStartHint = "PDM 双路实测尚不能证明 DCDC 已接管";
+  else if (!dcdcMeasuredReady) fanStartHint = "PDM 实测未证明 DCDC 已接管";
   else if (!startCurrentReady) fanStartHint = "基础总线电流超过开始门槛或保护值无效";
   else if (faults !== 0) fanStartHint = "请先排除风扇故障";
   else if (!temperaturesReady) fanStartHint = "温度输入无效或已达到标定门槛";
@@ -626,7 +642,7 @@ function renderFan() {
   const tbody = $("#fanCalibTableBody");
   if (tbody) {
     if (records.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${calibRunning ? "正在测量基准并准备阶梯扫频..." : "尚未运行标定。"}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${calibRunning ? "正在测量基准并准备阶梯扫频…" : "尚未运行标定"}</td></tr>`;
     } else {
       tbody.innerHTML = records.map(r => `
         <tr>
@@ -650,19 +666,22 @@ function renderFan() {
   const batteryKnown = hasDataAge(batteryFan.status_age) && Object.keys(batteryStatus).length > 0;
   const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
   text("#batteryFanFreshTag", batteryKnown
-    ? `0x5AA · ${dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S)}` : "等待查询");
+    ? dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S) : "等待查询");
   markStaleData("#batteryFanFreshTag", batteryKnown && !batteryFresh);
-  const batteryNote = $("#batteryFanStatusText");
-  if (batteryNote) batteryNote.className = batteryKnown
-    ? `fan-inline-note is-active${batteryFresh ? "" : " data-stale"}` : "fan-inline-note";
-  text("#batteryFanStatusText", batteryKnown
-    ? `${batteryStatus.mode_name} · ${batteryStatus.power_source_name} · ${batteryStatus.actual_duty_pct}% / 上限 ${batteryStatus.active_limit_pct}% · ${batteryStatus.rpm} RPM${batteryFresh ? "" : ` · ${dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S)}`}`
-    : "发送查询后，F405 在限时窗口内回报状态。");
-  const batteryValue = $("#batteryFanStatusValue");
-  if (batteryValue) {
-    batteryValue.textContent = batteryKnown ? String(batteryStatus.actual_duty_pct) : "等待";
-    batteryValue.classList.toggle("data-stale", batteryKnown && !batteryFresh);
-  }
+  // 一个读数一个单元：原先挤在一行说明里的值各自落到自己的单元上。
+  const batteryCells = [
+    ["#batteryFanStatusValue", batteryStatus.actual_duty_pct],
+    ["#batteryFanLimitValue", batteryStatus.active_limit_pct],
+    ["#batteryFanRpmValue", batteryStatus.rpm],
+  ];
+  batteryCells.forEach(([id, value]) => {
+    text(id, batteryKnown && value != null ? String(value) : "等待");
+    markFanCellStale(id, batteryKnown && !batteryFresh);
+  });
+  text("#batteryFanModeValue", batteryKnown ? (batteryStatus.mode_name || "未知") : "等待");
+  text("#batteryFanSourceValue", batteryKnown ? (batteryStatus.power_source_name || "未知") : "等待");
+  ["#batteryFanModeValue", "#batteryFanSourceValue"].forEach(id =>
+    markFanCellStale(id, batteryKnown && !batteryFresh));
   const batteryCalibKnown = hasDataAge(batteryFan.calibration_age) && Object.keys(batteryCalib).length > 0;
   const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
   if (batteryCalibKnown && !state.dirty.batteryFanCaps) {
@@ -677,24 +696,25 @@ function renderFan() {
   if (saveNode) {
     saveNode.textContent = batteryCalibKnown
       ? (batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存")
-        + (batteryCalibFresh ? "" : ` · ${dataAgeText(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S)}`)
-      : "等待回报";
-    saveNode.className = "battery-fan-save-state"
-      + (!batteryCalibFresh && batteryCalibKnown ? " data-stale"
-        : batteryCalibFresh && batteryCalib.save_pending ? " warn"
-          : batteryCalibFresh && batteryCalib.calibrated ? " ok" : "");
+      : "等待";
+    // 过期一档交给单元底色表达，这里只区分新鲜数据的三种结论。
+    saveNode.className = !(batteryCalibKnown && batteryCalibFresh) ? ""
+      : batteryCalib.save_pending ? "warn" : batteryCalib.calibrated ? "ok" : "";
+    // 保存状态来自标定帧，与状态帧的时效分开判定。
+    markFanCellStale("#batteryFanSaveState", batteryCalibKnown && !batteryCalibFresh);
   }
   const batterySession = batteryFan.calib_session || {};
   const batteryRecords = batterySession.records || [];
   const suggested = batterySession.suggested_caps || {};
+  // 子标题右侧只放一句结论：细节（复核 CSV、检查硬件）留在悬浮提示与按钮上。
   text("#batteryFanCalibProgress", batterySession.status === "running"
-    ? `自动扫频中：步骤 ${batterySession.current_step || 0}/${batterySession.total_steps || 0}，已记录 ${batteryRecords.length} 点`
+    ? `扫频中 · 步骤 ${batterySession.current_step || 0}/${batterySession.total_steps || 0} · 已记录 ${batteryRecords.length} 点`
     : batterySession.status === "completed"
       ? (suggested.chroma_cap_pct == null || suggested.hv_cap_pct == null
-        ? "自动扫频完成，但没有同时满足转速与功率预算的有效点；不要提交默认值，请检查数据和硬件。"
-        : `自动扫频完成：建议35W ${suggested.chroma_cap_pct}% / 70W ${suggested.hv_cap_pct}%；复核CSV后再提交。`)
+        ? "扫频完成，但没有同时满足转速与功率预算的有效点"
+        : `扫频完成 · 建议 35W ${suggested.chroma_cap_pct}% / 70W ${suggested.hv_cap_pct}%`)
       : batterySession.status === "aborted" ? `已中止：${batterySession.abort_reason || "未知原因"}`
-        : batterySession.status === "stale" ? "连接已更换；旧记录仍可导出，但推荐上限已作废。" : "尚未运行自动扫频。");
+        : batterySession.status === "stale" ? "连接已更换，旧记录仅可导出" : "尚未运行自动扫频");
   if (batterySession.status === "completed" && !state.dirty.batteryFanCaps
       && suggested.chroma_cap_pct != null && suggested.hv_cap_pct != null) {
     $("#batteryFanChromaCapInput").value = suggested.chroma_cap_pct;
@@ -714,16 +734,16 @@ function renderFan() {
     && batteryCalib.chroma_budget_w === 35 && batteryCalib.hv_budget_w === 70;
   let batteryStartHint = "";
   if (!available) batteryStartHint = "请先连接真实整车 CANB";
-  else if (!packFresh || pack.state !== 5) batteryStartHint = "等待新鲜的 BMS 高压接通状态";
+  else if (!packFresh || pack.state !== 5) batteryStartHint = "等待 BMS 高压接通";
   else if (pack.temperature_complete !== true) batteryStartHint = "BMS 温度采样不完整";
-  else if (!pdmFresh) batteryStartHint = "等待新鲜的 PDM 0x5A0";
+  else if (!pdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
   else if (!(isFresh(batteryFan.status_age, 1.0)
       && isFresh(batteryFan.calibration_age, 1.0))) {
-    batteryStartHint = "请先查询并等待 0x5AA/0x5AD";
+    batteryStartHint = "请先查询电池箱风扇状态与标定上限";
   } else if (batteryStatus.power_source !== 2) batteryStartHint = "当前不是高压/DCDC 供电";
   else if (batteryStatus.protocol_version !== 1
       || batteryCalib.chroma_budget_w !== 35 || batteryCalib.hv_budget_w !== 70) {
-    batteryStartHint = "F405 风扇协议或功率预算版本不匹配";
+    batteryStartHint = "电池箱风扇协议或功率预算版本不匹配";
   } else if (!batteryCurrentReady) batteryStartHint = "基础总线电流超过保护值或保护值无效";
   else if (batteryStatus.flags?.hardware_ready !== true) batteryStartHint = "PWM/TACH 硬件未就绪";
   else if (batteryStatus.flags?.stall_confirmed) batteryStartHint = "存在已确认停转";

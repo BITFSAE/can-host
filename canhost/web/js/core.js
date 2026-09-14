@@ -647,15 +647,20 @@ function updateScopeStrips(main, vehicle) {
   document.body.classList.toggle("control-write-locked", !can1Writable);
   $("#page-control")?.classList.toggle("scope-warning", !can1Writable && (mainConnected || vehicleConnected));
 
-  const fanWritable = vehicleConnected && vehicle.bus_profile !== "canb_legacy";
+  // 可写判定必须与风扇页 fanConnectionAvailable() 一致：内置模拟通道只提供数据，
+  // 命令发不出去，此时仍要显示提示并把写入按钮锁上。
+  const fanWritable = vehicleConnected && vehicle.mode === "pcan"
+    && vehicle.bus_profile !== "canb_legacy";
   const fanStrip = $("#fanScopeStrip");
   if (fanStrip) {
     fanStrip.hidden = fanWritable;
     text("#fanScopeDetail", fanWritable
       ? ""
-      : vehicleConnected && vehicle.bus_profile === "canb_legacy"
-        ? "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s"
-        : "点击底部“整车 CANB”直接连接后，才能查看和命令风扇");
+      : !vehicleConnected
+        ? "点击底部“整车 CANB”直接连接后，才能查看和命令风扇"
+        : vehicle.mode !== "pcan"
+          ? "当前整车连接是内置模拟数据；风扇命令需要实体 CANB"
+          : "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s");
   }
   document.body.classList.toggle("fan-write-locked", !fanWritable);
 }
