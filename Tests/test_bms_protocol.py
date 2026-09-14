@@ -756,6 +756,33 @@ class BmsProtocolTest(unittest.TestCase):
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "win32"):
             self.assertFalse(_simulation_available())
 
+    def test_frozen_windows_still_ships_local_telemetry_publisher(self) -> None:
+        """本地遥测模拟器是两个发布包都带的工程工具，不受调试模拟通道门控影响。"""
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "win32"):
+            api = Api()
+            try:
+                bootstrap = api.bootstrap()
+                self.assertTrue(bootstrap["frozen"])
+                self.assertFalse(bootstrap["simulation_enabled"])
+                self.assertFalse(bootstrap["vehicle_simulation_enabled"])
+                self.assertTrue(bootstrap["telemetry_simulator_enabled"])
+                snapshot = api.get_telemetry_simulator_snapshot()
+                self.assertFalse(snapshot["running"])
+                self.assertEqual(snapshot["state"], "stopped")
+            finally:
+                api.close()
+
+    def test_frozen_windows_rejects_simulation_channel(self) -> None:
+        """界面不显示开关之外，后端也必须拒绝；冻结包自检按同一条断言核对。"""
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "win32"):
+            api = Api()
+            try:
+                result = api.connect_can({"mode": "simulation", "bus_profile": "can1", "bitrate": 500000})
+                self.assertFalse(result["ok"])
+                self.assertIn("真实 PCAN", result["error"])
+            finally:
+                api.close()
+
     def test_release_transport_rejects_simulation(self) -> None:
         service = CanService(allow_simulation=False)
         try:

@@ -14,17 +14,27 @@ a = Analysis(
         "cli.pcan_bms_bench",
         "paho.mqtt.client",
         "canhost.telemetry.fsae_telemetry_pb2",
+        # 本地遥测模拟器是两个平台都发布的工程工具：串口输出要 pyserial，
+        # PCAN 输出复用 BMS 模拟帧定义，所以这三项必须显式随包。
+        "canhost.telemetry.simulator",
+        "canhost.bms.simulator",
+        "serial",
+        "serial.tools.list_ports",
+        "serial.tools.list_ports_windows",
         # 保留 updater TLS 依赖（certifi）在冻结包内，跨平台一致。
         "certifi",
     ],
     hookspath=[],
     runtime_hooks=[],
-    # The field release is connected to real PCAN hardware.  Keep the
-    # simulator available to source runs, but do not ship it in the EXE.
+    # The field release drives real PCAN hardware, so the CAN debug simulation
+    # channel stays out of the EXE (the runtime gate rejects it as well) and the
+    # packaging self-check asserts it stays unavailable.  The local telemetry
+    # is an engineering tool that both packages ship, which is why
+    # canhost.bms.simulator and pyserial stay in: dropping them silently disables
+    # the tool's CAN and serial outputs while the page still opens.
     # The updater uses only the standard library; keep it in frozen builds so
-    # the release can check GitHub, verify and replace itself.  The field tool
-    # deliberately does not ship the simulator.
-    excludes=["canhost.simulator", "canhost.telemetry.simulator", "serial"],
+    # the release can check GitHub, verify and replace itself.
+    excludes=["canhost.vehicle.simulator"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

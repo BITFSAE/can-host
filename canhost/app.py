@@ -65,11 +65,14 @@ def _write_update_health(path: Path, version: str) -> None:
 
 
 def _simulation_available() -> bool:
-    """Temporarily retain the simulators in source and macOS builds.
+    """Whether the CAN debug simulation channel may be opened.
 
-    Both frozen desktop builds are field tools for real PCAN hardware.  The
-    first macOS release keeps the existing simulator entry as a transitional
-    development aid; this exception must not be used as a hardware fallback.
+    Temporarily retain the CAN simulators in source and macOS builds.  Both
+    frozen desktop builds are field tools for real PCAN hardware; the first
+    macOS release keeps the existing simulator entry as a transitional
+    development aid, and this exception must not be used as a hardware
+    fallback.  The local telemetry publisher is a separate engineering tool
+    and ships in both release packages, so it is not gated here.
     """
     return not getattr(sys, "frozen", False) or sys.platform == "darwin"
 
@@ -97,15 +100,16 @@ class Api:
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()
-        # The local telemetry publisher is a development/commissioning tool.
-        # Keep it in source runs and the transitional macOS build only; it is
-        # not a replacement for the release tool's physical PCAN connection.
-        self._telemetry_simulator: Any = None
-        self._serial_port_provider: Any = None
-        if simulation_available:
-            from .telemetry.simulator import TelemetrySimulatorService, available_serial_ports
-            self._telemetry_simulator = TelemetrySimulatorService()
-            self._serial_port_provider = available_serial_ports
+        # The local telemetry publisher is an engineering tool for gateway
+        # commissioning, so both release packages ship it: the specs bundle
+        # canhost.telemetry.simulator and pyserial.  Its PCAN output opens its
+        # own test channel and never enables the CAN simulation mode, which
+        # keeps it usable on the hardware-only Windows build.  The import stays
+        # inside the constructor so merely importing canhost.app (tests, build
+        # tooling) does not pull in pyserial and protobuf.
+        from .telemetry.simulator import TelemetrySimulatorService, available_serial_ports
+        self._telemetry_simulator: Any = TelemetrySimulatorService()
+        self._serial_port_provider: Any = available_serial_ports
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
                                     cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
@@ -650,7 +654,22 @@ def main() -> None:
         import time
         from .bms.simulator import BmsSimulator  # noqa: F401
         from .telemetry import fsae_telemetry_pb2  # noqa: F401
-        from .vehicle.simulator import VehicleSimulator  # noqa: F401
+        # The local telemetry publisher ships in both release packages, so its
+        # frame generator and pyserial must be importable everywhere.  Serial is
+        # imported and enumerated directly: the port list goes through
+        # available_serial_ports(), which swallows a missing pyserial into an
+        # empty list and would hide the packaging mistake this check exists for.
+        from .telemetry.simulator import TelemetryFrameGenerator
+        import serial  # noqa: F401
+        from serial.tools import list_ports
+
+        list_ports.comports()
+        # The CAN debug simulation channel only ships in the transitional macOS
+        # package; can_host.spec excludes canhost.vehicle.simulator, so this
+        # import has to stay inside the platform branch.
+        simulation_channels = sys.platform == "darwin"
+        if simulation_channels:
+            from .vehicle.simulator import VehicleSimulator  # noqa: F401
         # The updater must prove the bundle really ships usable CA certs.
         from . import trust
         if not trust.ca_bundle_path():
@@ -673,15 +692,23 @@ def main() -> None:
             bootstrap = api.bootstrap()
             if "PCAN_USBBUS1" not in bootstrap["channels"]:
                 raise SystemExit("打包自检失败：缺少实体 PCAN 通道配置")
-            if sys.platform == "darwin" and not bootstrap["simulation_enabled"]:
+            if not bootstrap["telemetry_simulator_enabled"]:
+                raise SystemExit("打包自检失败：发布包未包含本地遥测模拟器")
+            simulator_frame = TelemetryFrameGenerator().generate_frame()
+            if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
+                raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
+            if not simulation_channels:
+                # 硬件专用发布包不带调试模拟通道：既不开放标志，也要真的拒绝连接，
+                # 界面上的“调试模拟”开关因此根本不会出现。
+                if bootstrap["simulation_enabled"] or bootstrap["vehicle_simulation_enabled"]:
+                    raise SystemExit("打包自检失败：硬件专用发布包不应提供调试模拟通道")
+                rejected = api.connect_can({"mode": "simulation", "bus_profile": "can1",
+                                            "bitrate": 500000})
+                if rejected.get("ok") or "真实 PCAN" not in str(rejected.get("error", "")):
+                    raise SystemExit("打包自检失败：硬件专用发布包未拒绝调试模拟通道")
+                return
+            if not bootstrap["simulation_enabled"] or not bootstrap["vehicle_simulation_enabled"]:
                 raise SystemExit("打包自检失败：macOS 过渡版本未包含临时模拟通道")
-            if sys.platform == "darwin":
-                from .telemetry.simulator import TelemetryFrameGenerator
-                if not bootstrap["telemetry_simulator_enabled"]:
-                    raise SystemExit("打包自检失败：macOS 过渡版本未包含本地遥测模拟器")
-                simulator_frame = TelemetryFrameGenerator().generate_frame()
-                if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
-                    raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
             bms_result = api.connect_can({
                 "mode": "simulation", "bus_profile": "can1", "bitrate": 500000,
             })

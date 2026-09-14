@@ -62,6 +62,20 @@ try {
     & $Python -m PyInstaller --noconfirm --clean (Join-Path $ProjectRoot "can_host.spec")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    # 冻结包自检（对应 build_macos.sh 的 --packaging-smoke-test）：验证随包模块真的可用，
+    # 并核对硬件专用门控。打包是 GUI 子系统程序，PowerShell 不等它结束，必须用
+    # Start-Process -Wait 取退出码；控制台输出重定向到文件，失败时打出来。
+    $SmokeOut = Join-Path $env:TEMP "canhost-packaging-smoke-test.out.txt"
+    $SmokeErr = Join-Path $env:TEMP "canhost-packaging-smoke-test.err.txt"
+    $SmokeExe = Join-Path $ProjectRoot "dist\BITFSAE_CAN_Host\BITFSAE_CAN_Host.exe"
+    $Smoke = Start-Process -FilePath $SmokeExe -ArgumentList "--packaging-smoke-test" `
+        -Wait -PassThru -RedirectStandardOutput $SmokeOut -RedirectStandardError $SmokeErr
+    if ($Smoke.ExitCode -ne 0) {
+        if (Test-Path $SmokeErr) { Get-Content $SmokeErr | Write-Host }
+        Write-Error "冻结包自检失败（退出码 $($Smoke.ExitCode)）：dist 产物不可发布。"
+        exit $Smoke.ExitCode
+    }
+
     # 发布产物命名与软件内更新器约定一致（canhost/updater.py）：
     # ZIP 内层必须是 BITFSAE_CAN_Host/ 目录，附件名 BITFSAE_CAN_Host_v<标签>.zip 与 .sha256。
     $Base = "BITFSAE_CAN_Host_v$Label"
