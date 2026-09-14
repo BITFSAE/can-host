@@ -1797,6 +1797,8 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .module-average-table > div { min-height: 31px; padding: var(--sp-2) var(--sp-2); background: var(--level-1); font-family: var(--mono); font-size: var(--fs-label); }
 .module-average-table b { font-size: var(--fs-label); }
 .module-average-table em { justify-self: end; color: var(--fault); font-style: normal; }
+/* 状态列读数贴右端（上一条），表头必须同边，否则“状态”与“新鲜/已过期”错开半个列宽。 */
+.module-table-head > span:last-child { text-align: right; }
 .module-average-table .online em { color: var(--ok); }
 .module-average-table .stale { color: var(--text-2); }
 .module-average-table .stale em { color: var(--warn); }
@@ -2987,15 +2989,15 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   background: var(--level-1);
 }
 .veh-ecu-head { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-unit); color: var(--text-3); }
-.veh-ecu-head .num { text-align: right; }
 .veh-ecu-row { min-height: 34px; padding: var(--sp-1) var(--sp-3); }
 .veh-ecu-row b { font-size: var(--fs-unit); color: var(--text-2); }
+/* 读数与表头同边：两者都左对齐。改成右对齐会让读数贴到下一列表头，
+   实测窗口宽度 1460px（整车两列布局）时列宽只剩 ~85px，读数会与右邻表头挤在一起。 */
 .veh-ecu-row span {
   font-family: var(--mono);
   font-size: var(--fs-label);
   font-weight: 600;
   color: var(--text);
-  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3238,6 +3240,11 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   border-color: transparent;
 }
 .panel-body { padding: var(--sp-3); }
+/* 子块标题自带 12px 左右内边距，只为 `.panel-body.flush` 这类无内边距容器准备。
+   正文已经有内边距时它会把标题再缩进一层（字段标签在 12px，标题文字在 50px），
+   所以这里去掉左右内边距，让标题与下面的字段左对齐；标题下边框是分组的
+   起始线，与首行内容之间补上 --sp-2，避免字段标签紧贴分割线。 */
+.panel-body:not(.flush) > .sub-head { padding-inline: 0; margin-bottom: var(--sp-2); }
 .data-section { min-width: 0; }
 
 /* 面板内不得再嵌套带边框的卡片：第二层一律退化为分隔线。 */
@@ -3321,7 +3328,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 
 /* 协议缩写、来源标记等次级下标统一到 --fs-unit，不再使用 9px/10px。 */
 .switch-label small, .protection-label small, .module-table-head,
-.veh-ecu-head, .veh-ecu-head .num, .trend-legend b,
+.veh-ecu-head, .trend-legend b,
 .condition-list dd small, .imd-primary-grid small, .primary-readouts small,
 .primary-readouts p em, .panel-head > small, .panel-head span:not(.tag),
 .tool-header-desc, .monitor-inline-stats, .transmit-actions button,
