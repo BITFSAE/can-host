@@ -10,7 +10,7 @@
 | 整车 CANB | SOP、BMS 镜像、PDM、ECU、胎温、赛会能量计和两套风扇已接入 |
 | 工程工具 | CAN 监视与发送、F405 从控台架、IVT 配置、风扇标定和本地遥测模拟已接入 |
 | 遥测 | MQTT 只读订阅、BMS 故障变化记录及 MQTT/串口/PCAN 本地模拟已接入 |
-| 发布 | v0.9.5 已完成 GitHub/CNB 双平台发布；目标机实体硬件验收仍待完成 |
+| 发布 | v0.9.7 已完成 GitHub/CNB 双平台发布；目标机实体硬件验收仍待完成 |
 
 当前协议边界：F405 工具协议版本 5，告警开关帧版本 7；上位机不定义新 CAN 契约。精确帧定义以固件和 vehicle-interfaces 为准。
 
@@ -18,11 +18,11 @@
 
 ### 发布与平台
 
-- [ ] 用真实 `vX.Y.Z` 标签跑一次发布，核对 GitHub Release 正文、CNB 频道和更新弹窗显示同一份条目。
+- [x] 已用真实 `vX.Y.Z` 标签跑通完整发布并核对说明来源一致：v0.9.6 与 v0.9.7 的 GitHub Release 正文、CNB 频道 `latest.json` 和随包说明由 `CHANGELOG.md` 同一小节生成（v0.9.7 为 11 条），更新弹窗读的就是同一个 `release_notes.release_notes_from_body`。
 - [ ] 在干净 Windows 10/11 验证发布目录离线完整性、安装、快捷方式、WebView2、PCAN、软件更新、失败回滚和卸载。
 - [ ] 在干净 Apple Silicon Mac 验证 DMG 安装、Gatekeeper、覆盖升级和文件对话框。
 - [ ] 发布包含 certifi 的包后，在 macOS 实机验证更新检查不再报证书错误；在此之前的过渡期，手动下载新 DMG 覆盖安装。
-- [x] 已发布 v0.9.4 双平台标签，GitHub 与 CNB 均有 5 个附件，更新器频道已切到 v0.9.4。
+- [x] 已发布 v0.9.5–v0.9.7 双平台标签，GitHub 与 CNB 均有 5 个附件；CNB 匿名校验 8 个版本 36 个附件全部可下载，更新器频道已切到 v0.9.7。
 - [ ] 验证私有 GitHub 仓库的令牌保存、清除、401/403/404 和附件下载。
 
 ### 实体 CAN 与车辆
@@ -71,6 +71,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-14 | 发布 v0.9.7：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端都是 5 个附件且字节数一致（ZIP 17505341、ZIP 校验 95、Setup 15729948、DMG 11736308、DMG 校验 106）；CNB 匿名校验 36 个附件全部可下载，频道 `latest.json` 顶部就是 v0.9.7；CNB 上两份 `.sha256` 的内容与 GitHub 记录的资产 digest 逐位一致（ZIP `85f2fc66…`、DMG `57dbbcf0…`）。用频道负载驱动真实更新器代码：解析出 11 条说明、选中 `BITFSAE_CAN_Host_v0.9.7.zip` 与其 `.sha256`，`release_is_newer("v0.9.7","0.9.6")` 为真，GitHub Release 正文与 CNB 频道正文的条目逐条相同。随本版本发布工作树里未提交的风扇标定指南重写与三处界面文案：指南中的 1.2 s 命令确认、基线每 4 点重采、FanController 6 s（3 s 稳定 + 3 s 采样）与 F405 5 s（2 s 稳定）、起始总线电流 `min(8.0 A, 保护值)`、未标定 15%/55% 封顶、F405 上报窗口 5 s·500 ms/100 ms·结束 1 s、提交命令 Byte2..Byte6 布局逐项对照上位机代码与 `fan_controller.c`/`bms_fan.c` 确认（Byte2/Byte3 为两个上限、Byte4/Byte5 固定 35/70、Byte6 为 `0xA5`）。本机 257 项测试通过（1 项平台跳过）；`build_macos.sh` 完成测试、PyInstaller、冻结包自检、最低系统版本核对与 ad-hoc 签名并产出 v0.9.7 DMG，冻结程序 `--packaging-smoke-test` 退出码 0 | 本机未连接 PCAN-USB；Windows 安装版的遥测模拟器入口与三种输出、实体 CAN 标定收发、目标机升级与回滚、macOS DMG 覆盖安装仍待验收 |
 | 2026-09-14 | 遥测模拟器进 Windows 发布包并清理打包规格：把“遥测模拟器可用”和“实体 CAN 调试模拟通道可用”拆成两个判定，前者两个平台都随包，后者仍只给源码运行与 macOS 过渡版；`can_host.spec` 的 `hiddenimports` 增加 `canhost.telemetry.simulator` / `canhost.bms.simulator` / `serial` / `serial.tools.list_ports_windows`，`excludes` 里失效的 `canhost.simulator` 换成真实存在的 `canhost.vehicle.simulator`；Windows 构建补上冻结包自检，自检按平台分别核对（两平台都要遥测模拟器与完整 TelemetryFrame，macOS 还要能开调试模拟通道，Windows 必须拒绝 `mode=simulation`）。本机用改后的规格跑 PyInstaller 分析（输出到临时目录，不动 `dist/`）：整车模拟器不在包内，BMS 模拟器、遥测模拟器、pyserial 及其 Windows 后端都在；257 项测试通过（1 项平台跳过，新增 `Tests/test_packaging_spec.py` 3 项与冻结 Windows 分支 2 项）；源码级 `--packaging-smoke-test` 在 macOS 分支全流程通过（含 pyserial、帧生成与模拟通道数据） | Windows 分支的自检只能在 Windows 构建上跑（本机把 `sys.platform` 打桩会被 Python 自身 ssl 与 pyserial 的平台分支挡住，无法真实执行）；`.venv-canhost` 未安装 pyserial，本机源码运行看不到串口设备列表；Windows 安装版页面入口与三种输出未实机核对 |
 | 2026-09-14 | 修正表头与读数错列及分组标题缩进：ECU 四轮状态表读数改与表头同边左对齐（此前表头左对齐、读数右对齐，同一列内相差约 170px），删除从未被标记使用的 `.veh-ecu-head .num`；六个模组表“状态”表头改为与该列贴右端的读数同边；`.panel-body` 内的分组标题去掉叠加的 12px 缩进（此前标题文字比字段标签右移 38px，涉风扇页 6 处），标题下边框与首行内容之间留 `--sp-2`。252 项测试通过（1 项平台跳过）；用 `scripts/ui_preview.py` 的 live 与 calib 快照在 2400/1600/1460px 下逐块量测：表头与读数左边界差 0px、分组标题与字段标签左边界差 0px、分割线到首行 8.8px、标题/字段网格/进度条/记录表共用 256.2–1416.2 内容边界，无横向越界、无脚本错误。另按“双重缩进”与“贴线元素”两类特征扫描 11 个页面，未再发现同类问题 | 未在 Windows PyWebView 的 100%/125%/150% 缩放下复核；未连接实体 PCAN，真实长数值（三位小数温度、四位转速）下的列宽与换行未复核 |
 | 2026-09-14 | 发布 v0.9.6：Windows 与 macOS 构建、GitHub Release、CNB 同步及匿名下载校验全部成功，两端均有 Windows ZIP/校验、Setup、macOS DMG/校验 5 个附件（GitHub 与 CNB 的字节数一致）；发布说明由 CHANGELOG 的 v0.9.6 小节生成，共 15 条。发布链路首次在 Windows CI 上暴露 `scripts/set_version.py` / `scripts/release_notes.py` 打印中文时的 UnicodeEncodeError（英文 Windows 与 CI 的控制台为 cp1252）：两个脚本改为探测当前编码、装不下中文才切 UTF-8，测试按 UTF-8 解码子进程输出；修复随本版本一并发布，因只影响构建与测试工具，未列入随包更新说明 | 本机未连接 PCAN-USB；实体 CAN 收发、Windows PyWebView 与软件内升级仍待目标环境验收 |
