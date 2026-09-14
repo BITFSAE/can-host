@@ -56,6 +56,7 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
   const ok = async () => ({ ok: true });
   const base = {
     bootstrap: async () => clone((await load()).bootstrap),
+    refresh_pcan_channels: async () => clone((await load()).bootstrap.pcan_scan),
     get_snapshot: async () => clone((await load()).snapshot),
     get_vehicle_snapshot: async () => clone((await load()).vehicle),
     get_quick_snapshot: async () => clone((await load()).quick),

@@ -460,6 +460,10 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .connection-settings-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .connection-settings-divider { display: flex; align-items: center; gap: var(--sp-2); margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-unit); font-weight: 700; letter-spacing: .08em; }
 .connection-settings-divider::after { content: ""; height: 1px; flex: 1; background: var(--line-soft); }
+.pcan-discovery { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.pcan-discovery > span { min-width: 0; color: var(--text-2); font-size: var(--fs-label); line-height: 1.4; }
+.pcan-discovery > span.warn { color: var(--warn); }
+.pcan-discovery .outline-button { min-width: 88px; flex: none; }
 
 @media (max-width: 1260px) {
   .statusbar { gap: var(--sp-2); padding-inline: var(--sp-2); }

@@ -1123,6 +1123,10 @@
     <form method="dialog">
       <header><h2 id="connectDialogTitle">CAN 连接设置</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
+        <div class="pcan-discovery">
+          <span id="pcanDiscoveryStatus" role="status" aria-live="polite">正在读取 PCAN 设备…</span>
+          <button type="button" class="outline-button" id="refreshPcanChannelsButton">刷新设备</button>
+        </div>
         <label class="field">
           <span class="field-label">BMS 主连接通道</span>
           <select id="connectChannel"></select>

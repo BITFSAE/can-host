@@ -12,6 +12,7 @@ from typing import Any
 
 from . import __version__, __version_date__
 from .transport import CanService
+from .pcan_channels import discover_pcan_channels
 from .bms.protocol import switch_catalog
 from .telemetry import TelemetryService
 from .updater import (
@@ -128,6 +129,7 @@ class Api:
             return None
 
     def bootstrap(self) -> dict[str, Any]:
+        pcan_scan = discover_pcan_channels()
         profiles = [
             {"key": "can1", "name": "CAN1 · F405 / 从控 / IVT / 工具", "bitrate": 500000,
              "writable": True, "ivt_writable": True},
@@ -162,9 +164,15 @@ class Api:
             "startup_update_result": self._startup_update_result,
             "runtime_platform": sys.platform,
             "frozen": bool(getattr(sys, "frozen", False)),
-            "channels": [f"PCAN_USBBUS{i}" for i in range(1, 9)],
+            "channels": pcan_scan["channels"],
+            "channel_details": pcan_scan["channel_details"],
+            "pcan_scan": pcan_scan,
             "profiles": profiles,
         }
+
+    def refresh_pcan_channels(self) -> dict[str, Any]:
+        """Rescan attached hardware after a USB hot-plug event."""
+        return discover_pcan_channels()
 
     def mark_frontend_ready(self) -> dict[str, Any]:
         """Complete the updater health handshake after the first UI poll."""
@@ -690,8 +698,8 @@ def main() -> None:
         api = Api()
         try:
             bootstrap = api.bootstrap()
-            if "PCAN_USBBUS1" not in bootstrap["channels"]:
-                raise SystemExit("打包自检失败：缺少实体 PCAN 通道配置")
+            if not isinstance(bootstrap.get("pcan_scan"), dict):
+                raise SystemExit("打包自检失败：缺少 PCAN 通道枚举接口")
             if not bootstrap["telemetry_simulator_enabled"]:
                 raise SystemExit("打包自检失败：发布包未包含本地遥测模拟器")
             simulator_frame = TelemetryFrameGenerator().generate_frame()

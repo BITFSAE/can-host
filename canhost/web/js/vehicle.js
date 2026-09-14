@@ -51,6 +51,9 @@ async function connectVehicle() {
   const simulation = bitrateRaw === "simulation";
   const bitrate = simulation ? 500000 : Number(bitrateRaw);
   const channelSelect = $("#vehicleConnectChannel");
+  if (!simulation && !channelSelect?.value) {
+    return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
+  }
   if (!simulation && state.snapshot?.connection?.connected === true
       && state.snapshot.connection.mode === "simulation") {
     await state.api.disconnect_can();

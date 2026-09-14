@@ -108,7 +108,10 @@ class CanService:
         mode = config.get("mode", "pcan")
         profile = config.get("bus_profile", "can1")
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
-        channel = str(config.get("channel") or "PCAN_USBBUS1")
+        requested_channel = config.get("channel")
+        if mode != "simulation" and not requested_channel:
+            return {"ok": False, "error": "未选择 PCAN 通道；请先刷新并选择已连接设备"}
+        channel = str(requested_channel or "PCAN_USBBUS1")
         if mode == "bench" and profile != "can1":
             return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；真实 IVT 也应接 CAN1"}
         if mode == "bench" and self.protocol_kind != "bms":
@@ -861,7 +864,10 @@ class CanService:
                 raise RuntimeError("PCAN 已断开，无法重新打开 IVT 配置连接")
             old_bus = self.bus
             worker = self.worker
-            channel = str(self.connection.get("channel") or "PCAN_USBBUS1")
+            channel_value = self.connection.get("channel")
+            if not channel_value:
+                raise RuntimeError("IVT 配置连接缺少 PCAN 通道")
+            channel = str(channel_value)
             self.stop_event.set()
         if worker and worker.is_alive():
             worker.join(timeout=1.2)

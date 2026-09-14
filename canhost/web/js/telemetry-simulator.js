@@ -39,8 +39,7 @@ function syncTelemetrySimulatorFields() {
 
 function populateTelemetrySimulatorHardware() {
   const channel = $("#simulatorPcanChannel");
-  channel.innerHTML = (state.bootstrap?.channels || ["PCAN_USBBUS1"])
-    .map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+  if (channel) populatePcanSelect("#simulatorPcanChannel", state.bootstrap || {});
   const portList = $("#simulatorSerialPortList");
   portList.innerHTML = (state.bootstrap?.serial_ports || [])
     .map(item => `<option value="${escapeHtml(item.device)}">${escapeHtml(item.description)}</option>`).join("");
@@ -96,10 +95,11 @@ function saveTelemetrySimulatorSettings(config) {
   catch { /* local storage is optional */ }
 }
 
-function openTelemetrySimulatorDialog() {
+async function openTelemetrySimulatorDialog() {
   if (state.bootstrap?.telemetry_simulator_enabled !== true) {
     return toast("当前发布版本未包含本地遥测模拟器", true);
   }
+  await refreshPcanChannels(false);
   populateTelemetrySimulatorHardware();
   restoreTelemetrySimulatorSettings();
   $("#simulatorConfigError").classList.add("hidden");

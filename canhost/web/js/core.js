@@ -35,6 +35,7 @@ var state = {
   chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0, connectionKey: null },
   saveWatch: null,
   cellRefs: null,
+  pcanScanInFlight: null,
 };
 window.state = state;
 
@@ -195,7 +196,9 @@ async function init() {
     await reportStartupUpdate();
   } catch (error) {
     toast(`应用后端未就绪：${error}`, true);
-    const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"], profiles: [
+    const fallback = { simulation_enabled: false, channels: ["PCAN_USBBUS1"],
+      pcan_scan: { ok: false, automatic: false, channels: ["PCAN_USBBUS1"],
+        message: "后端未就绪，暂时显示手动通道列表", error: String(error) }, profiles: [
       { key: "can1", name: "CAN1 · F405 主控 / 从控 / 工具", bitrate: 500000 },
       { key: "canb", name: "CANB · ECU / Chroma · 500 kbit/s", bitrate: 500000 },
       { key: "canb_legacy", name: "CANB · Legacy · 250 kbit/s", bitrate: 250000 },
@@ -239,6 +242,7 @@ function showPage(page) {
   // scroll offset can make a short page appear blank after navigation.
   $("#main").scrollTop = 0;
   if (state.snapshot) render();
+  if (["bench", "ivt", "simulator"].includes(page)) refreshPcanChannels(false);
   schedulePoll(0);
 }
 
@@ -260,7 +264,11 @@ function bindCoreControls() {
   $("#canbBmsBusButton")?.addEventListener("click", () => toggleMainDockConnection("canb_bms"));
   $("#canbVehicleBusButton")?.addEventListener("click", toggleVehicleDockConnection);
   $("#simulationBusButton")?.addEventListener("click", toggleSimulationChannels);
-  $("#connectionSettingsButton")?.addEventListener("click", () => $("#connectDialog")?.showModal());
+  $("#connectionSettingsButton")?.addEventListener("click", () => {
+    $("#connectDialog")?.showModal();
+    refreshPcanChannels(false);
+  });
+  $("#refreshPcanChannelsButton")?.addEventListener("click", () => refreshPcanChannels(true));
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#confirmDialog").addEventListener("close", () => {
@@ -313,20 +321,94 @@ function bindCoreControls() {
 function populateConnectionOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data) return;
+  const previousProfile = $("#connectProfile")?.value;
   // 模拟入口只在底栏开发按钮出现，连接弹窗只配置真实 PCAN，避免同一模式重复入口。
   const profiles = [...(data.profiles || [])].filter(item => ["canb", "canb_legacy"].includes(item.key));
   $("#connectProfile").innerHTML = profiles.map(item =>
     `<option value="${item.key}" data-mode="${item.mode || "pcan"}" data-bitrate="${item.bitrate}">${item.name}</option>`
   ).join("");
-  $("#connectChannel").innerHTML = (data.channels || ["PCAN_USBBUS1"]).map(item => `<option>${item}</option>`).join("");
+  if (profiles.some(item => item.key === previousProfile)) $("#connectProfile").value = previousProfile;
+  populatePcanSelect("#connectChannel", data);
+  renderPcanDiscoveryStatus(data.pcan_scan);
 }
 
 function populateToolChannelOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data?.channels) return;
-  const options = data.channels.map(item => `<option>${item}</option>`).join("");
   ["#benchChannelSelect", "#ivtChannelSelect", "#vehicleConnectChannel"]
-    .forEach(id => { if ($(id)) $(id).innerHTML = options; });
+    .forEach(id => populatePcanSelect(id, data));
+}
+
+function populatePcanSelect(selector, data) {
+  const node = $(selector);
+  if (!node) return;
+  const previous = node.value;
+  const channels = Array.isArray(data?.channels) ? data.channels : [];
+  const details = new Map((data?.channel_details || []).map(item => [item.channel, item]));
+  if (!channels.length) {
+    node.innerHTML = '<option value="">未检测到 PCAN 通道</option>';
+    node.disabled = true;
+    return;
+  }
+  node.innerHTML = channels.map(channel => {
+    const detail = details.get(channel) || {};
+    const label = detail.label || channel;
+    return `<option value="${escapeHtml(channel)}" title="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+  }).join("");
+  node.disabled = node.closest(".disabled") !== null;
+  if (channels.includes(previous)) node.value = previous;
+}
+
+function renderPcanDiscoveryStatus(scan) {
+  const node = $("#pcanDiscoveryStatus");
+  if (!node || !scan) return;
+  node.textContent = scan.message || "PCAN 设备状态未知";
+  node.classList.toggle("warn", scan.ok !== true || !(scan.channels || []).length);
+  node.title = scan.error || "";
+}
+
+async function refreshPcanChannels(announce = false) {
+  if (!state.api?.refresh_pcan_channels) return null;
+  if (state.pcanScanInFlight) return state.pcanScanInFlight;
+  const button = $("#refreshPcanChannelsButton");
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "扫描中…";
+  }
+  text("#pcanDiscoveryStatus", "正在扫描 PCAN 设备…");
+  state.pcanScanInFlight = (async () => {
+    try {
+      const scan = await state.api.refresh_pcan_channels();
+      state.bootstrap = {
+        ...(state.bootstrap || {}),
+        channels: scan.channels || [],
+        channel_details: scan.channel_details || [],
+        pcan_scan: scan,
+      };
+      populateConnectionOptions();
+      populateToolChannelOptions();
+      if (typeof populateTelemetrySimulatorHardware === "function") populateTelemetrySimulatorHardware();
+      if (announce) toast(scan.message || "PCAN 设备扫描完成", scan.ok !== true);
+      return scan;
+    } catch (error) {
+      const scan = { ok: false, automatic: false, channels: [], channel_details: [],
+        message: "PCAN 设备扫描失败", error: String(error) };
+      state.bootstrap = { ...(state.bootstrap || {}), channels: [], channel_details: [], pcan_scan: scan };
+      populateConnectionOptions();
+      populateToolChannelOptions();
+      if (announce) toast(`PCAN 设备扫描失败：${error}`, true);
+      return scan;
+    } finally {
+      state.pcanScanInFlight = null;
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        button.textContent = "刷新设备";
+      }
+    }
+  })();
+  return state.pcanScanInFlight;
 }
 
 function restoreConnectionPreferences() {
@@ -344,9 +426,9 @@ function restoreConnectionPreferences() {
 
 function saveConnectionPreferences() {
   const prefs = {
-    mainChannel: $("#connectChannel")?.value || "PCAN_USBBUS1",
+    mainChannel: $("#connectChannel")?.value || "",
     bmsCanbProfile: $("#connectProfile")?.value || "canb",
-    vehicleChannel: $("#vehicleConnectChannel")?.value || "PCAN_USBBUS1",
+    vehicleChannel: $("#vehicleConnectChannel")?.value || "",
     vehicleBitrate: $("#vehicleConnectBitrate")?.value || "500000",
   };
   try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
@@ -379,6 +461,8 @@ async function toggleMainDockConnection(role) {
   if (roleButton(role)?.classList.contains("connecting")) return;
   if (mainConnectionRole() === role) return disconnectCan();
   const profileOption = $("#connectProfile")?.selectedOptions?.[0];
+  const channel = $("#connectChannel")?.value;
+  if (!channel) return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
   const profile = role === "can1" ? "can1" : (profileOption?.value || "canb");
   const bitrate = role === "can1" ? 500000 : Number(profileOption?.dataset?.bitrate || 500000);
   const vehicle = vehicleConnectionState();
@@ -392,7 +476,7 @@ async function toggleMainDockConnection(role) {
   try {
     result = await state.api.connect_can({
       mode: "pcan", bus_profile: profile,
-      channel: $("#connectChannel")?.value || "PCAN_USBBUS1", bitrate,
+      channel, bitrate,
       auto_record: typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true,
     });
   } catch (error) {
