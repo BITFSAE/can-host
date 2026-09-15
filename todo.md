@@ -18,11 +18,11 @@
 
 ### 发布与平台
 
-- [x] 已用真实 `vX.Y.Z` 标签跑通完整发布并核对说明来源一致：v0.9.6 与 v0.9.7 的 GitHub Release 正文、CNB 频道 `latest.json` 和随包说明由 `CHANGELOG.md` 同一小节生成（v0.9.7 为 11 条），更新弹窗读的就是同一个 `release_notes.release_notes_from_body`。
+- [x] 已用真实 `vX.Y.Z` 标签跑通完整发布并核对说明来源一致：v0.9.6–v0.9.8 的 GitHub Release 正文、CNB 频道 `latest.json` 和随包说明由 `CHANGELOG.md` 同一小节生成（v0.9.7 为 11 条、v0.9.8 为 2 条），更新弹窗读的就是同一个 `release_notes.release_notes_from_body`。
 - [ ] 在干净 Windows 10/11 验证发布目录离线完整性、安装、快捷方式、WebView2、PCAN、软件更新、失败回滚和卸载。
 - [ ] 在干净 Apple Silicon Mac 验证 DMG 安装、Gatekeeper、覆盖升级和文件对话框。
 - [ ] 发布包含 certifi 的包后，在 macOS 实机验证更新检查不再报证书错误；在此之前的过渡期，手动下载新 DMG 覆盖安装。
-- [x] 已发布 v0.9.5–v0.9.7 双平台标签，GitHub 与 CNB 均有 5 个附件；CNB 匿名校验 8 个版本 36 个附件全部可下载，更新器频道已切到 v0.9.7。
+- [x] 已发布 v0.9.5–v0.9.8 双平台标签，GitHub 与 CNB 均有 5 个附件；CNB 匿名校验 9 个版本 41 个附件全部可下载，更新器频道已切到 v0.9.8。
 - [ ] 验证私有 GitHub 仓库的令牌保存、清除、401/403/404 和附件下载。
 
 ### 实体 CAN 与车辆
@@ -71,6 +71,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-15 | 发布 v0.9.8：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端都是 5 个附件且字节数一致（ZIP 17511039、ZIP 校验 95、Setup 15735409、DMG 11739146、DMG 校验 106）；频道全量匿名校验 9 个版本 41 个附件全部可下载且 `latest.json` 顶部就是 v0.9.8；CNB 上两份 `.sha256` 的内容与 GitHub 记录的资产 digest 逐位一致（ZIP `4fd3264f…`、DMG `cd90876b…`）。用频道负载驱动真实更新器代码：解析出 2 条说明、选中 `BITFSAE_CAN_Host_v0.9.8.zip` 与其 `.sha256`，`release_is_newer("v0.9.8","0.9.7")` 为真，GitHub Release 正文与 CNB 频道正文的条目逐条相同。定版前复核 PCAN 枚举改动并核对所有实体连接入口：后端 `CanService.connect` 与 IVT 重连都不再回退默认句柄，前端连接弹窗、整车连接、台架、IVT 和遥测模拟器共用同一份动态列表，模拟器分区的禁用状态由 `setSimulatorSectionEnabled` 显式重设、不会被刷新覆盖；262 项测试通过（1 项平台跳过），三份改动 JavaScript 的 `node --check`、`compileall` 与 `git diff --check` 通过；源码级 `--packaging-smoke-test` 退出码 0；`build_macos.sh` 完成测试、PyInstaller、冻结包自检、`--pcan-driver-smoke-test`（本机装有 libPCBUSB）和最低系统版本核对（12.0、14 个 Mach-O）并产出 v0.9.8 DMG | 本机未连接 PCAN-USB；Windows 上单通道 PCAN-USB 与双通道 PCAN-USB Pro FD 的 `PCAN_ATTACHED_CHANNELS` 返回值、热插拔刷新、实体 CAN 收发、目标机升级与回滚、macOS DMG 覆盖安装仍待验收 |
 | 2026-09-14 | PCAN 通道列表改为 PCAN-Basic 实时枚举：覆盖双通道设备的控制器序号、FD/IO 能力、可用/占用状态、空设备结果、旧驱动兼容回退与实体连接禁止隐式默认句柄；BMS、整车、台架、IVT 和遥测模拟器共用动态列表，连接设置支持热插拔刷新。新增 5 项枚举边界测试，全量 262 项通过（1 项平台跳过）；`.venv` 源码级 `--packaging-smoke-test`、Python 编译、三份改动 JavaScript 语法及 `git diff --check` 通过；本地浏览器实测连接弹窗的兼容回退状态、禁用空状态、刷新按钮和键盘可访问文本，布局无溢出。 | 本机未连接 PCAN-USB，尚未在 Windows 实测 `PCAN_ATTACHED_CHANNELS` 对单通道、PCAN-USB Pro FD 双通道、热插拔与外部占用的返回值；macOS 本机驱动拒绝该参数，已按设计进入手动兼容列表。 |
 | 2026-09-14 | 发布 v0.9.7：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端都是 5 个附件且字节数一致（ZIP 17505341、ZIP 校验 95、Setup 15729948、DMG 11736308、DMG 校验 106）；CNB 匿名校验 36 个附件全部可下载，频道 `latest.json` 顶部就是 v0.9.7；CNB 上两份 `.sha256` 的内容与 GitHub 记录的资产 digest 逐位一致（ZIP `85f2fc66…`、DMG `57dbbcf0…`）。用频道负载驱动真实更新器代码：解析出 11 条说明、选中 `BITFSAE_CAN_Host_v0.9.7.zip` 与其 `.sha256`，`release_is_newer("v0.9.7","0.9.6")` 为真，GitHub Release 正文与 CNB 频道正文的条目逐条相同。随本版本发布工作树里未提交的风扇标定指南重写与三处界面文案：指南中的 1.2 s 命令确认、基线每 4 点重采、FanController 6 s（3 s 稳定 + 3 s 采样）与 F405 5 s（2 s 稳定）、起始总线电流 `min(8.0 A, 保护值)`、未标定 15%/55% 封顶、F405 上报窗口 5 s·500 ms/100 ms·结束 1 s、提交命令 Byte2..Byte6 布局逐项对照上位机代码与 `fan_controller.c`/`bms_fan.c` 确认（Byte2/Byte3 为两个上限、Byte4/Byte5 固定 35/70、Byte6 为 `0xA5`）。本机 257 项测试通过（1 项平台跳过）；`build_macos.sh` 完成测试、PyInstaller、冻结包自检、最低系统版本核对与 ad-hoc 签名并产出 v0.9.7 DMG，冻结程序 `--packaging-smoke-test` 退出码 0 | 本机未连接 PCAN-USB；Windows 安装版的遥测模拟器入口与三种输出、实体 CAN 标定收发、目标机升级与回滚、macOS DMG 覆盖安装仍待验收 |
 | 2026-09-14 | 遥测模拟器进 Windows 发布包并清理打包规格：把“遥测模拟器可用”和“实体 CAN 调试模拟通道可用”拆成两个判定，前者两个平台都随包，后者仍只给源码运行与 macOS 过渡版；`can_host.spec` 的 `hiddenimports` 增加 `canhost.telemetry.simulator` / `canhost.bms.simulator` / `serial` / `serial.tools.list_ports_windows`，`excludes` 里失效的 `canhost.simulator` 换成真实存在的 `canhost.vehicle.simulator`；Windows 构建补上冻结包自检，自检按平台分别核对（两平台都要遥测模拟器与完整 TelemetryFrame，macOS 还要能开调试模拟通道，Windows 必须拒绝 `mode=simulation`）。本机用改后的规格跑 PyInstaller 分析（输出到临时目录，不动 `dist/`）：整车模拟器不在包内，BMS 模拟器、遥测模拟器、pyserial 及其 Windows 后端都在；257 项测试通过（1 项平台跳过，新增 `Tests/test_packaging_spec.py` 3 项与冻结 Windows 分支 2 项）；源码级 `--packaging-smoke-test` 在 macOS 分支全流程通过（含 pyserial、帧生成与模拟通道数据） | Windows 分支的自检只能在 Windows 构建上跑（本机把 `sys.platform` 打桩会被 Python 自身 ssl 与 pyserial 的平台分支挡住，无法真实执行）；`.venv-canhost` 未安装 pyserial，本机源码运行看不到串口设备列表；Windows 安装版页面入口与三种输出未实机核对 |
