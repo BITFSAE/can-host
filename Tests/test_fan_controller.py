@@ -799,16 +799,19 @@ class FanControllerToolTest(unittest.TestCase):
 
     def test_calibration_abort_uses_acknowledged_stop_and_auto(self) -> None:
         sent = []
-        post_ack_status = {"polls_until_frame": 0}
+        post_ack_status = {"stop_sent": False, "polls_until_frame": 0}
         def fake_send(name, vals, ack):
             sent.append((name, vals, ack))
             if name == "fan_calib" and vals.get("action") == 3:
+                post_ack_status["stop_sent"] = True
                 post_ack_status["polls_until_frame"] = 2
             return {"ok": True}
         def snapshot():
             if post_ack_status["polls_until_frame"] > 0:
                 post_ack_status["polls_until_frame"] -= 1
-            if post_ack_status["polls_until_frame"] == 0 and "calib_status" not in fake_snap["fan"]:
+            if (post_ack_status["stop_sent"]
+                    and post_ack_status["polls_until_frame"] == 0
+                    and "calib_status" not in fake_snap["fan"]):
                 fake_snap["fan"]["calib_status"] = {
                     "calib_state": 3, "step": 0, "calib_target_pct": [0, 0],
                     "lease_remaining_s": 0,
@@ -835,6 +838,35 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(sent[0][1]["action"], 3)
         self.assertEqual(sent[1][0], "fan_control")
         self.assertEqual(sent[1][1]["mode"], 0)
+
+    def test_calibration_abort_accepts_firmware_aborted_zero_target(self) -> None:
+        """安全看门狗已中止时，STOP ACK 后不应等待不存在的 COMPLETED 帧。"""
+        sent = []
+        snap = _calib_snap()
+        snap["fan"].update({
+            "calib_status": {
+                "calib_state": 2,
+                "calib_state_name": "已中止",
+                "calib_abort_reason": 2,
+                "calib_abort_name": "PDM遥测超时",
+                "step": 2,
+                "calib_target_pct": [0, 0],
+                "lease_remaining_s": 0,
+            },
+            "calib_status_age": 0.1,
+            "calib_status_generation": 184,
+        })
+
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+
+        session = FanCalibrationSession(fake_send, lambda: snap)
+        session.status = "running"
+        result = session.abort("FanController 标定会话已不活动（已中止）")
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("固件恢复失败", result["reason"])
+        self.assertEqual([item[0] for item in sent], ["fan_calib", "fan_control"])
 
     def test_calibration_requires_measured_dcdc_ready(self) -> None:
         """自动扫频必须由 PDM 实测判据证明 DCDC 已接管，不能只看固件状态。"""

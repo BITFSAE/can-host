@@ -476,6 +476,13 @@ class FanCalibrationSession:
     def _stop_and_restore_auto(self) -> dict[str, Any]:
         """停止标定并通过确认命令恢复自动模式。"""
         errors: list[str] = []
+        before_stop = self.snapshot_fn().get("fan", {})
+        before_calib = before_stop.get("calib_status", {})
+        already_aborted = (
+            _fresh_age(before_stop.get("calib_status_age"), 1.0)
+            and before_calib.get("calib_state") == 2
+            and before_calib.get("calib_target_pct") == [0, 0]
+        )
         try:
             result = self.send_fn("fan_calib", {
                 "action": 3, "step": 0, "duty1_pct": 0, "duty2_pct": 0, "lease_s": 0,
@@ -487,10 +494,15 @@ class FanCalibrationSession:
                 # frame received while sending/waiting for ACK is not proof of
                 # post-ACK controller state.
                 generation = self._calib_generation()
-                confirm_error = self._wait_for_calib_state(
-                    3, 0, 0, 0, after_generation=generation, timeout_s=1.2)
-                if confirm_error:
-                    errors.append(f"fan_calib: {confirm_error}")
+                # 固件安全看门狗已把会话置为 ABORTED 且目标归零时，STOP 会把
+                # 状态收回 INACTIVE；它不会伪装成正常完成的 COMPLETED，也不会
+                # 再周期发送 0x5A9。此时 STOP ACK 加此前的新鲜 ABORTED/零目标
+                # 已足以证明安全收尾，不能继续等待一个协议上不会出现的状态帧。
+                if not already_aborted:
+                    confirm_error = self._wait_for_calib_state(
+                        3, 0, 0, 0, after_generation=generation, timeout_s=1.2)
+                    if confirm_error:
+                        errors.append(f"fan_calib: {confirm_error}")
         except Exception as exc:
             errors.append(f"fan_calib: {exc}")
 
