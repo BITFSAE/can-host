@@ -28,10 +28,14 @@ from .updater import (
     changelog_page_url,
     release_page_url,
 )
-from .updater import _read_settings, settings_path
+from .updater import _read_settings, _write_settings, settings_path
 
 
 WEB_DIR = Path(__file__).parent / "web"
+THEME_PREFERENCE_KEY = "theme_mode"
+THEME_MODES = {"light", "dark"}
+LIGHT_WINDOW_BACKGROUND = "#E9EDEF"
+DARK_WINDOW_BACKGROUND = "#0D0E0F"
 
 
 def _update_health_path_from_argv(argv: list[str] | None = None) -> Path | None:
@@ -121,12 +125,35 @@ class Api:
         self._update_health_path = update_health_path
         self._shutdown_finished = threading.Event()
         self._window: Any = None
+        self._preference_lock = threading.Lock()
 
     def _read_update_token(self) -> str | None:
         try:
             return _read_settings().get("github_token") or None
         except Exception:
             return None
+
+    def theme_preference(self) -> str:
+        """Return the persisted binary appearance preference."""
+        try:
+            mode = str(_read_settings().get(THEME_PREFERENCE_KEY) or "dark")
+        except Exception:
+            mode = "dark"
+        return mode if mode in THEME_MODES else "dark"
+
+    def set_theme_preference(self, mode: str) -> dict[str, Any]:
+        """Persist the appearance without exposing the rest of settings.json."""
+        value = str(mode)
+        if value not in THEME_MODES:
+            return {"ok": False, "error": "外观模式只能是 light 或 dark"}
+        try:
+            with self._preference_lock:
+                payload = _read_settings()
+                payload[THEME_PREFERENCE_KEY] = value
+                _write_settings(payload)
+        except (OSError, ValueError, TypeError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "mode": value}
 
     def bootstrap(self) -> dict[str, Any]:
         pcan_scan = discover_pcan_channels()
@@ -638,6 +665,11 @@ def _run_startup_update_cleanup(keep_temp_dir: Path | None = None) -> None:
         pass
 
 
+def _initial_window_background(api: Api) -> str:
+    """Match the native surface to the saved theme before the web view paints."""
+    return LIGHT_WINDOW_BACKGROUND if api.theme_preference() == "light" else DARK_WINDOW_BACKGROUND
+
+
 def main() -> None:
     try:
         import webview
@@ -747,7 +779,8 @@ def main() -> None:
         cleanup_thread.start()
     window = webview.create_window(
         "BITFSAE · CAN HOST", url=(WEB_DIR / "index.html").as_uri(), js_api=api,
-        width=1460, height=920, min_size=(1120, 720), background_color="#0D0E0F",
+        width=1460, height=920, min_size=(1120, 720),
+        background_color=_initial_window_background(api),
         zoomable=True,
     )
     api._window = window

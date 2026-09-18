@@ -30,6 +30,7 @@ var state = {
   dirty: { thresholds: false, switches: false, charge: false, direction: false,
            chargerType: false, fan: false, fanCaps: false, batteryFanCaps: false },
   onlyActiveAlarms: false,
+  theme: document.documentElement.dataset.theme || "dark",
   uiScale: 1,
   lastZoomWheelAt: 0,
   chargeTiming: { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null, currentSumA: 0, currentSamples: 0, connectionKey: null },
@@ -47,6 +48,8 @@ const TOOL_PAGES = ["bench", "ivt", "simulator"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
 const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
+const THEME_PREFS_KEY = "canHostTheme";
+let themePersistQueue = Promise.resolve();
 
 function fmt(value, digits = 1, fallback = "—") {
   return value === null || value === undefined || Number.isNaN(value) ? fallback : Number(value).toFixed(digits);
@@ -98,6 +101,73 @@ function escapeHtml(value) {
   return String(value ?? "—").replace(/[&<>"']/g, character => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
   }[character]));
+}
+
+function cssVar(name, fallback = "") {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+window.cssVar = cssVar;
+
+function normalizeTheme(value) {
+  return value === "light" || value === "dark" ? value : "dark";
+}
+
+function syncThemeToggle() {
+  const button = $("#themeToggle");
+  if (!button) return;
+  const label = state.theme === "dark" ? "切换到浅色模式" : "切换到深色模式";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", String(state.theme === "light"));
+}
+
+function applyTheme(theme, { persist = true } = {}) {
+  const next = normalizeTheme(theme);
+  state.theme = next;
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  if (persist) {
+    try { localStorage.setItem(THEME_PREFS_KEY, next); } catch { /* storage may be disabled */ }
+  }
+  syncThemeToggle();
+  if (state.page === "overview") requestAnimationFrame(drawTrend);
+  if (state.page === "vehicle") requestAnimationFrame(drawVehicleTrend);
+}
+
+async function toggleTheme() {
+  const next = state.theme === "dark" ? "light" : "dark";
+  const root = document.documentElement;
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!reduced && typeof document.startViewTransition === "function") {
+    await document.startViewTransition(() => applyTheme(next)).ready.catch(() => {});
+  } else {
+    if (!reduced) root.classList.add("theme-transition");
+    applyTheme(next);
+    if (!reduced) window.setTimeout(() => root.classList.remove("theme-transition"), 220);
+  }
+  if (!state.api?.set_theme_preference) return;
+  try {
+    themePersistQueue = themePersistQueue.catch(() => {}).then(async () => {
+      const result = await state.api.set_theme_preference(next);
+      if (result?.ok === false) throw new Error(result.error || "无法保存外观设置");
+    });
+    await themePersistQueue;
+  } catch (error) {
+    toast(`外观已切换，但保存失败：${error}`, true);
+  }
+}
+
+async function syncThemePreference() {
+  syncThemeToggle();
+  if (!state.api?.theme_preference) return;
+  try {
+    const remote = normalizeTheme(await state.api.theme_preference());
+    // The backend preference also selects the native window background, so it
+    // is authoritative if the two stores ever diverge after a failed write.
+    applyTheme(remote);
+  } catch (error) {
+    applyTheme(state.theme, { persist: false });
+  }
 }
 
 function applyUiScale(scale, announce = true) {
@@ -155,6 +225,7 @@ async function waitForApi() {
 }
 
 async function init() {
+  applyTheme(document.documentElement.dataset.theme, { persist: false });
   restoreUiScale();
   bindNavigation();
   bindCoreControls();
@@ -170,6 +241,7 @@ async function init() {
   buildVehicleStatics();
   try {
     state.api = await waitForApi();
+    await syncThemePreference();
     state.bootstrap = await state.api.bootstrap();
     text("#appVersion", `v${state.bootstrap.version || "—"}`);
     text("#appVersionDate", state.bootstrap.version_date || "—");
@@ -260,6 +332,7 @@ function bindBackdropDismissal() {
 
 function bindCoreControls() {
   bindBackdropDismissal();
+  $("#themeToggle")?.addEventListener("click", toggleTheme);
   $("#can1BusButton")?.addEventListener("click", () => toggleMainDockConnection("can1"));
   $("#canbBmsBusButton")?.addEventListener("click", () => toggleMainDockConnection("canb_bms"));
   $("#canbVehicleBusButton")?.addEventListener("click", toggleVehicleDockConnection);

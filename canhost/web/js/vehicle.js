@@ -325,7 +325,12 @@ function ecuAgeKey(field) {
            inverter_temp_c: "inverter_temp", igbt_temp_c: "igbt_temp" }[field];
 }
 
-const VEH_TREND_COLORS = { hv: "#aeb6b2", lv: "#f0b429" };
+function vehicleTrendColors() {
+  return {
+    hv: cssVar("--chart-voltage", "#aeb6b2"),
+    lv: cssVar("--chart-current", "#f0b429"),
+  };
+}
 
 function drawVehicleTrend() {
   const canvas = $("#vehicleTrendCanvas"), trends = state.vehicleSnapshot?.trends || [];
@@ -347,7 +352,9 @@ function drawVehicleTrend() {
   const pad = { left: 52, right: 52, top: 12, bottom: 24 };
   const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
   const axisFont = '10px "SF Mono", "Cascadia Mono", Consolas, monospace';
-  const labelColor = "#7c7f7d", gridColor = "#2d2f31";
+  const colors = vehicleTrendColors();
+  const labelColor = cssVar("--chart-label", "#7c7f7d");
+  const gridColor = cssVar("--chart-grid", "#2d2f31");
 
   const left = trendAxisRange(trends.map(item => item.hv_voltage).filter(Number.isFinite), 8);
   const right = trendAxisRange(trends.map(item => item.lv_voltage).filter(Number.isFinite), 2);
@@ -373,7 +380,7 @@ function drawVehicleTrend() {
   ctx.textAlign = "right"; ctx.fillText("LV V", width - 2, pad.top + 3);
 
   if (trends.length < 2) {
-    ctx.fillStyle = "#87969c";
+    ctx.fillStyle = cssVar("--chart-axis", "#87969c");
     ctx.font = '12px "PingFang SC", "Microsoft YaHei UI", sans-serif';
     ctx.textAlign = "center";
     ctx.fillText("等待整车数据形成曲线", pad.left + plotWidth / 2, pad.top + plotHeight / 2);
@@ -421,6 +428,6 @@ function drawVehicleTrend() {
     ctx.fillStyle = color; ctx.fill();
   };
 
-  drawSeries("hv_voltage", VEH_TREND_COLORS.hv, left, "rgba(174, 182, 178, .12)");
-  drawSeries("lv_voltage", VEH_TREND_COLORS.lv, right, "rgba(240, 180, 41, .10)");
+  drawSeries("hv_voltage", colors.hv, left, cssVar("--chart-voltage-fill", "rgba(174, 182, 178, .12)"));
+  drawSeries("lv_voltage", colors.lv, right, cssVar("--chart-current-fill", "rgba(240, 180, 41, .10)"));
 }

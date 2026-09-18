@@ -358,7 +358,13 @@ function renderChargeTiming(overview, connection, fault) {
   }
 }
 
-const TREND_COLORS = { voltage: "#aeb6b2", current: "#f0b429", precharge: "#858d89" };
+function trendColors() {
+  return {
+    voltage: cssVar("--chart-voltage", "#aeb6b2"),
+    current: cssVar("--chart-current", "#f0b429"),
+    precharge: cssVar("--chart-precharge", "#858d89"),
+  };
+}
 
 function drawTrend() {
   const canvas = $("#trendCanvas"), trends = state.snapshot?.trends || [];
@@ -389,7 +395,9 @@ function drawTrend() {
   const pad = { left: 48, right: 48, top: 12, bottom: 24 };
   const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
   const axisFont = '10px "SF Mono", "Cascadia Mono", Consolas, monospace';
-  const labelColor = "#7c7f7d", gridColor = "#2d2f31";
+  const colors = trendColors();
+  const labelColor = cssVar("--chart-label", "#7c7f7d");
+  const gridColor = cssVar("--chart-grid", "#2d2f31");
 
   // Horizontal grid, five bands, plus the left/right axis tick labels.
   const left = trendAxisRange(trends.flatMap(item => [item.voltage, item.precharge]).filter(Number.isFinite), 8);
@@ -416,7 +424,7 @@ function drawTrend() {
   ctx.textAlign = "right"; ctx.fillText("A", width - 2, pad.top + 3);
 
   if (trends.length < 2) {
-    ctx.fillStyle = "#87969c";
+    ctx.fillStyle = cssVar("--chart-axis", "#87969c");
     ctx.font = '12px "PingFang SC", "Microsoft YaHei UI", sans-serif';
     ctx.textAlign = "center";
     ctx.fillText("等待状态帧形成曲线", pad.left + plotWidth / 2, pad.top + plotHeight / 2);
@@ -445,7 +453,7 @@ function drawTrend() {
   // Dashed zero line on the current axis when the window crosses zero.
   if (right && Number.isFinite(right.min) && right.min < 0 && right.max > 0) {
     const y = Math.round(yRight(0)) + .5;
-    ctx.strokeStyle = "#55585a"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = cssVar("--chart-zero", "#55585a"); ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -475,10 +483,10 @@ function drawTrend() {
   };
 
   if (left) {
-    drawSeries("precharge", TREND_COLORS.precharge, yLeft, "rgba(133, 141, 137, .10)");
-    drawSeries("voltage", TREND_COLORS.voltage, yLeft, "rgba(174, 182, 178, .13)");
+    drawSeries("precharge", colors.precharge, yLeft, cssVar("--chart-precharge-fill", "rgba(133, 141, 137, .10)"));
+    drawSeries("voltage", colors.voltage, yLeft, cssVar("--chart-voltage-fill", "rgba(174, 182, 178, .13)"));
   }
-  if (right) drawSeries("current", TREND_COLORS.current, yRight, null);
+  if (right) drawSeries("current", colors.current, yRight, null);
 }
 
 function renderAlarmSummary() {

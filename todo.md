@@ -10,7 +10,7 @@
 | 整车 CANB | SOP、BMS 镜像、PDM、ECU、胎温、赛会能量计和两套风扇已接入 |
 | 工程工具 | CAN 监视与发送、F405 从控台架、IVT 配置、风扇标定和本地遥测模拟已接入 |
 | 遥测 | MQTT 只读订阅、BMS 故障变化记录及 MQTT/串口/PCAN 本地模拟已接入 |
-| 发布 | v0.9.8 已完成 GitHub/CNB 双平台发布；目标机实体硬件验收仍待完成 |
+| 发布 | v0.9.8 已完成 GitHub/CNB 双平台发布；未发布版本已加入持久化深浅主题；目标机实体硬件验收仍待完成 |
 
 当前协议边界：F405 工具协议版本 5，告警开关帧版本 7；上位机不定义新 CAN 契约。精确帧定义以固件和 vehicle-interfaces 为准。
 
@@ -50,6 +50,7 @@
 
 ### 界面
 
+- [ ] 在 Windows WebView2 和 macOS WKWebView 实机各冷启动一次浅色、深色主题，确认原生窗口首帧不闪烁，并在 Windows 100%、125%、150% 显示缩放下复核侧栏切换按钮与原生下拉框。
 - [ ] 连接实体 PCAN（BMS 主连接与整车 CANB 同时）复核整车总览与风扇页在真实数据下的数值宽度、过期态配色和长文本换行；浏览器预览（`scripts/ui_preview.py`）已覆盖模拟数据下的几何、裁切与过期态。
 - [ ] 在 Windows PyWebView 的 100%、125%、150% 显示缩放下检查最小窗口、对话框、表格和输入焦点。
 - [ ] 用实体 F405、PDM 和 FanController 制造间歇丢帧，验证电芯、整车、PDM、两套风扇及快捷栏的最后有效值持续显示、年龄递增且新鲜度、离线和控制门控不被误判；F405 另覆盖从控 70 ms/帧调试模式。
@@ -71,6 +72,7 @@
 
 | 日期 | 结果 | 未覆盖 |
 |---|---|---|
+| 2026-09-18 | 新增持久化深浅主题：浅色按冷灰工程纸面重建表面、文字、边界、状态色、弹窗遮罩、滚动条和 Canvas 图表令牌，侧栏按钮即时切换并同步 WebView/应用设置，启动原生窗口底色跟随保存值；浅色最弱正文/状态文字组合对比度实算为 4.57:1。新增 5 项主题测试，全量 267 项测试通过（1 项平台跳过），全部 JavaScript 语法、Python 编译、差异检查及构建环境源码级打包自检通过；用真实 Chromium 在 1460×920 核对深浅总览、浅色电芯、过期风扇和连接弹窗，在 1120×720 核对折叠侧栏，最终控制台 0 错误/0 警告；减少动态效果模式下切换即时完成且不挂过渡类。浏览器复核同时发现并修正原生下拉箭头被组件背景简写重置后重复平铺的问题。 | 尚未在 Windows WebView2 与 macOS WKWebView 实机冷启动核对首帧、原生下拉控件和显示缩放；实体 CAN 故障/告警数据下的浅色状态仍待车辆或台架复核。 |
 | 2026-09-15 | 发布 v0.9.8：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端都是 5 个附件且字节数一致（ZIP 17511039、ZIP 校验 95、Setup 15735409、DMG 11739146、DMG 校验 106）；频道全量匿名校验 9 个版本 41 个附件全部可下载且 `latest.json` 顶部就是 v0.9.8；CNB 上两份 `.sha256` 的内容与 GitHub 记录的资产 digest 逐位一致（ZIP `4fd3264f…`、DMG `cd90876b…`）。用频道负载驱动真实更新器代码：解析出 2 条说明、选中 `BITFSAE_CAN_Host_v0.9.8.zip` 与其 `.sha256`，`release_is_newer("v0.9.8","0.9.7")` 为真，GitHub Release 正文与 CNB 频道正文的条目逐条相同。定版前复核 PCAN 枚举改动并核对所有实体连接入口：后端 `CanService.connect` 与 IVT 重连都不再回退默认句柄，前端连接弹窗、整车连接、台架、IVT 和遥测模拟器共用同一份动态列表，模拟器分区的禁用状态由 `setSimulatorSectionEnabled` 显式重设、不会被刷新覆盖；262 项测试通过（1 项平台跳过），三份改动 JavaScript 的 `node --check`、`compileall` 与 `git diff --check` 通过；源码级 `--packaging-smoke-test` 退出码 0；`build_macos.sh` 完成测试、PyInstaller、冻结包自检、`--pcan-driver-smoke-test`（本机装有 libPCBUSB）和最低系统版本核对（12.0、14 个 Mach-O）并产出 v0.9.8 DMG | 本机未连接 PCAN-USB；Windows 上单通道 PCAN-USB 与双通道 PCAN-USB Pro FD 的 `PCAN_ATTACHED_CHANNELS` 返回值、热插拔刷新、实体 CAN 收发、目标机升级与回滚、macOS DMG 覆盖安装仍待验收 |
 | 2026-09-14 | PCAN 通道列表改为 PCAN-Basic 实时枚举：覆盖双通道设备的控制器序号、FD/IO 能力、可用/占用状态、空设备结果、旧驱动兼容回退与实体连接禁止隐式默认句柄；BMS、整车、台架、IVT 和遥测模拟器共用动态列表，连接设置支持热插拔刷新。新增 5 项枚举边界测试，全量 262 项通过（1 项平台跳过）；`.venv` 源码级 `--packaging-smoke-test`、Python 编译、三份改动 JavaScript 语法及 `git diff --check` 通过；本地浏览器实测连接弹窗的兼容回退状态、禁用空状态、刷新按钮和键盘可访问文本，布局无溢出。 | 本机未连接 PCAN-USB，尚未在 Windows 实测 `PCAN_ATTACHED_CHANNELS` 对单通道、PCAN-USB Pro FD 双通道、热插拔与外部占用的返回值；macOS 本机驱动拒绝该参数，已按设计进入手动兼容列表。 |
 | 2026-09-14 | 发布 v0.9.7：Windows 与 macOS 构建、GitHub Release、CNB 同步全部成功，两端都是 5 个附件且字节数一致（ZIP 17505341、ZIP 校验 95、Setup 15729948、DMG 11736308、DMG 校验 106）；CNB 匿名校验 36 个附件全部可下载，频道 `latest.json` 顶部就是 v0.9.7；CNB 上两份 `.sha256` 的内容与 GitHub 记录的资产 digest 逐位一致（ZIP `85f2fc66…`、DMG `57dbbcf0…`）。用频道负载驱动真实更新器代码：解析出 11 条说明、选中 `BITFSAE_CAN_Host_v0.9.7.zip` 与其 `.sha256`，`release_is_newer("v0.9.7","0.9.6")` 为真，GitHub Release 正文与 CNB 频道正文的条目逐条相同。随本版本发布工作树里未提交的风扇标定指南重写与三处界面文案：指南中的 1.2 s 命令确认、基线每 4 点重采、FanController 6 s（3 s 稳定 + 3 s 采样）与 F405 5 s（2 s 稳定）、起始总线电流 `min(8.0 A, 保护值)`、未标定 15%/55% 封顶、F405 上报窗口 5 s·500 ms/100 ms·结束 1 s、提交命令 Byte2..Byte6 布局逐项对照上位机代码与 `fan_controller.c`/`bms_fan.c` 确认（Byte2/Byte3 为两个上限、Byte4/Byte5 固定 35/70、Byte6 为 `0xA5`）。本机 257 项测试通过（1 项平台跳过）；`build_macos.sh` 完成测试、PyInstaller、冻结包自检、最低系统版本核对与 ad-hoc 签名并产出 v0.9.7 DMG，冻结程序 `--packaging-smoke-test` 退出码 0 | 本机未连接 PCAN-USB；Windows 安装版的遥测模拟器入口与三种输出、实体 CAN 标定收发、目标机升级与回滚、macOS DMG 覆盖安装仍待验收 |
