@@ -983,7 +983,17 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
         self.assertIn("供电", session._watchdog(snapshot(state=1), 18.0))
         self.assertIn("总线电流", session._watchdog(snapshot(current=18.1), 18.0))
         self.assertIn("电机温度", session._watchdog(snapshot(motor=72.0), 18.0))
-        self.assertIn("停转", session._watchdog(snapshot(faults=0x01), 18.0))
+        # 低占空比扫描的目的就是找起转点；0x5A3 TACH 位只记录当前点未起转，
+        # 不能抢在固件 0x5A9 的标定状态之前中止整轮扫描。
+        self.assertIsNone(session._watchdog(snapshot(faults=0x01), 18.0))
+        firmware_aborted = snapshot(faults=0x01)
+        firmware_aborted["fan"]["calib_status"].update({
+            "calib_state": 2,
+            "calib_state_name": "已中止",
+            "calib_abort_reason": 5,
+            "calib_abort_name": "风扇停转",
+        })
+        self.assertIn("不活动", session._watchdog(firmware_aborted, 18.0))
         # 温度失联或温度无效时必须中止，否则标定在没有温度保护的情况下继续。
         self.assertIn("温度输入失联", session._watchdog(snapshot(faults=0x18), 18.0))
         self.assertIn("温度无效", session._watchdog(snapshot(motor=None, ctrl=None), 18.0))

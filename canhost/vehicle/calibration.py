@@ -2,7 +2,7 @@
 
 Runs controlled calibration sweeps over PWM1 (dual 2H4PU) and PWM2 (single 2H6P),
 measures baseline PDM bus power/current, samples steady-state RPM and delta I/P,
-and strictly enforces safety gating (DCDC_READY, temperature limits, stall guards).
+and strictly enforces safety gating (DCDC_READY, temperature and electrical limits).
 """
 
 from __future__ import annotations
@@ -804,8 +804,11 @@ class FanCalibrationSession:
         if fan_power.get("power_supply_state") != expected_state:
             state_name = fan_power.get("power_supply_name", str(fan_power.get("power_supply_state")))
             return f"供电脱离所选标定档位（当前：{state_name}），触发安全中止"
-        if fan_diag.get("faults", 0) & FAULT_TACH_MASK:
-            return "检测到风扇停转故障，触发安全中止"
+        # 扫频本来就要测出最低起转占空比。低占空比 START_KICK 结束时，固件会把
+        # 尚未起转写进 0x5A3 TACH 位；这只是当前测点的结果，不能由上位机抢先
+        # 当成安全中止。真实运行停转仍由固件安全看门狗确认并把 0x5A9 切到
+        # ABORTED，本函数上面的会话活动检查会立即中止；记录中的 0 RPM 也不会
+        # 被 _max_safe_duty() 选为推荐上限。
         # 温度失联或温度无效时继续标定等于没有温度保护，必须中止。
         if fan_diag.get("faults", 0) & (FAULT_MOTOR_TEMP_STALE | FAULT_CTRL_TEMP_STALE):
             return "温度输入失联，触发安全中止"
