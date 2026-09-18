@@ -56,6 +56,19 @@ class FrontendIdTest(unittest.TestCase):
         self.assertIn("if (updaterPollPromise) return updaterPollPromise", updater)
         self.assertIn("showUpdaterBridgeError(error?.message", updater)
 
+    def test_frozen_macos_uses_two_click_update_with_dmg_fallback(self) -> None:
+        updater = (WEB / "js" / "updater.js").read_text(encoding="utf-8")
+        self.assertIn("function isFrozenMacRelease()", updater)
+        self.assertIn('"-update.zip"', updater)
+        self.assertIn('installBtn.textContent = "下载 DMG"', updater)
+        self.assertIn("await openReleasePage(url)", updater)
+        self.assertIn("state.updater?.install_supported !== true", updater)
+        # Writable frozen macOS installs use the same download/restart states;
+        # the DMG browser path remains only as a non-writable-location fallback.
+        backend = (ROOT / "canhost" / "updater.py").read_text(encoding="utf-8")
+        self.assertIn("MACOS_INSTALLER_SCRIPT", backend)
+        self.assertIn('update_platform() not in {"windows", "macos"}', backend)
+
 
 class ReleasePageApiTest(unittest.TestCase):
     def _api(self):
@@ -80,7 +93,13 @@ class ReleasePageApiTest(unittest.TestCase):
         with patch("webbrowser.open", side_effect=opened.append):
             self.assertTrue(api.open_release_page("https://github.com/BITFSAE/can-host/releases")["ok"])
             self.assertTrue(api.open_release_page("https://cnb.cool/totok22/can-host/-/releases")["ok"])
-        self.assertEqual(len(opened), 2)
+            self.assertTrue(api.open_release_page(
+                "https://github.com/BITFSAE/can-host/releases/download/v0.9.11/host.dmg"
+            )["ok"])
+            self.assertTrue(api.open_release_page(
+                "https://cnb.cool/totok22/can-host/-/releases/download/v0.9.11/host.dmg"
+            )["ok"])
+        self.assertEqual(len(opened), 4)
 
     def test_release_history_merges_online_release_over_embedded(self) -> None:
         api = self._api()

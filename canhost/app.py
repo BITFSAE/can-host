@@ -20,6 +20,7 @@ from .updater import (
     DEFAULT_REPO,
     HostUpdater,
     consume_update_result,
+    installed_app_dir,
     installed_update_state,
     install_ready,
     record_installed_version,
@@ -317,7 +318,7 @@ class Api:
         return self._updater.start_download(tag)
 
     def install_update(self) -> dict[str, Any]:
-        app_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
+        app_dir = installed_app_dir() if getattr(sys, "frozen", False) else Path.cwd()
         result = self._updater.start_install(app_dir)
         if result.get("ok"):
             self._schedule_update_exit()
@@ -362,7 +363,7 @@ class Api:
         return self._updater.clear_token()
 
     def open_release_page(self, url: str) -> dict[str, Any]:
-        """Open a release/changelog page in the system browser.
+        """Open a release/changelog page or published asset in the system browser.
 
         Only the two published project hosts are accepted: the UI must not be
         able to hand an arbitrary string to the shell.
@@ -660,7 +661,7 @@ def _run_startup_update_cleanup(keep_temp_dir: Path | None = None) -> None:
     """
     try:
         keep = {keep_temp_dir} if keep_temp_dir is not None else None
-        startup_cleanup(Path(sys.executable).resolve().parent, keep_temp_dirs=keep)
+        startup_cleanup(installed_app_dir(), keep_temp_dirs=keep)
     except Exception:
         pass
 
@@ -749,6 +750,8 @@ def main() -> None:
                 return
             if not bootstrap["simulation_enabled"] or not bootstrap["vehicle_simulation_enabled"]:
                 raise SystemExit("打包自检失败：macOS 过渡版本未包含临时模拟通道")
+            if getattr(sys, "frozen", False) and not bootstrap["updater_enabled"]:
+                raise SystemExit("打包自检失败：macOS 应用包未启用两步软件更新")
             bms_result = api.connect_can({
                 "mode": "simulation", "bus_profile": "can1", "bitrate": 500000,
             })

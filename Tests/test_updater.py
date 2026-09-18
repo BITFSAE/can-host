@@ -9,6 +9,7 @@ import json
 import os
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -24,6 +25,9 @@ from canhost.updater import (
     DEFAULT_CNB_REPO,
     DEFAULT_REPO,
     INSTALLER_SCRIPT,
+    MACOS_INSTALLER_SCRIPT,
+    MAC_APP_BUNDLE_NAME,
+    MAC_APP_EXE_RELATIVE,
     SOURCE_CNB,
     SOURCE_GITHUB,
     HostUpdater,
@@ -33,6 +37,7 @@ from canhost.updater import (
     cnb_channel_url,
     extract_update_archive,
     find_checksum_asset,
+    find_update_asset,
     find_zip_asset,
     is_github_url,
     launch_installer,
@@ -70,6 +75,16 @@ def _write_update_zip(path: Path) -> None:
 def _make_update_zip(path: Path) -> bytes:
     _write_update_zip(path)
     return path.read_bytes()
+
+
+def _write_macos_update_zip(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        executable = f"{MAC_APP_BUNDLE_NAME}/{MAC_APP_EXE_RELATIVE.as_posix()}"
+        info = zipfile.ZipInfo(executable)
+        info.external_attr = 0o100755 << 16
+        archive.writestr(info, b"new mac executable")
+        archive.writestr(f"{MAC_APP_BUNDLE_NAME}/Contents/Info.plist", b"plist")
+        archive.writestr(f"__MACOSX/{MAC_APP_BUNDLE_NAME}/Contents/._Info.plist", b"meta")
 
 
 class IsolatedSettingsTestCase(unittest.TestCase):
@@ -118,6 +133,18 @@ class VersionAndAssetTest(unittest.TestCase):
         self.assertEqual(asset["name"], f"{zip_name}.sha256")
         self.assertIsNone(find_checksum_asset(release, f"{APP_FOLDER_NAME}_v0.2.0.zip"))
 
+    def test_find_macos_update_asset_ignores_dmg_and_windows_zip(self) -> None:
+        release = _release("v0.3.0")
+        mac_name = f"{APP_FOLDER_NAME}_macOS_arm64_v0.3.0-update.zip"
+        release["assets"].extend([
+            {"name": f"{APP_FOLDER_NAME}_macOS_arm64_v0.3.0.dmg", "url": "https://example/app.dmg"},
+            {"name": mac_name, "url": "https://example/mac-update.zip"},
+            {"name": f"{mac_name}.sha256", "url": "https://example/mac-update.zip.sha256"},
+        ])
+        self.assertEqual(find_update_asset(release, "macos")["name"], mac_name)
+        self.assertEqual(find_update_asset(release, "windows")["name"],
+                         f"{APP_FOLDER_NAME}_v0.3.0.zip")
+
     def test_read_sha256_digest_accepts_common_formats(self) -> None:
         digest = hashlib.sha256(b"can-host-update").hexdigest()
         with tempfile.TemporaryDirectory() as directory:
@@ -165,6 +192,59 @@ class SafeArchiveTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 extract_update_archive(zip_path, root / "stage")
 
+    def test_extract_macos_app_preserves_expected_root_and_metadata(self) -> None:
+        from canhost import updater
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            zip_path = root / "mac-update.zip"
+            _write_macos_update_zip(zip_path)
+            real_is_file = Path.is_file
+            with patch.object(
+                updater.Path,
+                "is_file",
+                lambda candidate: False
+                if candidate == Path("/usr/bin/ditto")
+                else real_is_file(candidate),
+            ):
+                result = extract_update_archive(zip_path, root / "stage", platform="macos")
+            executable = result / MAC_APP_EXE_RELATIVE
+            self.assertEqual(result.name, MAC_APP_BUNDLE_NAME)
+            self.assertTrue(executable.is_file())
+            self.assertTrue(os.access(executable, os.X_OK))
+
+    def test_extract_macos_rejects_symlink_outside_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            zip_path = root / "bad-mac-update.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                executable = f"{MAC_APP_BUNDLE_NAME}/{MAC_APP_EXE_RELATIVE.as_posix()}"
+                archive.writestr(executable, b"exe")
+                link = zipfile.ZipInfo(f"{MAC_APP_BUNDLE_NAME}/Contents/escape")
+                link.external_attr = 0o120777 << 16
+                archive.writestr(link, "../../../outside")
+            with self.assertRaisesRegex(ValueError, "越出应用目录"):
+                extract_update_archive(zip_path, root / "stage", platform="macos")
+
+    @unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/ditto").is_file(),
+                         "ditto archive test is macOS-only")
+    def test_extracts_archive_created_by_release_ditto_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / MAC_APP_BUNDLE_NAME
+            executable = app / MAC_APP_EXE_RELATIVE
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"signed app payload")
+            executable.chmod(0o755)
+            archive = root / "release-update.zip"
+            subprocess.run(
+                ["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+                 str(app), str(archive)],
+                check=True,
+            )
+            staged = extract_update_archive(archive, root / "stage", platform="macos")
+            self.assertEqual((staged / MAC_APP_EXE_RELATIVE).read_bytes(), b"signed app payload")
+
 
 class BackupCleanupTest(unittest.TestCase):
     def test_cleanup_keeps_active_update_handoff_directory(self) -> None:
@@ -210,6 +290,19 @@ class BackupCleanupTest(unittest.TestCase):
                 result = startup_cleanup(app_dir, now=now)
             self.assertEqual(result, {"old_backups": 1, "temp_dirs": 2})
             temp_cleanup.assert_called_once()
+            self.assertFalse(stale.exists())
+
+    def test_startup_cleanup_matches_macos_bundle_backup_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            app_dir = parent / MAC_APP_BUNDLE_NAME
+            app_dir.mkdir()
+            stale = parent / f"{MAC_APP_BUNDLE_NAME}.old-20260901120000"
+            stale.mkdir()
+            now = datetime(2026, 9, 19, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+            with patch("canhost.updater.cleanup_update_dirs", return_value=0):
+                result = startup_cleanup(app_dir, now=now)
+            self.assertEqual(result["old_backups"], 1)
             self.assertFalse(stale.exists())
 
 
@@ -265,6 +358,106 @@ class InstallerPackagingTest(unittest.TestCase):
     def test_install_helper_retries_a_busy_install_directory(self) -> None:
         self.assertIn("Rename-DirectoryWithRetry", INSTALLER_SCRIPT)
         self.assertIn('Write-Log "old rename blocked; retrying"', INSTALLER_SCRIPT)
+
+    def test_macos_helper_swaps_app_and_requires_matching_health(self) -> None:
+        self.assertIn('mv "$APP_DIR" "$BACKUP_DIR"', MACOS_INSTALLER_SCRIPT)
+        self.assertIn('mv "$STAGED_DIR" "$APP_DIR"', MACOS_INSTALLER_SCRIPT)
+        self.assertIn(r'\"pid\": $NEW_PID', MACOS_INSTALLER_SCRIPT)
+        self.assertIn(r'\"version\": \"$EXPECTED_BASE\"', MACOS_INSTALLER_SCRIPT)
+        self.assertIn('rollback "health_timeout"', MACOS_INSTALLER_SCRIPT)
+        self.assertIn('open -n "$APP_DIR"', MACOS_INSTALLER_SCRIPT)
+
+    def test_frozen_macos_install_is_supported_when_app_parent_is_writable(self) -> None:
+        from canhost import updater
+
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / MAC_APP_BUNDLE_NAME
+            with patch.object(updater.sys, "frozen", True, create=True), \
+                 patch.object(updater.sys, "platform", "darwin"), \
+                 patch.object(updater, "installed_app_dir", return_value=app), \
+                 patch.object(updater.os, "access", return_value=True):
+                self.assertTrue(updater.install_ready())
+            with patch.object(updater.sys, "frozen", True, create=True), \
+                 patch.object(updater.sys, "platform", "darwin"), \
+                 patch.object(updater, "installed_app_dir", return_value=app), \
+                 patch.object(updater.os, "access", return_value=False):
+                self.assertFalse(updater.install_ready())
+
+    def test_macos_launcher_starts_detached_shell_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_dir = root / "Applications" / MAC_APP_BUNDLE_NAME
+            stage_dir = root / "downloads" / MAC_APP_BUNDLE_NAME
+            executable = stage_dir / MAC_APP_EXE_RELATIVE
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"staged executable")
+            work_dir = root / "updates" / "canhost-update-test"
+            log_dir = root / "logs"
+            result_path = root / "settings" / "last-update-result.json"
+
+            with patch("canhost.updater.install_ready", return_value=True), \
+                 patch("canhost.updater.update_platform", return_value="macos"), \
+                 patch("canhost.updater.update_log_dir", return_value=log_dir), \
+                 patch("canhost.updater.update_result_path", return_value=result_path), \
+                 patch("canhost.updater.subprocess.Popen") as popen:
+                helper = launch_installer(
+                    app_dir=app_dir.resolve(),
+                    stage_dir=stage_dir.resolve(),
+                    work_dir=work_dir.resolve(),
+                    expected_version="v0.9.12",
+                    current_pid=1234,
+                )
+
+            self.assertEqual(helper.name, "install-helper.sh")
+            self.assertTrue(helper.stat().st_mode & 0o100)
+            command = popen.call_args.args[0]
+            self.assertEqual(Path(command[0]), helper)
+            self.assertEqual(command[-1], "1234")
+            self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS helper integration is macOS-only")
+    def test_macos_helper_replaces_app_after_health_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "Applications" / MAC_APP_BUNDLE_NAME
+            staged = root / "download" / MAC_APP_BUNDLE_NAME
+            work = root / "canhost-update-helper"
+            log = root / "logs" / "update.log"
+            result = root / "settings" / "result.json"
+            (app / "Contents").mkdir(parents=True)
+            (app / "Contents" / "old-marker").write_text("old", encoding="utf-8")
+            executable = staged / MAC_APP_EXE_RELATIVE
+            executable.parent.mkdir(parents=True)
+            executable.write_text(
+                """#!/bin/sh
+health="$2"
+printf '{"pid": %s, "version": "0.9.12"}' "$$" > "$health"
+sleep 1
+""",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            (staged / "Contents" / "new-marker").write_text("new", encoding="utf-8")
+            work.mkdir()
+            helper = work / "install-helper.sh"
+            helper.write_text(MACOS_INSTALLER_SCRIPT, encoding="utf-8")
+            helper.chmod(0o700)
+
+            completed = subprocess.run(
+                [str(helper), str(app), str(staged), str(work), "v0.9.12",
+                 str(log), str(work / "health.json"), str(result), "999999"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+            self.assertTrue((app / "Contents" / "new-marker").is_file())
+            self.assertFalse((app / "Contents" / "old-marker").exists())
+            self.assertFalse(work.exists())
+            self.assertFalse(result.exists())
+            self.assertIn("frontend healthy", log.read_text(encoding="utf-8"))
 
     def test_launcher_runs_helper_outside_install_and_work_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -649,6 +842,43 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(updater.status()["state"], "install_failed")
         self.assertIn("源码运行", result["error"])
+
+    def test_macos_download_worker_uses_update_zip_not_dmg(self) -> None:
+        updater = HostUpdater(current_version="0.9.11")
+        tag = "v0.9.12"
+        update_name = f"{APP_FOLDER_NAME}_macOS_arm64_{tag}-update.zip"
+        latest = _release(tag)
+        latest["assets"].extend([
+            {"name": f"{APP_FOLDER_NAME}_macOS_arm64_{tag}.dmg", "size": 11,
+             "url": "https://example/app.dmg"},
+            {"name": update_name, "size": 0, "url": "https://example/mac-update.zip"},
+            {"name": f"{update_name}.sha256", "size": 95,
+             "url": "https://example/mac-update.zip.sha256"},
+        ])
+        downloaded: list[str] = []
+
+        def fake_download(asset, target, progress=False):
+            downloaded.append(str(asset["name"]))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if str(asset["name"]).endswith(".sha256"):
+                target.write_text(f"{hashlib.sha256(b'').hexdigest()}  {update_name}\n",
+                                  encoding="utf-8")
+            else:
+                target.write_bytes(b"")
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory) / "canhost-update-mac"
+            with patch("canhost.updater.update_platform", return_value="macos"), \
+                 patch("canhost.updater.cleanup_update_dirs", return_value=0), \
+                 patch("canhost.updater.update_temp_dir", return_value=work), \
+                 patch("canhost.updater.extract_update_archive",
+                       return_value=work / MAC_APP_BUNDLE_NAME) as extract, \
+                 patch.object(updater, "_download_payload", side_effect=fake_download):
+                updater._download_worker(latest)
+
+        self.assertEqual(downloaded, [f"{update_name}.sha256", update_name])
+        self.assertEqual(updater.status()["state"], "ready")
+        extract.assert_called_once_with(work / update_name, work, platform="macos")
 
     def test_default_repo_is_github_org_repo(self) -> None:
         self.assertEqual(DEFAULT_REPO, "BITFSAE/can-host")

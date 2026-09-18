@@ -183,11 +183,13 @@ class FallbackReleaseTest(unittest.TestCase):
                          ["BITFSAE_CAN_Host_v0.9.0.zip", "BITFSAE_CAN_Host_v0.9.0.zip.sha256",
                           "BITFSAE_CAN_Host_v0.9.0_setup.exe",
                           "BITFSAE_CAN_Host_macOS_arm64_v0.9.0.dmg",
-                          "BITFSAE_CAN_Host_macOS_arm64_v0.9.0.dmg.sha256"])
+                          "BITFSAE_CAN_Host_macOS_arm64_v0.9.0.dmg.sha256",
+                          "BITFSAE_CAN_Host_macOS_arm64_v0.9.0-update.zip",
+                          "BITFSAE_CAN_Host_macOS_arm64_v0.9.0-update.zip.sha256"])
         self.assertTrue(assets[0]["url"].startswith(
             "https://github.com/BITFSAE/can-host/releases/download/v0.9.0/"))
         self.assertEqual(assets[0]["size"], 17188170)
-        self.assertEqual(len(probed), 5)
+        self.assertEqual(len(probed), 7)
 
     def test_fallback_marks_prerelease_and_reports_missing_assets(self) -> None:
         with patch("cnb_publish.probe_remote_size", return_value=10):
@@ -199,18 +201,26 @@ class FallbackReleaseTest(unittest.TestCase):
 
     def test_fallback_accepts_legacy_windows_only_release(self) -> None:
         def fake_probe(url, timeout=60.0):
-            return 0 if ".dmg" in url else 10
+            return 0 if "macOS_arm64" in url else 10
 
         with patch("cnb_publish.probe_remote_size", side_effect=fake_probe):
             _, assets = cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.1")
         self.assertEqual(len(assets), 3)
+
+    def test_fallback_accepts_legacy_dmg_pair_without_update_zip(self) -> None:
+        def fake_probe(url, timeout=60.0):
+            return 0 if "-update.zip" in url else 10
+
+        with patch("cnb_publish.probe_remote_size", side_effect=fake_probe):
+            _, assets = cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.11")
+        self.assertEqual(len(assets), 5)
 
     def test_fallback_rejects_partial_macos_release(self) -> None:
         def fake_probe(url, timeout=60.0):
             return 0 if url.endswith(".dmg.sha256") else 10
 
         with patch("cnb_publish.probe_remote_size", side_effect=fake_probe):
-            with self.assertRaisesRegex(cnb_publish.CnbError, "macOS DMG"):
+            with self.assertRaisesRegex(cnb_publish.CnbError, "macOS 安装与一键更新附件"):
                 cnb_publish.fallback_release("BITFSAE/can-host", "v0.9.2")
 
 

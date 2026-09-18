@@ -81,6 +81,8 @@ WINDOWS_ASSET_NAME_PATTERNS = (
 MACOS_ASSET_NAME_PATTERNS = (
     "BITFSAE_CAN_Host_macOS_arm64_{tag}.dmg",
     "BITFSAE_CAN_Host_macOS_arm64_{tag}.dmg.sha256",
+    "BITFSAE_CAN_Host_macOS_arm64_{tag}-update.zip",
+    "BITFSAE_CAN_Host_macOS_arm64_{tag}-update.zip.sha256",
 )
 ASSET_NAME_PATTERNS = WINDOWS_ASSET_NAME_PATTERNS + MACOS_ASSET_NAME_PATTERNS
 
@@ -582,8 +584,11 @@ def fallback_release(
 
     if macos_optional:
         macos_assets = [probe(pattern) for pattern in MACOS_ASSET_NAME_PATTERNS]
-        if any(asset is not None for asset in macos_assets) and any(asset is None for asset in macos_assets):
-            raise CnbError(f"GitHub 发布 {tag} 的 macOS DMG 与校验文件不完整")
+        present = [asset is not None for asset in macos_assets]
+        legacy_complete = present == [True, True, False, False]
+        current_complete = all(present)
+        if any(present) and not (legacy_complete or current_complete):
+            raise CnbError(f"GitHub 发布 {tag} 的 macOS 安装与一键更新附件不完整")
         assets.extend(asset for asset in macos_assets if asset is not None)
     metadata = {
         "tag_name": tag,

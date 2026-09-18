@@ -1,4 +1,4 @@
-"""核对 CNB 镜像与 GitHub 的发布更新器（冻结版 Windows 上位机使用）。
+"""核对 CNB 镜像与 GitHub 的发布更新器（Windows / macOS 冻结版使用）。
 
 国内网络直连 GitHub 不可靠，发布产物因此同时镜像到 CNB（cnb.cool）：
 检查更新并行读取 CNB 匿名频道与 GitHub API，按版本选择较新结果；同版本优先
@@ -55,14 +55,18 @@ SSL_CONTEXT = trust.https_ssl_context()
 
 APP_FOLDER_NAME = "BITFSAE_CAN_Host"
 APP_EXE_NAME = f"{APP_FOLDER_NAME}.exe"
-ASSET_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}_v.+\\.zip$", re.IGNORECASE)
-CHECKSUM_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}_v.+\\.zip\\.sha256$", re.IGNORECASE)
+MAC_APP_BUNDLE_NAME = "BITFSAE CAN Host.app"
+MAC_APP_EXE_RELATIVE = Path("Contents/MacOS/BITFSAE_CAN_Host")
+WINDOWS_ASSET_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}_v.+\.zip$", re.IGNORECASE)
+MACOS_ASSET_PATTERN = re.compile(
+    rf"^{APP_FOLDER_NAME}_macOS_arm64_v.+-update\.zip$", re.IGNORECASE
+)
 SHA256_LINE = re.compile(r"(?m)^\s*([0-9a-fA-F]{64})")
 
 SETTINGS_DIR_NAME = "BITFSAE"
 SETTINGS_SUBDIR_NAME = "CAN Host"
 
-# ``BITFSAE_CAN_Host.old-<yyyyMMddHHmmss>`` written by the install helper.
+# ``<安装目录>.old-<yyyyMMddHHmmss>`` written by either platform helper.
 BACKUP_DIR_PATTERN = re.compile(rf"^{APP_FOLDER_NAME}\.old-(\d{{14}})$")
 # The helper waits up to 90 s for the old process and validates the new one for
 # about 8 s; backups younger than this may still be a rollback target, so the
@@ -157,9 +161,35 @@ def _valid_update_token(token: str | None) -> str | None:
     return value if len(value) <= 512 else None
 
 
+def update_platform() -> str:
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        return "macos"
+    if os.name == "nt":
+        return "windows"
+    return "source"
+
+
+def installed_app_dir() -> Path:
+    """Return the directory atomically replaced by the detached helper."""
+    executable = Path(sys.executable).resolve()
+    if sys.platform == "darwin":
+        for parent in executable.parents:
+            if parent.suffix.lower() == ".app":
+                return parent
+        raise RuntimeError("无法定位 macOS 应用包")
+    return executable.parent
+
+
 def install_ready() -> bool:
-    """Only the frozen Windows build may replace its own installation."""
-    return bool(getattr(sys, "frozen", False) and os.name == "nt")
+    """Whether this frozen build can replace itself and relaunch safely."""
+    if not getattr(sys, "frozen", False) or update_platform() not in {"windows", "macos"}:
+        return False
+    if update_platform() == "macos":
+        try:
+            return os.access(installed_app_dir().parent, os.W_OK)
+        except RuntimeError:
+            return False
+    return True
 
 
 INSTALLER_SCRIPT = r'''
@@ -375,6 +405,130 @@ try {
 '''
 
 
+MACOS_INSTALLER_SCRIPT = r'''#!/bin/sh
+set -u
+APP_DIR="$1"
+STAGED_DIR="$2"
+WORK_DIR="$3"
+EXPECTED_VERSION="$4"
+LOG_PATH="$5"
+HEALTH_FILE="$6"
+RESULT_PATH="$7"
+OLD_PID="$8"
+BACKUP_DIR="${APP_DIR}.old-$(date -u +%Y%m%d%H%M%S)"
+EXPECTED_BASE="${EXPECTED_VERSION#v}"
+EXPECTED_BASE="${EXPECTED_BASE#V}"
+EXPECTED_BASE="${EXPECTED_BASE%%-*}"
+MOVED_OLD=0
+NEW_PID=""
+
+write_log() {
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s %s\n' "$stamp" "$1" >> "$LOG_PATH" 2>/dev/null || true
+}
+write_result() {
+  printf '{"ok":false,"code":"%s","log_path":"%s"}\n' "$1" "$LOG_PATH" > "$RESULT_PATH" 2>/dev/null || true
+}
+restart_old() {
+  if ! open -n "$APP_DIR" >/dev/null 2>&1; then
+    write_log "old process restart failed"
+    return 1
+  fi
+  write_log "old process restarted"
+  return 0
+}
+rollback() {
+  code="$1"
+  if [ -n "$NEW_PID" ]; then kill -9 "$NEW_PID" 2>/dev/null || true; fi
+  if [ "$MOVED_OLD" -eq 1 ] && [ -d "$BACKUP_DIR" ]; then
+    rm -rf "$APP_DIR"
+    if mv "$BACKUP_DIR" "$APP_DIR"; then
+      write_log "old restored"
+      if ! restart_old; then code="restart_failed"; fi
+    else
+      write_log "restore failed"
+      code="restore_failed"
+    fi
+  fi
+  write_result "$code"
+}
+interrupted() {
+  write_log "installer interrupted"
+  rollback "install_failed"
+  exit 23
+}
+trap interrupted HUP INT TERM
+
+mkdir -p "$(dirname "$LOG_PATH")" "$(dirname "$RESULT_PATH")"
+rm -f "$RESULT_PATH"
+write_log "start staged=$STAGED_DIR app=$APP_DIR"
+
+i=0
+while kill -0 "$OLD_PID" 2>/dev/null && [ "$i" -lt 80 ]; do
+  sleep 0.25
+  i=$((i + 1))
+done
+if kill -0 "$OLD_PID" 2>/dev/null; then
+  write_log "old process did not exit gracefully; forcing stop pid=$OLD_PID"
+  kill -9 "$OLD_PID" 2>/dev/null || true
+  i=0
+  while kill -0 "$OLD_PID" 2>/dev/null && [ "$i" -lt 40 ]; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+fi
+if kill -0 "$OLD_PID" 2>/dev/null; then
+  write_log "old process still running after forced stop"
+  write_result "old_process_stuck"
+  exit 22
+fi
+
+if ! mv "$APP_DIR" "$BACKUP_DIR"; then
+  write_log "old app rename failed"
+  write_result "install_failed"
+  exit 23
+fi
+MOVED_OLD=1
+write_log "old renamed $BACKUP_DIR"
+if ! mv "$STAGED_DIR" "$APP_DIR"; then
+  write_log "new app move failed"
+  rollback "install_failed"
+  exit 23
+fi
+write_log "new moved"
+rm -f "$HEALTH_FILE"
+"$APP_DIR/Contents/MacOS/BITFSAE_CAN_Host" --update-health-file "$HEALTH_FILE" >/dev/null 2>&1 &
+NEW_PID=$!
+write_log "new process started pid=$NEW_PID"
+
+i=0
+while [ "$i" -lt 180 ]; do
+  if ! kill -0 "$NEW_PID" 2>/dev/null; then
+    write_log "new process exited early"
+    rollback "new_process_exited"
+    exit 23
+  fi
+  if [ -f "$HEALTH_FILE" ]; then
+    if grep -Fq "\"pid\": $NEW_PID" "$HEALTH_FILE" \
+       && grep -Fq "\"version\": \"$EXPECTED_BASE\"" "$HEALTH_FILE"; then
+      trap - HUP INT TERM
+      write_log "frontend healthy pid=$NEW_PID version=$EXPECTED_BASE"
+      rm -rf "$BACKUP_DIR" "$WORK_DIR"
+      exit 0
+    fi
+    write_log "health signal invalid"
+    rollback "health_mismatch"
+    exit 23
+  fi
+  sleep 0.25
+  i=$((i + 1))
+done
+write_log "health timeout"
+rollback "health_timeout"
+exit 23
+'''
+
+
 def update_log_dir() -> Path:
     """Persistent updater diagnostics directory, outside disposable staging."""
     if os.name == "nt":
@@ -574,18 +728,33 @@ def launch_installer(
     exe_name: str = APP_EXE_NAME,
     current_pid: int | None = None,
 ) -> Path:
-    """Write a hidden PowerShell helper and start it detached from the app."""
+    """Write a detached platform helper that swaps the verified app tree."""
     if not install_ready():
         raise RuntimeError("源码运行只支持检查更新，不能替换安装目录")
     if not stage_dir.is_absolute() or not work_dir.is_absolute():
         raise ValueError("安装目录必须是绝对路径")
     if not app_dir.is_absolute():
         raise ValueError("应用目录必须是绝对路径")
-    if not (stage_dir / exe_name).is_file():
-        raise ValueError(f"已下载的更新包缺少 {exe_name}")
-    script_path = work_dir / "install-helper.ps1"
+    platform = update_platform()
+    expected_executable = (
+        stage_dir / MAC_APP_EXE_RELATIVE
+        if platform == "macos"
+        else stage_dir / exe_name
+    )
+    if not expected_executable.is_file():
+        raise ValueError(f"已下载的更新包缺少 {expected_executable.name}")
+    if platform == "macos" and (
+        app_dir.suffix.lower() != ".app" or stage_dir.name != MAC_APP_BUNDLE_NAME
+    ):
+        raise ValueError("macOS 更新目录不是预期的应用包")
+    script_path = work_dir / ("install-helper.sh" if platform == "macos" else "install-helper.ps1")
     script_path.parent.mkdir(parents=True, exist_ok=True)
-    script_path.write_text(INSTALLER_SCRIPT, encoding="utf-8")
+    script_path.write_text(
+        MACOS_INSTALLER_SCRIPT if platform == "macos" else INSTALLER_SCRIPT,
+        encoding="utf-8",
+    )
+    if platform == "macos":
+        script_path.chmod(0o700)
     log_dir = update_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -607,23 +776,30 @@ def launch_installer(
         result_path.unlink()
     except OSError:
         pass
-    command = [
-        str(_powershell()),
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle", "Hidden",
-        "-ExecutionPolicy", "Bypass",
-        "-File", str(script_path),
-        "-AppDir", str(app_dir),
-        "-StagedDir", str(stage_dir),
-        "-ExeName", exe_name,
-        "-WorkDir", str(work_dir),
-        "-ExpectedVersion", expected_version,
-        "-LogPath", str(log_path),
-        "-HealthFile", str(health_file),
-        "-ResultPath", str(result_path),
-        "-OldPid", str(current_pid or os.getpid()),
-    ]
+    if platform == "macos":
+        command = [
+            str(script_path), str(app_dir), str(stage_dir), str(work_dir),
+            expected_version, str(log_path), str(health_file), str(result_path),
+            str(current_pid or os.getpid()),
+        ]
+    else:
+        command = [
+            str(_powershell()),
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle", "Hidden",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(script_path),
+            "-AppDir", str(app_dir),
+            "-StagedDir", str(stage_dir),
+            "-ExeName", exe_name,
+            "-WorkDir", str(work_dir),
+            "-ExpectedVersion", expected_version,
+            "-LogPath", str(log_path),
+            "-HealthFile", str(health_file),
+            "-ResultPath", str(result_path),
+            "-OldPid", str(current_pid or os.getpid()),
+        ]
     kwargs: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -636,7 +812,7 @@ def launch_installer(
         # work_dir after a successful install.
         "cwd": str(work_dir.parent.resolve()),
     }
-    if os.name == "nt":
+    if platform == "windows":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     else:
         kwargs["start_new_session"] = True
@@ -695,27 +871,38 @@ def _release_summary(release: dict[str, Any]) -> dict[str, Any]:
         ],
     }
 
-def find_zip_asset(release: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the Windows one-folder asset belonging to a release."""
+def find_update_asset(
+    release: dict[str, Any], platform: str | None = None
+) -> dict[str, Any] | None:
+    """Return the platform-specific archive used by the two-click updater."""
+    platform = platform or update_platform()
     tag = str(release.get("tag_name") or "")
-    expected = f"{APP_FOLDER_NAME}_{tag}.zip"
+    expected = (
+        f"{APP_FOLDER_NAME}_macOS_arm64_{tag}-update.zip"
+        if platform == "macos"
+        else f"{APP_FOLDER_NAME}_{tag}.zip"
+    )
+    pattern = MACOS_ASSET_PATTERN if platform == "macos" else WINDOWS_ASSET_PATTERN
     assets = release.get("assets") or []
     for asset in assets:
         if str(asset.get("name") or "").lower() == expected.lower():
             return asset
     for asset in assets:
-        if ASSET_PATTERN.match(str(asset.get("name") or "")):
+        if pattern.match(str(asset.get("name") or "")):
             return asset
     return None
+
+
+def find_zip_asset(release: dict[str, Any]) -> dict[str, Any] | None:
+    """Backward-compatible Windows archive selector used by existing tooling."""
+    return find_update_asset(release, "windows")
+
 
 def find_checksum_asset(release: dict[str, Any], zip_name: str) -> dict[str, Any] | None:
     expected = f"{zip_name}.sha256"
     assets = release.get("assets") or []
     for asset in assets:
         if str(asset.get("name") or "").lower() == expected.lower():
-            return asset
-    for asset in assets:
-        if CHECKSUM_PATTERN.match(str(asset.get("name") or "")):
             return asset
     return None
 
@@ -727,7 +914,13 @@ def read_sha256_digest(path: Path) -> str:
         raise ValueError(f"校验文件 {path.name} 中没有 SHA-256")
     return match.group(1).lower()
 
-def _safe_member(top_level: str, member: zipfile.ZipInfo) -> str:
+def _safe_member(
+    top_level: str,
+    member: zipfile.ZipInfo,
+    *,
+    allow_macos_metadata: bool = False,
+    symlink_target: str | None = None,
+) -> str:
     raw = member.filename.replace("\\", "/")
     if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
         raise ValueError(f"发布包包含绝对路径：{member.filename}")
@@ -735,26 +928,79 @@ def _safe_member(top_level: str, member: zipfile.ZipInfo) -> str:
         raise ValueError(f"发布包包含不规范路径：{member.filename}")
     normalized = raw.rstrip("/")
     parts = PurePosixPath(normalized).parts
-    if not parts or parts[0] != top_level or any(part in ("..", "") for part in parts):
+    expected_root = bool(parts) and parts[0] == top_level
+    expected_metadata = (
+        allow_macos_metadata
+        and bool(parts)
+        and parts[0] == "__MACOSX"
+        and (len(parts) == 1 or parts[1] in {top_level, f"._{top_level}"})
+    )
+    if (not parts or (not expected_root and not expected_metadata)
+            or any(part in ("..", "") for part in parts)):
         raise ValueError(f"发布包包含不安全路径：{member.filename}")
-    if (member.external_attr >> 16) & 0xF000 == 0xA000:
-        raise ValueError(f"发布包包含符号链接：{member.filename}")
+    if (member.external_attr >> 16) & 0xF000 == 0xA000 and expected_root:
+        if not allow_macos_metadata:
+            raise ValueError(f"发布包包含符号链接：{member.filename}")
+        target = PurePosixPath(str(symlink_target or ""))
+        if not symlink_target or target.is_absolute():
+            raise ValueError(f"发布包包含不安全符号链接：{member.filename}")
+        resolved: list[str] = list(PurePosixPath(normalized).parent.parts)
+        for part in target.parts:
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if len(resolved) <= 1:
+                    raise ValueError(f"发布包符号链接越出应用目录：{member.filename}")
+                resolved.pop()
+            else:
+                resolved.append(part)
+        if not resolved or resolved[0] != top_level:
+            raise ValueError(f"发布包符号链接越出应用目录：{member.filename}")
     return normalized
 
-def extract_update_archive(zip_path: Path, destination: Path, exe_name: str = APP_EXE_NAME) -> Path:
-    """Validate and extract a safe one-folder update archive."""
+
+def extract_update_archive(
+    zip_path: Path,
+    destination: Path,
+    exe_name: str = APP_EXE_NAME,
+    platform: str = "windows",
+) -> Path:
+    """Validate and extract a safe one-root update archive."""
+    is_macos = platform == "macos"
+    top_level = MAC_APP_BUNDLE_NAME if is_macos else APP_FOLDER_NAME
+    executable_relative = MAC_APP_EXE_RELATIVE if is_macos else Path(exe_name)
     destination.mkdir(parents=True, exist_ok=True)
-    full_exe = f"{APP_FOLDER_NAME}/{exe_name}"
+    full_exe = f"{top_level}/{executable_relative.as_posix()}"
     has_exe = False
     with zipfile.ZipFile(zip_path) as archive:
         for member in archive.infolist():
-            normalized = _safe_member(APP_FOLDER_NAME, member)
+            is_symlink = (member.external_attr >> 16) & 0xF000 == 0xA000
+            target = archive.read(member).decode("utf-8", errors="strict") if is_symlink else None
+            normalized = _safe_member(
+                top_level,
+                member,
+                allow_macos_metadata=is_macos,
+                symlink_target=target,
+            )
             if normalized.lower() == full_exe.lower():
                 has_exe = True
-        archive.extractall(destination)
-    result = destination / APP_FOLDER_NAME
-    if not has_exe or not (result / exe_name).is_file():
-        raise ValueError(f"发布包缺少 {APP_FOLDER_NAME}\\{exe_name}")
+        if is_macos and Path("/usr/bin/ditto").is_file():
+            completed = subprocess.run(
+                ["/usr/bin/ditto", "-x", "-k", str(zip_path), str(destination)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode:
+                raise RuntimeError(completed.stderr.strip() or "无法解压 macOS 更新包")
+        else:
+            archive.extractall(destination)
+    result = destination / top_level
+    executable = result / executable_relative
+    if not has_exe or not executable.is_file():
+        raise ValueError(f"发布包缺少 {top_level}/{executable_relative.as_posix()}")
+    if is_macos:
+        executable.chmod(executable.stat().st_mode | 0o755)
     return result
 
 def update_temp_dir(parent: Path, suffix: str = "") -> Path:
@@ -786,8 +1032,13 @@ def cleanup_update_dirs(parent: Path, keep: set[Path] | None = None) -> int:
     return removed
 
 
-def cleanup_old_backups(parent: Path, now: float | None = None, keep_seconds: int = BACKUP_KEEP_SECONDS) -> int:
-    """Delete ``BITFSAE_CAN_Host.old-<timestamp>`` backups past the rollback window.
+def cleanup_old_backups(
+    parent: Path,
+    now: float | None = None,
+    keep_seconds: int = BACKUP_KEEP_SECONDS,
+    app_name: str = APP_FOLDER_NAME,
+) -> int:
+    """Delete ``<app_name>.old-<timestamp>`` backups past the rollback window.
 
     The install helper deliberately keeps the newest backup for manual rollback;
     the updated build deletes it on its next startup, once it has demonstrably
@@ -799,8 +1050,9 @@ def cleanup_old_backups(parent: Path, now: float | None = None, keep_seconds: in
         children = sorted(parent.iterdir())
     except OSError:
         return 0
+    backup_pattern = re.compile(rf"^{re.escape(app_name)}\.old-(\d{{14}})$")
     for child in children:
-        match = BACKUP_DIR_PATTERN.match(child.name)
+        match = backup_pattern.match(child.name)
         if not match or not child.is_dir():
             continue
         try:
@@ -825,7 +1077,7 @@ def startup_cleanup(
     Deletes sibling old-version backups past the rollback window and stale
     ``canhost-update-*`` temp directories so old versions do not accumulate.
     """
-    removed_backups = cleanup_old_backups(app_dir.parent, now=now)
+    removed_backups = cleanup_old_backups(app_dir.parent, now=now, app_name=app_dir.name)
     temp_parent = Path(os.environ.get("TEMP") or tempfile.gettempdir())
     removed_temp = cleanup_update_dirs(temp_parent, keep=keep_temp_dirs)
     return {"old_backups": removed_backups, "temp_dirs": removed_temp}
@@ -949,7 +1201,7 @@ class HostUpdater:
             if tag and tag != latest.get("tag_name"):
                 return {"ok": False, "state": self._state["state"],
                         "error": f"没有版本 {tag} 的检查结果，请重新检查更新"}
-            zip_asset = find_zip_asset(latest)
+            zip_asset = find_update_asset(latest)
             self._state.update({
                 "state": "downloading",
                 "message": f"正在下载 {latest.get('tag_name')}…",
@@ -972,7 +1224,7 @@ class HostUpdater:
         return {"ok": True, "state": "downloading"}
 
     def start_install(self, app_dir: Path) -> dict[str, Any]:
-        """Exit the current process after handing replacement to PowerShell."""
+        """Exit after handing replacement to the detached platform helper."""
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return {"ok": False, "state": self._state["state"], "error": "下载尚未完成"}
@@ -984,7 +1236,7 @@ class HostUpdater:
                         "error": "没有已下载并校验的更新包"}
             if not install_ready():
                 self._set(state="install_failed", message="源码运行不支持安装",
-                          error="源码运行只能检查 GitHub Release；请使用 Windows 发布版执行更新安装。",
+                          error="当前运行方式只能检查 Release，不能自动替换应用目录。",
                           install_error="source-run install rejected")
                 return {"ok": False, "state": "install_failed",
                         "error": "源码运行只支持检查更新，不能替换安装目录"}
@@ -1370,9 +1622,14 @@ class HostUpdater:
         try:
             work_parent = Path(os.environ.get("TEMP") or tempfile.gettempdir()).resolve()
             cleanup_update_dirs(work_parent)
-            zip_asset = find_zip_asset(latest)
+            zip_asset = find_update_asset(latest)
             if not zip_asset:
-                raise ValueError(f"Release {tag} 缺少 {APP_FOLDER_NAME}_{tag}.zip")
+                expected = (
+                    f"{APP_FOLDER_NAME}_macOS_arm64_{tag}-update.zip"
+                    if update_platform() == "macos"
+                    else f"{APP_FOLDER_NAME}_{tag}.zip"
+                )
+                raise ValueError(f"Release {tag} 缺少 {expected}")
             zip_name = str(zip_asset.get("name"))
             checksum_asset = find_checksum_asset(latest, zip_name)
             if not checksum_asset:
@@ -1394,7 +1651,12 @@ class HostUpdater:
             actual = hashlib.sha256(zip_path.read_bytes()).hexdigest().lower()
             if actual != expected:
                 raise ValueError(f"更新包校验不一致：期望 {expected[:16]}…，实际 {actual[:16]}…")
-            stage_dir = extract_update_archive(zip_path, work_dir)
+            if update_platform() == "macos":
+                stage_dir = extract_update_archive(
+                    zip_path, work_dir, platform="macos"
+                )
+            else:
+                stage_dir = extract_update_archive(zip_path, work_dir)
             self._set(
                 state="ready",
                 message=f"{tag} 已下载并校验，可以重启安装",

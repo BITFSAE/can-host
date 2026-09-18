@@ -72,6 +72,17 @@ class PackagingSpecTest(unittest.TestCase):
         self.assertIn("canhost.vehicle.simulator",
                       analysis_lists("can_host.spec", "excludes").get("excludes") or [])
 
+    def test_macos_build_publishes_the_in_app_update_archive(self) -> None:
+        script = (ROOT / "build_macos.sh").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("-update.zip", script)
+        self.assertIn("ditto -c -k --sequesterRsrc --keepParent", script)
+        self.assertIn('shasum -a 256 "$UPDATE_ZIP_NAME"', script)
+        self.assertIn("预期 7 个双平台发布附件", workflow)
+        self.assertLess(script.index("scripts/set_version.py"),
+                        script.index("-m unittest discover"),
+                        "macOS 构建必须先刷新随包版本说明再运行测试")
+
 
 if __name__ == "__main__":
     unittest.main()

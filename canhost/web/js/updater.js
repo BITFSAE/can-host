@@ -149,9 +149,37 @@ function renderReleaseNotes(list, notes, emptyText) {
 }
 
 async function openReleasePage(url) {
-  if (!state.api?.open_release_page) { toast("当前版本无法打开浏览器", true); return; }
+  if (!state.api?.open_release_page) { toast("当前版本无法打开浏览器", true); return false; }
   const result = await state.api.open_release_page(String(url || ""));
-  if (!result?.ok) toast(result?.error || "无法打开浏览器", true);
+  if (!result?.ok) {
+    toast(result?.error || "无法打开浏览器", true);
+    return false;
+  }
+  return true;
+}
+
+function isFrozenMacRelease() {
+  return state.bootstrap?.frozen === true && state.bootstrap?.runtime_platform === "darwin";
+}
+
+function updaterPackageAsset(status) {
+  const assets = status?.latest?.assets || [];
+  if (isFrozenMacRelease()) {
+    const suffix = status?.install_supported ? "-update.zip" : ".dmg";
+    return assets.find(asset => {
+      const name = String(asset?.name || "").toLowerCase();
+      return name.includes("macos_arm64") && name.endsWith(suffix);
+    }) || null;
+  }
+  return assets.find(asset => {
+    const name = String(asset?.name || "").toLowerCase();
+    return name.endsWith(".zip") && !name.endsWith("-update.zip");
+  }) || null;
+}
+
+function macUpdateDownloadUrl(status) {
+  const asset = updaterPackageAsset(status);
+  return asset?.browser_download_url || asset?.url || status?.latest?.html_url || "";
 }
 
 /* 版本历史：优先随包说明，按需联网核对最近发布。 */
@@ -363,7 +391,7 @@ function updaterRenderUpdaterStatus() {
     if (raw) raw.textContent = showRaw ? body.slice(0, 4000) : "";
   }
 
-  const size = latest?.assets?.find(item => String(item.name).toLowerCase().endsWith(".zip"))?.size;
+  const size = updaterPackageAsset(status)?.size;
   const sizeNode = $("#updaterSize");
   if (sizeNode) sizeNode.textContent = size ? formatUpdaterSize(size) : "—";
 
@@ -425,23 +453,27 @@ function updaterRenderUpdaterStatus() {
   if (checkBtn) checkBtn.disabled = ["checking", "downloading", "installing"].includes(stateName);
   const installBtn = $("#updaterInstall");
   if (installBtn) {
-    const canDownload = stateName === "update_available" && installSupported;
+    const frozenMac = isFrozenMacRelease();
+    const manualMacDownload = frozenMac && !installSupported;
+    const canDownload = stateName === "update_available" && (installSupported || (manualMacDownload && !!macUpdateDownloadUrl(status)));
     const canInstall = stateName === "ready";
     installBtn.disabled = (!canDownload && !canInstall) || (canInstall && !installSupported) || updaterClosing || updaterDownloadStarted;
     if (stateName === "installing" || updaterClosing) installBtn.textContent = "正在退出…";
     else if (stateName === "downloading" || updaterDownloadStarted) installBtn.textContent = "下载中…";
     else if (stateName === "ready") installBtn.textContent = "重启更新";
+    else if (stateName === "update_available" && manualMacDownload && updaterPackageAsset(status)) installBtn.textContent = "下载 DMG";
+    else if (stateName === "update_available" && manualMacDownload) installBtn.textContent = "打开发布页";
     else if (stateName === "update_available" && latest?.tag_name) installBtn.textContent = "下载 v" + String(latest.tag_name).replace(/^v/i, "");
     else installBtn.textContent = "下载更新";
   }
   const prerelease = $("#updaterPrerelease");
   if (prerelease) prerelease.disabled = ["checking", "downloading", "installing"].includes(stateName);
   const autoNote = $("#updaterAutoNote");
-  const frozenMac = state.bootstrap?.frozen === true && state.bootstrap?.runtime_platform === "darwin";
+  const frozenMac = isFrozenMacRelease();
   if (autoNote) autoNote.textContent = installSupported
     ? "启动时自动检查一次正式版；并行核对 CNB 国内镜像与 GitHub，同版本使用 CNB；发现更新不会自动下载。"
     : frozenMac
-      ? "macOS 发布版并行核对 CNB 与 GitHub；升级请下载对应 DMG 后覆盖安装。"
+      ? "macOS 发布版并行核对 CNB 与 GitHub；点击“下载 DMG”会用系统浏览器下载，完成后请覆盖安装。"
       : "当前为源码运行，只能核对 CNB 与 GitHub 发布，不能替换安装目录。";
   const repoNode = $("#updaterRepo");
   if (repoNode) repoNode.textContent = state.bootstrap?.updater_repo || "BITFSAE/can-host";
@@ -557,8 +589,19 @@ function formatUpdaterSize(value) {
 
 async function startUpdateIntent() {
   if (!state.api || updaterClosing || updaterDownloadStarted) return;
-  if (state.updater?.install_supported === false) return;
   const stateName = state.updater?.state;
+  if (stateName === "update_available" && isFrozenMacRelease()
+      && state.updater?.install_supported !== true) {
+    const url = macUpdateDownloadUrl(state.updater);
+    if (!url) {
+      toast("当前 Release 缺少 macOS 下载地址", true);
+      return;
+    }
+    const opened = await openReleasePage(url);
+    if (opened) toast(updaterPackageAsset(state.updater) ? "已在浏览器打开 DMG 下载" : "已打开版本发布页");
+    return;
+  }
+  if (state.updater?.install_supported === false) return;
   if (stateName === "ready") {
     await installDownloadedUpdate();
     return;

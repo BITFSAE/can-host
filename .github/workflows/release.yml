@@ -148,8 +148,8 @@ jobs:
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
             --json tagName,name,body,publishedAt,isPrerelease > "$metadata"
           mapfile -t assets < <(find release -maxdepth 1 -type f ! -name 'github-release.json' -print | sort)
-          if [[ ${#assets[@]} -ne 5 ]]; then
-            echo "::error::预期 5 个双平台发布附件，实际找到 ${#assets[@]} 个"
+          if [[ ${#assets[@]} -ne 7 ]]; then
+            echo "::error::预期 7 个双平台发布附件，实际找到 ${#assets[@]} 个"
             printf '%s\n' "${assets[@]}"
             exit 1
           fi

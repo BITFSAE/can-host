@@ -27,7 +27,6 @@ PYTHON="$VENV_DIR/bin/python"
 "$PYTHON" -m pip install --retries 10 --timeout 60 -r "$PROJECT_ROOT/requirements-build.txt"
 
 cd "$PROJECT_ROOT"
-"$PYTHON" -m unittest discover -s Tests -p "test_*.py" -v
 
 # 版本与随包更新说明必须在打包前落盘：PyInstaller 会把 release_info.py 嵌进 .app，
 # 更新完成弹窗和“版本历史”都读它。
@@ -47,6 +46,10 @@ if [[ "$LABEL_BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     --output "$NOTES_DIR/release_notes.md" \
     --json-output "$NOTES_DIR/release_notes.json"
 fi
+
+# 测试读取随包版本历史；必须在 release_info.py 更新后执行，否则刚提升版本号时
+# 会把上一版的生成文件误判为当前版本历史缺失。
+"$PYTHON" -m unittest discover -s Tests -p "test_*.py" -v
 
 "$PYTHON" -m PyInstaller --noconfirm --clean "$PROJECT_ROOT/can_host_macos.spec"
 
@@ -125,15 +128,40 @@ LABEL="$LABEL_BASE"
 RELEASE_DIR="$PROJECT_ROOT/release"
 DMG_NAME="BITFSAE_CAN_Host_macOS_arm64_v${LABEL}.dmg"
 DMG_PATH="$RELEASE_DIR/$DMG_NAME"
+UPDATE_ZIP_NAME="BITFSAE_CAN_Host_macOS_arm64_v${LABEL}-update.zip"
+UPDATE_ZIP_PATH="$RELEASE_DIR/$UPDATE_ZIP_NAME"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/canhost-dmg.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
 mkdir -p "$RELEASE_DIR"
 cp -R "$APP" "$STAGING_DIR/BITFSAE CAN Host.app"
 ln -s /Applications "$STAGING_DIR/Applications"
-rm -f "$DMG_PATH" "$DMG_PATH.sha256"
+rm -f "$DMG_PATH" "$DMG_PATH.sha256" "$UPDATE_ZIP_PATH" "$UPDATE_ZIP_PATH.sha256"
 hdiutil create -volname "BITFSAE CAN Host" -srcfolder "$STAGING_DIR" \
   -ov -format ULMO "$DMG_PATH"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$UPDATE_ZIP_PATH"
+"$PYTHON" - "$UPDATE_ZIP_PATH" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+from canhost.updater import MAC_APP_EXE_RELATIVE, extract_update_archive
+
+archive = Path(sys.argv[1]).resolve()
+with tempfile.TemporaryDirectory(prefix="canhost-update-verify-") as directory:
+    app = extract_update_archive(archive, Path(directory), platform="macos")
+    executable = app / MAC_APP_EXE_RELATIVE
+    if not executable.is_file():
+        raise SystemExit(f"macOS 更新 ZIP 缺少主程序：{executable}")
+    subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)],
+        check=True,
+    )
+print(f"macOS update archive check passed: {archive.name}")
+PY
 (cd "$RELEASE_DIR" && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
+(cd "$RELEASE_DIR" && shasum -a 256 "$UPDATE_ZIP_NAME" > "$UPDATE_ZIP_NAME.sha256")
 
 echo "Build complete: $DMG_PATH"
+echo "Update archive: $UPDATE_ZIP_PATH"
