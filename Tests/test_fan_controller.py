@@ -868,6 +868,59 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertNotIn("固件恢复失败", result["reason"])
         self.assertEqual([item[0] for item in sent], ["fan_calib", "fan_control"])
 
+    def test_battery_calibration_abort_accepts_firmware_aborted_zero_target(self) -> None:
+        """F405 已安全中止时，STOP ACK 后不应再要求 COMPLETED。"""
+        sent = []
+        snap = {
+            "battery_fan": {
+                "status_age": 0.1,
+                "calibration_age": 0.1,
+                "status_generation": 10,
+                "calibration_generation": 20,
+                "status": {"flags": {"calibration_active": False}},
+                "calibration": {
+                    "calib_state": 2,
+                    "calib_state_name": "已中止",
+                    "abort_reason": 1,
+                    "abort_reason_name": "状态变化",
+                    "step": 2,
+                    "target_duty_pct": 0,
+                },
+            },
+        }
+
+        def fake_send(name, vals, ack):
+            sent.append((name, vals, ack))
+            return {"ok": True}
+
+        session = BatteryFanCalibrationSession(fake_send, lambda: snap)
+        session.status = "running"
+        session._wait_for_completed = lambda **kwargs: self.fail(
+            "固件已上报 ABORTED/0%，不应再等待 COMPLETED")
+        result = session.abort("F405 标定会话已安全中止")
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("停止命令失败", result["reason"])
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][0], "battery_fan_calib")
+        self.assertEqual(sent[0][1]["action"], 3)
+
+        # 兼容旧固件：STOP 后新状态可能是 INACTIVE/0%。中止流程接受，
+        # 正常扫频完成流程仍必须要求 COMPLETED，不能生成可提交建议。
+        snap["battery_fan"]["status_generation"] = 11
+        snap["battery_fan"]["calibration_generation"] = 21
+        snap["battery_fan"]["calibration"]["calib_state"] = 0
+        terminal_session = BatteryFanCalibrationSession(fake_send, lambda: snap)
+        self.assertIsNone(terminal_session._wait_for_completed(
+            after_status_generation=10,
+            after_calibration_generation=20,
+            allow_safe_terminal=True,
+            timeout_s=0.1))
+        strict_error = terminal_session._wait_for_completed(
+            after_status_generation=10,
+            after_calibration_generation=20,
+            timeout_s=0.1)
+        self.assertIn("未进入可提交", strict_error)
+
     def test_calibration_requires_measured_dcdc_ready(self) -> None:
         """自动扫频必须由 PDM 实测判据证明 DCDC 已接管，不能只看固件状态。"""
         sent: list[tuple[str, dict, bool]] = []

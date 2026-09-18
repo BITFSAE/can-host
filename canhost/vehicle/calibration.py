@@ -1361,8 +1361,9 @@ class BatteryFanCalibrationSession:
 
     def _wait_for_completed(self, *, after_status_generation: int,
                             after_calibration_generation: int,
-                            timeout_s: float = 1.2) -> str | None:
-        """Require new 0x5AA/0x5AD frames proving STOP reached COMPLETED."""
+                            timeout_s: float = 1.2,
+                            allow_safe_terminal: bool = False) -> str | None:
+        """Require new 0x5AA/0x5AD frames proving STOP reached a safe terminal state."""
         deadline = time.monotonic() + timeout_s
         last_state = "等待0x5AA/0x5AD"
         while time.monotonic() < deadline:
@@ -1375,12 +1376,14 @@ class BatteryFanCalibrationSession:
             except (TypeError, ValueError, OverflowError):
                 status_generation, calibration_generation = 0, 0
             active = status.get("flags", {}).get("calibration_active", False)
-            if (status_generation > after_status_generation
+            fresh_terminal = (status_generation > after_status_generation
                     and calibration_generation > after_calibration_generation
                     and _fresh_age(battery.get("status_age"), 1.0)
                     and _fresh_age(battery.get("calibration_age"), 1.0)
-                    and not active and calibration.get("calib_state") == 3
-                    and calibration.get("target_duty_pct") == 0):
+                    and not active and calibration.get("target_duty_pct") == 0)
+            calib_state = calibration.get("calib_state")
+            if (fresh_terminal and (calib_state == 3
+                                    or (allow_safe_terminal and calib_state in {0, 2}))):
                 return None
             if (calibration_generation > after_calibration_generation
                     and _fresh_age(battery.get("calibration_age"), 1.0)
@@ -1426,15 +1429,23 @@ class BatteryFanCalibrationSession:
                     return {"ok": True, "status": self.status, "reason": self.abort_reason,
                             "errors": []}
                 self._stop_event.set()
+            before_stop = self.snapshot_fn().get("battery_fan", {})
+            before_calibration = before_stop.get("calibration", {})
+            already_aborted = (
+                _fresh_age(before_stop.get("calibration_age"), 1.0)
+                and before_calibration.get("calib_state") == 2
+                and before_calibration.get("target_duty_pct") == 0
+            )
             try:
                 stop_result = self._send(3, self.current_step, 0, 0)
             except Exception as exc:
                 stop_result = {"ok": False, "error": str(exc)}
-            if stop_result.get("ok"):
+            if stop_result.get("ok") and not already_aborted:
                 status_generation, calibration_generation = self._generations()
                 confirm_error = self._wait_for_completed(
                     after_status_generation=status_generation,
-                    after_calibration_generation=calibration_generation)
+                    after_calibration_generation=calibration_generation,
+                    allow_safe_terminal=True)
                 if confirm_error:
                     stop_result = {"ok": False, "error": confirm_error}
             with self.lock:
