@@ -1,8 +1,9 @@
-"""CNB 镜像优先、GitHub 回退的发布更新器（冻结版 Windows 上位机使用）。
+"""核对 CNB 镜像与 GitHub 的发布更新器（冻结版 Windows 上位机使用）。
 
 国内网络直连 GitHub 不可靠，发布产物因此同时镜像到 CNB（cnb.cool）：
-检查更新先读 CNB 上匿名可读的更新频道，失败才回退 GitHub API；
-下载地址由所选发布自带的附件地址决定，因此不需要代理，也不需要任何令牌。
+检查更新并行读取 CNB 匿名频道与 GitHub API，按版本选择较新结果；同版本优先
+使用 CNB，避免镜像同步窗口把新版本误报为“已是最新”。下载地址由所选发布
+自带的附件地址决定，因此不需要代理，也不需要任何令牌。
 
 HTTPS 请求统一走 ``trust.https_ssl_context()``：保留系统证书库并追加随包的
 certifi 证书，避免 macOS 冻结包缺少系统 CA 时检查更新报
@@ -42,7 +43,7 @@ CNB_CHANNEL_BRANCH = "cnb-update"
 CNB_CHANNEL_PATH = "latest.json"
 SOURCE_CNB = "cnb"
 SOURCE_GITHUB = "github"
-# 顺序即优先级：CNB 镜像优先，失败回退 GitHub。
+# 顺序是同版本时的优先级；不同版本始终选择较新的发布。
 DEFAULT_SOURCES = (SOURCE_CNB, SOURCE_GITHUB)
 SOURCE_LABELS = {SOURCE_CNB: "CNB 镜像", SOURCE_GITHUB: "GitHub"}
 # 只向这些域名发送已保存的 GitHub 令牌，其余（含 CNB 与预签名地址）一律匿名。
@@ -830,7 +831,7 @@ def startup_cleanup(
 
 
 class HostUpdater:
-    """Background check/download state machine for CNB and GitHub releases."""
+    """Background check/download state machine reconciling CNB and GitHub."""
 
     def __init__(
         self,
@@ -928,7 +929,10 @@ class HostUpdater:
                 name="canhost-update-check", daemon=True,
             )
             self._thread = thread
-        thread.start()
+            # Start while the lock still protects ``_thread``.  Otherwise an
+            # automatic check and a manual click can both observe a registered
+            # but not-yet-running thread and launch overlapping workers.
+            thread.start()
         return {"ok": True, "state": "checking"}
 
     def start_download(self, tag: str | None = None) -> dict[str, Any]:
@@ -1025,7 +1029,8 @@ class HostUpdater:
         return {"User-Agent": "BITFSAE-CAN-Host-Updater/1.0", "Accept": accept}
 
     def _source_headers(self, source: str, accept: str = "application/json") -> dict[str, str]:
-        return self._headers(accept) if source == SOURCE_GITHUB else self._cnb_headers(accept)
+        headers = self._headers(accept) if source == SOURCE_GITHUB else self._cnb_headers(accept)
+        return {**headers, "Cache-Control": "no-cache", "Pragma": "no-cache"}
 
     def _request(
         self,
@@ -1038,8 +1043,16 @@ class HostUpdater:
         return urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT)
 
     def _fetch_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
+        request_headers = dict(
+            headers if headers is not None else self._headers("application/json")
+        )
+        # A manual check must revalidate CDN responses.  GitHub's release API
+        # advertises a short shared-cache lifetime; without this directive a
+        # release created moments ago can still look absent on repeated checks.
+        request_headers.setdefault("Cache-Control", "no-cache")
+        request_headers.setdefault("Pragma", "no-cache")
         request = urllib.request.Request(
-            url, headers=headers if headers is not None else self._headers("application/json")
+            url, headers=request_headers
         )
         with urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -1072,17 +1085,41 @@ class HostUpdater:
 
     @staticmethod
     def _select_release(releases: Iterable[dict[str, Any]], include_prerelease: bool) -> dict[str, Any] | None:
-        candidates = (release for release in releases if not release.get("draft"))
-        return next(
-            (release for release in candidates if include_prerelease or not release.get("prerelease")),
-            None,
-        )
+        """Select the highest valid semantic version, independent of API order.
+
+        Both release APIs normally return newest-first, but that ordering can
+        change briefly while a release is edited or mirrored.  Treating the
+        first item as authoritative made update checks intermittently report an
+        older release as current.
+        """
+        candidates: list[tuple[tuple[int, int, int, tuple], dict[str, Any]]] = []
+        for release in releases:
+            if release.get("draft") or (release.get("prerelease") and not include_prerelease):
+                continue
+            try:
+                key = version_key(str(release.get("tag_name") or ""))
+            except ValueError:
+                # A manually named release must not hide a later valid vX.Y.Z
+                # entry from the same source.
+                continue
+            candidates.append((key, release))
+        return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
     @staticmethod
     def _history(releases: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         """Recent releases for the update dialog's history list, newest first."""
         items = [release for release in releases if isinstance(release, dict) and not release.get("draft")]
-        return [_history_summary(item) for item in items[:HISTORY_LIMIT]]
+        # Keep malformed historical tags visible, but never let remote API
+        # ordering decide which valid versions fit inside the history limit.
+        valid: list[tuple[tuple[int, int, int, tuple], dict[str, Any]]] = []
+        unknown: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                valid.append((version_key(str(item.get("tag_name") or "")), item))
+            except ValueError:
+                unknown.append(item)
+        ordered = [item for _, item in sorted(valid, key=lambda pair: pair[0], reverse=True)] + unknown
+        return [_history_summary(item) for item in ordered[:HISTORY_LIMIT]]
 
     @staticmethod
     def _http_error_message(exc: urllib.error.HTTPError, source: str = SOURCE_GITHUB) -> str:
@@ -1124,58 +1161,104 @@ class HostUpdater:
 
     def _check_worker(self, include_prerelease: bool) -> None:
         thread = threading.current_thread()
-        problems: list[str] = []
+        problems: dict[str, str] = {}
         try:
-            for source in self.sources:
-                label = SOURCE_LABELS.get(source, source)
+            # Always reconcile every configured source.  CNB can be reachable
+            # while its release mirror is one version behind GitHub; using the
+            # first successful response used to produce a false "up to date".
+            source_results: dict[str, list[dict[str, Any]]] = {}
+            source_errors: dict[str, Exception] = {}
+            result_lock = threading.Lock()
+
+            def fetch_source(source: str) -> None:
                 try:
                     releases = self._releases_from(source)
-                except urllib.error.HTTPError as exc:
-                    problems.append(f"{label}：{self._http_error_message(exc, source)}")
-                    continue
-                except (urllib.error.URLError, ssl.SSLError) as exc:
-                    if self._is_certificate_error(exc):
-                        problems.append(f"{label}：{self._tls_error_message()}")
-                    else:
-                        problems.append(f"{label}：{exc}")
-                    continue
                 except Exception as exc:
-                    problems.append(f"{label}：{exc}")
+                    with result_lock:
+                        source_errors[source] = exc
+                else:
+                    with result_lock:
+                        source_results[source] = releases
+
+            # Daemon workers preserve the updater's existing shutdown contract:
+            # closing the app during a slow network request must not wait for
+            # the check timeout.  Running both sources together also caps the
+            # visible delay at one source timeout instead of their sum.
+            source_threads = [
+                threading.Thread(
+                    target=fetch_source,
+                    args=(source,),
+                    name=f"canhost-update-source-{source}",
+                    daemon=True,
+                )
+                for source in self.sources
+            ]
+            for source_thread in source_threads:
+                source_thread.start()
+            for source_thread in source_threads:
+                source_thread.join()
+
+            for source, exc in source_errors.items():
+                label = SOURCE_LABELS.get(source, source)
+                if isinstance(exc, urllib.error.HTTPError):
+                    problems[source] = f"{label}：{self._http_error_message(exc, source)}"
+                elif isinstance(exc, (urllib.error.URLError, ssl.SSLError)):
+                    if self._is_certificate_error(exc):
+                        problems[source] = f"{label}：{self._tls_error_message()}"
+                    else:
+                        problems[source] = f"{label}：{exc}"
+                else:
+                    problems[source] = f"{label}：{exc}"
+
+            candidates: list[tuple[tuple[int, int, int, tuple], int, str, dict[str, Any], list[dict[str, Any]]]] = []
+            for priority, source in enumerate(self.sources):
+                releases = source_results.get(source)
+                if releases is None:
                     continue
+                label = SOURCE_LABELS.get(source, source)
                 selected = self._select_release(releases, include_prerelease)
                 if selected is None:
-                    problems.append(f"{label}：没有可用的正式发布版本，请稍后再试。")
+                    problems[source] = f"{label}：没有可识别的可用发布版本，请稍后再试。"
                     continue
-                tag = str(selected.get("tag_name") or "")
-                summary = _release_summary(selected)
                 try:
-                    newer = release_is_newer(tag, self.current_version)
+                    key = version_key(str(selected.get("tag_name") or ""))
                 except ValueError as exc:
-                    problems.append(f"{label}：{exc}")
+                    problems[source] = f"{label}：{exc}"
                     continue
-                if newer:
-                    remember_release_record(summary)
-                    self._set(
-                        state="update_available",
-                        message=f"发现新版本 {tag}（{label}）",
-                        error=None,
-                        latest=summary,
-                        history=self._history(releases),
-                        source=source,
-                        checked_at=time.time(),
-                    )
-                else:
-                    self._set(
-                        state="up_to_date",
-                        message=f"当前已是 {self.current_version}，无需更新",
-                        error=None,
-                        latest=summary,
-                        history=self._history(releases),
-                        source=source,
-                        checked_at=time.time(),
-                    )
-                return
-            raise RuntimeError("；".join(problems) if problems else "没有可用的更新源")
+                # Lower priority index wins when both sources report the same
+                # tag, preserving CNB asset URLs for domestic downloads.
+                candidates.append((key, -priority, source, selected, releases))
+
+            if not candidates:
+                ordered_problems = [problems[source] for source in self.sources if source in problems]
+                raise RuntimeError("；".join(ordered_problems) if ordered_problems else "没有可用的更新源")
+
+            _, _, source, selected, releases = max(candidates, key=lambda item: (item[0], item[1]))
+            label = SOURCE_LABELS.get(source, source)
+            tag = str(selected.get("tag_name") or "")
+            summary = _release_summary(selected)
+            newer = release_is_newer(tag, self.current_version)
+            if newer:
+                remember_release_record(summary)
+                self._set(
+                    state="update_available",
+                    message=f"发现新版本 {tag}（{label}）",
+                    error=None,
+                    latest=summary,
+                    history=self._history(releases),
+                    source=source,
+                    checked_at=time.time(),
+                )
+            else:
+                self._set(
+                    state="up_to_date",
+                    message=f"当前已是 {self.current_version}，无需更新",
+                    error=None,
+                    latest=summary,
+                    history=self._history(releases),
+                    source=source,
+                    checked_at=time.time(),
+                )
         except Exception as exc:
             self._set(state="check_failed", message="检查更新失败",
                       error=str(exc), checked_at=time.time())

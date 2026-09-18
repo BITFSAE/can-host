@@ -10,6 +10,7 @@ import os
 import ssl
 import subprocess
 import tempfile
+import threading
 import unittest
 import urllib.error
 import zipfile
@@ -322,6 +323,53 @@ class InstallerPackagingTest(unittest.TestCase):
 
 
 class HostUpdaterTest(IsolatedSettingsTestCase):
+    def test_automatic_and_manual_check_cannot_start_overlapping_workers(self) -> None:
+        updater = HostUpdater(current_version="0.2.0", sources=(SOURCE_CNB,))
+        start_entered = threading.Event()
+        allow_start = threading.Event()
+        fetch_entered = threading.Event()
+        allow_fetch = threading.Event()
+        second_entered = threading.Event()
+        results: dict[str, dict] = {}
+        real_start = threading.Thread.start
+
+        def delayed_start(thread):
+            if thread.name == "canhost-update-check" and not start_entered.is_set():
+                start_entered.set()
+                self.assertTrue(allow_start.wait(2))
+            return real_start(thread)
+
+        def delayed_fetch(source):
+            fetch_entered.set()
+            self.assertTrue(allow_fetch.wait(2))
+            return [_release("v0.3.0")]
+
+        def invoke(name):
+            if name == "manual":
+                second_entered.set()
+            results[name] = updater.check(False)
+
+        with patch.object(threading.Thread, "start", autospec=True, side_effect=delayed_start), \
+             patch.object(updater, "_releases_from", side_effect=delayed_fetch):
+            automatic = threading.Thread(target=invoke, args=("automatic",))
+            manual = threading.Thread(target=invoke, args=("manual",))
+            real_start(automatic)
+            self.assertTrue(start_entered.wait(2))
+            real_start(manual)
+            self.assertTrue(second_entered.wait(2))
+            allow_start.set()
+            self.assertTrue(fetch_entered.wait(2))
+            automatic.join(2)
+            manual.join(2)
+            worker = updater._thread
+            allow_fetch.set()
+            if worker is not None:
+                worker.join(2)
+
+        self.assertTrue(results["automatic"]["ok"])
+        self.assertFalse(results["manual"]["ok"])
+        self.assertIn("已有更新任务", results["manual"]["error"])
+
     def test_check_worker_reports_update_or_up_to_date(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
         with patch.object(updater, "_fetch_json", return_value=[_release("v0.3.0")]):
@@ -524,6 +572,16 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
                          ["v0.3.0", "v0.2.1", "v0.2.0"])
         self.assertEqual(recorded[0]["changes"], ["修复弹窗说明"])
 
+    def test_release_selection_uses_highest_version_not_remote_order(self) -> None:
+        releases = [_release("v0.2.0"), _release("v0.4.0"), _release("v0.3.0")]
+        selected = HostUpdater._select_release(releases, False)
+        self.assertEqual(selected["tag_name"], "v0.4.0")
+
+    def test_release_selection_skips_unrecognized_tag_without_hiding_valid_release(self) -> None:
+        releases = [_release("nightly"), _release("v0.4.0")]
+        selected = HostUpdater._select_release(releases, False)
+        self.assertEqual(selected["tag_name"], "v0.4.0")
+
     def test_history_skips_drafts_and_omits_the_release_body(self) -> None:
         """历史列表只带条目：它每秒随轮询重发，带正文会把载荷抬高三倍。"""
         drafts = [{"tag_name": "v0.4.0", "draft": True, "assets": []},
@@ -588,16 +646,17 @@ class CnbMirrorSourceTest(IsolatedSettingsTestCase):
         self.assertFalse(is_github_url("https://cnb.cool/totok22/can-host/-/releases/download/v1/a.zip"))
         self.assertFalse(is_github_url("https://asset.cnb.cool/assets/x"))
 
-    def test_check_uses_cnb_channel_and_never_calls_github(self) -> None:
+    def test_check_reconciles_both_sources_and_prefers_cnb_for_same_tag(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
         urls: list[str] = []
 
         def fake_fetch(url, headers=None):
             urls.append(url)
-            if "cnb.cool" not in url:
-                raise AssertionError(f"CNB 可用时不应访问 {url}")
-            self.assertNotIn("Authorization", headers or {})
-            return _cnb_channel("v0.3.0")
+            self.assertEqual(headers.get("Cache-Control"), "no-cache")
+            if "cnb.cool" in url:
+                self.assertNotIn("Authorization", headers or {})
+                return _cnb_channel("v0.3.0")
+            return [_release("v0.3.0")]
 
         with patch.object(updater, "_fetch_json", side_effect=fake_fetch):
             updater._check_worker(False)
@@ -609,7 +668,24 @@ class CnbMirrorSourceTest(IsolatedSettingsTestCase):
         zip_asset = find_zip_asset(status["latest"])
         self.assertIsNotNone(zip_asset)
         self.assertIn(DEFAULT_CNB_REPO, zip_asset["url"])
-        self.assertEqual(len(urls), 1)
+        self.assertEqual(len(urls), 2)
+        self.assertTrue(any("cnb.cool" in url for url in urls))
+        self.assertTrue(any("api.github.com" in url for url in urls))
+
+    def test_check_detects_github_release_while_cnb_mirror_is_stale(self) -> None:
+        updater = HostUpdater(current_version="0.3.0")
+
+        def fake_fetch(url, headers=None):
+            if "cnb.cool" in url:
+                return _cnb_channel("v0.3.0")
+            return [_release("v0.4.0")]
+
+        with patch.object(updater, "_fetch_json", side_effect=fake_fetch):
+            updater._check_worker(False)
+        status = updater.status()
+        self.assertEqual(status["state"], "update_available")
+        self.assertEqual(status["source"], SOURCE_GITHUB)
+        self.assertEqual(status["latest"]["tag_name"], "v0.4.0")
 
     def test_check_falls_back_to_github_when_mirror_unreachable(self) -> None:
         updater = HostUpdater(current_version="0.2.0")

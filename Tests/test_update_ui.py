@@ -51,6 +51,11 @@ class FrontendIdTest(unittest.TestCase):
         self.assertIn("changes", updater)
         self.assertNotIn("notes.textContent = latest?.body", updater)
 
+    def test_update_polling_is_single_flight_and_handles_bridge_failures(self) -> None:
+        updater = (WEB / "js" / "updater.js").read_text(encoding="utf-8")
+        self.assertIn("if (updaterPollPromise) return updaterPollPromise", updater)
+        self.assertIn("showUpdaterBridgeError(error?.message", updater)
+
 
 class ReleasePageApiTest(unittest.TestCase):
     def _api(self):

@@ -2,6 +2,7 @@
  * 只使用零构建原生脚本；后端负责文件校验与替换，前端不接触安装目录。 */
 
 var updaterPollTimer = null;
+var updaterPollPromise = null;
 var updaterAutoStarted = false;
 var updaterClosing = false;
 var updaterDownloadStarted = false;
@@ -238,14 +239,18 @@ async function openUpdaterDialog(startDownload = false) {
 
 async function refreshUpdater(automatic) {
   if (!state.api?.check_for_updates) return;
-  const include = !!$("#updaterPrerelease")?.checked;
-  const result = automatic
-    ? await state.api.auto_check_for_updates()
-    : await state.api.check_for_updates(include);
-  if (!result.ok && result.state !== "checking") {
-    text("#updaterError", result.error || "检查更新失败");
+  try {
+    const include = !!$("#updaterPrerelease")?.checked;
+    const result = automatic
+      ? await state.api.auto_check_for_updates()
+      : await state.api.check_for_updates(include);
+    if (!result?.ok && result?.state !== "checking") {
+      showUpdaterBridgeError(result?.error || "检查更新失败");
+    }
+    await pollUpdaterStatus();
+  } catch (error) {
+    showUpdaterBridgeError(error?.message || String(error) || "检查更新失败");
   }
-  await pollUpdaterStatus();
 }
 
 function refreshUpdaterPending() {
@@ -262,18 +267,37 @@ function getUpdaterExtra() {
   return state.updater || {};
 }
 
-async function pollUpdaterStatus() {
-  if (!state.api?.get_updater_status) return;
-  const status = await state.api.get_updater_status();
-  if (status) state.updater = status;
-  updaterRenderUpdaterStatus();
-  if (updaterDownloadStarted && status?.state === "ready") {
-    updaterDownloadStarted = false;
-    updaterRenderUpdaterStatus();
-  } else if (updaterDownloadStarted && ["download_failed", "install_failed"].includes(status?.state)) {
-    updaterDownloadStarted = false;
-    updaterRenderUpdaterStatus();
-  }
+function showUpdaterBridgeError(message) {
+  const errorNode = $("#updaterError");
+  if (!errorNode) return;
+  errorNode.textContent = message;
+  errorNode.classList.remove("hidden");
+}
+
+function pollUpdaterStatus() {
+  if (!state.api?.get_updater_status) return Promise.resolve();
+  // setInterval does not wait for an async callback.  Reuse the active poll so
+  // a slow JS bridge cannot stack requests and later paint an older response.
+  if (updaterPollPromise) return updaterPollPromise;
+  updaterPollPromise = (async () => {
+    try {
+      const status = await state.api.get_updater_status();
+      if (status) state.updater = status;
+      updaterRenderUpdaterStatus();
+      if (updaterDownloadStarted && status?.state === "ready") {
+        updaterDownloadStarted = false;
+        updaterRenderUpdaterStatus();
+      } else if (updaterDownloadStarted && ["download_failed", "install_failed"].includes(status?.state)) {
+        updaterDownloadStarted = false;
+        updaterRenderUpdaterStatus();
+      }
+    } catch (error) {
+      showUpdaterBridgeError(error?.message || String(error) || "无法读取更新状态");
+    }
+  })().finally(() => {
+    updaterPollPromise = null;
+  });
+  return updaterPollPromise;
 }
 
 function updaterRenderUpdaterStatus() {
@@ -415,10 +439,10 @@ function updaterRenderUpdaterStatus() {
   const autoNote = $("#updaterAutoNote");
   const frozenMac = state.bootstrap?.frozen === true && state.bootstrap?.runtime_platform === "darwin";
   if (autoNote) autoNote.textContent = installSupported
-    ? "公开仓库默认方案：启动时自动检查一次正式版；优先 CNB 国内镜像，失败回退 GitHub；发现更新不会自动下载。"
+    ? "启动时自动检查一次正式版；并行核对 CNB 国内镜像与 GitHub，同版本使用 CNB；发现更新不会自动下载。"
     : frozenMac
-      ? "macOS 发布版只检查版本（优先 CNB 国内镜像）；升级请下载对应 DMG 后覆盖安装。"
-      : "当前为源码运行，只能检查发布（优先 CNB 国内镜像），不能替换安装目录。";
+      ? "macOS 发布版并行核对 CNB 与 GitHub；升级请下载对应 DMG 后覆盖安装。"
+      : "当前为源码运行，只能核对 CNB 与 GitHub 发布，不能替换安装目录。";
   const repoNode = $("#updaterRepo");
   if (repoNode) repoNode.textContent = state.bootstrap?.updater_repo || "BITFSAE/can-host";
   const sourceNode = $("#updaterSource");
@@ -483,7 +507,7 @@ function updaterSourceText(status) {
   const label = updaterSourceLabel(status?.source);
   if (label === "CNB 镜像") return cnb ? "CNB 镜像 · " + cnb : "CNB 镜像";
   if (label === "GitHub") return "GitHub · " + repo;
-  return cnb ? "CNB 镜像优先（" + cnb + "），失败回退 GitHub" : repo;
+  return cnb ? "并行核对 CNB 镜像（" + cnb + "）与 GitHub" : repo;
 }
 
 function updaterBadgeText(status) {
