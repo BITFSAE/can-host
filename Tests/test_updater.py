@@ -409,7 +409,8 @@ class InstallerPackagingTest(unittest.TestCase):
                 )
 
             self.assertEqual(helper.name, "install-helper.sh")
-            self.assertTrue(helper.stat().st_mode & 0o100)
+            if os.name != "nt":
+                self.assertTrue(helper.stat().st_mode & 0o100)
             command = popen.call_args.args[0]
             self.assertEqual(Path(command[0]), helper)
             self.assertEqual(command[-1], "1234")
