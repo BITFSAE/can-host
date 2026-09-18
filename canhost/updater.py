@@ -48,6 +48,7 @@ DEFAULT_SOURCES = (SOURCE_CNB, SOURCE_GITHUB)
 SOURCE_LABELS = {SOURCE_CNB: "CNB 镜像", SOURCE_GITHUB: "GitHub"}
 # 只向这些域名发送已保存的 GitHub 令牌，其余（含 CNB 与预签名地址）一律匿名。
 GITHUB_HOSTS = ("github.com", "githubusercontent.com")
+WINDOWS_CONNECTION_REFUSED = 10061
 
 # 保留系统信任库，同时追加随包 certifi；macOS 冻结包缺少系统 CA 时也能校验。
 SSL_CONTEXT = trust.https_ssl_context()
@@ -1032,6 +1033,68 @@ class HostUpdater:
         headers = self._headers(accept) if source == SOURCE_GITHUB else self._cnb_headers(accept)
         return {**headers, "Cache-Control": "no-cache", "Pragma": "no-cache"}
 
+    @staticmethod
+    def _is_connection_refused(exc: BaseException) -> bool:
+        """Recognize a refused TCP connection through URLError wrappers."""
+        current: BaseException | object | None = exc
+        seen: set[int] = set()
+        while isinstance(current, BaseException) and id(current) not in seen:
+            seen.add(id(current))
+            if (getattr(current, "winerror", None) == WINDOWS_CONNECTION_REFUSED
+                    or getattr(current, "errno", None) == WINDOWS_CONNECTION_REFUSED
+                    or "WinError 10061" in str(current)):
+                return True
+            if isinstance(current, urllib.error.URLError):
+                current = current.reason
+            else:
+                current = current.__cause__ or current.__context__
+        return False
+
+    @staticmethod
+    def _configured_web_proxy(proxies: dict[str, str]) -> bool:
+        return any(proxies.get(scheme) for scheme in ("http", "https", "all"))
+
+    def _open_url(self, request: urllib.request.Request) -> Any:
+        """Refresh proxy settings and bypass a refused Windows proxy once.
+
+        ``urllib.request.urlopen`` caches its process-global opener, including
+        the Windows Internet Settings proxy discovered at first use. Local
+        proxy clients frequently leave that proxy pointing at a closed port;
+        the resulting WinError 10061 then persists until the app or Windows is
+        restarted. A per-request opener refreshes the current setting. When
+        that setting still points at a dead proxy, public update endpoints get
+        one direct retry instead of requiring a reboot.
+        """
+        proxies = urllib.request.getproxies()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler(proxies),
+            urllib.request.HTTPSHandler(context=SSL_CONTEXT),
+        )
+        try:
+            return opener.open(request, timeout=self.timeout)
+        except urllib.error.URLError as proxy_error:
+            if (os.name != "nt"
+                    or not self._configured_web_proxy(proxies)
+                    or not self._is_connection_refused(proxy_error)):
+                raise
+            direct_opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=SSL_CONTEXT),
+            )
+            try:
+                return direct_opener.open(request, timeout=self.timeout)
+            except urllib.error.HTTPError:
+                # Direct TCP/TLS succeeded and the server returned a useful
+                # HTTP status; preserve it for the normal source-specific UI.
+                raise
+            except urllib.error.URLError as direct_error:
+                if self._is_certificate_error(direct_error):
+                    raise
+                raise urllib.error.URLError(
+                    "Windows 系统代理拒绝连接，自动直连也失败；"
+                    "请关闭失效的系统代理或重新启动代理软件"
+                ) from proxy_error
+
     def _request(
         self,
         url: str,
@@ -1040,7 +1103,7 @@ class HostUpdater:
     ) -> Any:
         headers = self._source_headers(source, accept)
         request = urllib.request.Request(url, headers=headers)
-        return urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT)
+        return self._open_url(request)
 
     def _fetch_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
         request_headers = dict(
@@ -1054,7 +1117,7 @@ class HostUpdater:
         request = urllib.request.Request(
             url, headers=request_headers
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT) as response:
+        with self._open_url(request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _github_releases(self) -> list[dict[str, Any]]:
@@ -1280,7 +1343,7 @@ class HostUpdater:
         request = urllib.request.Request(url, headers=self._download_headers(url))
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
-        with urllib.request.urlopen(request, timeout=self.timeout, context=SSL_CONTEXT) as response:
+        with self._open_url(request) as response:
             total = int(response.headers.get("Content-Length") or asset.get("size") or 0)
             done = 0
             started = time.monotonic()

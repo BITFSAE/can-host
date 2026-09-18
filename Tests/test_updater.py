@@ -443,7 +443,7 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "update.zip"
-            with patch("canhost.updater.urllib.request.urlopen", return_value=Response(b"abcdef")):
+            with patch.object(updater, "_open_url", return_value=Response(b"abcdef")):
                 updater._download_payload(
                     {"url": "https://example/update.zip", "size": 6}, target, progress=True
                 )
@@ -494,6 +494,102 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
         status = updater.status()
         self.assertEqual(status["state"], "download_failed")
         self.assertIn("HTTPS 证书校验失败", status["error"])
+
+    def test_windows_dead_system_proxy_retries_direct_without_reboot(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        class Opener:
+            def __init__(self, result=None, error=None):
+                self.result = result
+                self.error = error
+                self.calls = 0
+
+            def open(self, request, timeout):
+                self.calls += 1
+                if self.error:
+                    raise self.error
+                return self.result
+
+        refused = urllib.error.URLError(OSError(10061, "actively refused"))
+        expected = object()
+        proxy_opener = Opener(error=refused)
+        direct_opener = Opener(result=expected)
+        with patch("canhost.updater.os.name", "nt"), \
+             patch("canhost.updater.urllib.request.getproxies",
+                   return_value={"https": "http://127.0.0.1:7890"}), \
+             patch("canhost.updater.urllib.request.build_opener",
+                   side_effect=[proxy_opener, direct_opener]) as build:
+            actual = updater._open_url(urllib.request.Request("https://cnb.cool/test"))
+
+        self.assertIs(actual, expected)
+        self.assertEqual(proxy_opener.calls, 1)
+        self.assertEqual(direct_opener.calls, 1)
+        self.assertEqual(build.call_count, 2)
+        direct_proxy_handler = build.call_args_list[1].args[0]
+        self.assertEqual(direct_proxy_handler.proxies, {})
+
+    def test_windows_dead_proxy_and_failed_direct_reports_actionable_error(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        class FailingOpener:
+            def __init__(self, error):
+                self.error = error
+
+            def open(self, request, timeout):
+                raise self.error
+
+        refused = urllib.error.URLError(OSError(10061, "actively refused"))
+        direct_failure = urllib.error.URLError("network unreachable")
+        with patch("canhost.updater.os.name", "nt"), \
+             patch("canhost.updater.urllib.request.getproxies",
+                   return_value={"https": "http://127.0.0.1:7890"}), \
+             patch("canhost.updater.urllib.request.build_opener",
+                   side_effect=[FailingOpener(refused), FailingOpener(direct_failure)]):
+            with self.assertRaises(urllib.error.URLError) as caught:
+                updater._open_url(urllib.request.Request("https://cnb.cool/test"))
+
+        self.assertIn("系统代理拒绝连接", str(caught.exception))
+
+    def test_windows_dead_proxy_preserves_direct_http_error(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        class FailingOpener:
+            def __init__(self, error):
+                self.error = error
+
+            def open(self, request, timeout):
+                raise self.error
+
+        refused = urllib.error.URLError(OSError(10061, "actively refused"))
+        forbidden = urllib.error.HTTPError(
+            "https://api.github.com/test", 403, "Forbidden", None, None
+        )
+        with patch("canhost.updater.os.name", "nt"), \
+             patch("canhost.updater.urllib.request.getproxies",
+                   return_value={"https": "http://127.0.0.1:7890"}), \
+             patch("canhost.updater.urllib.request.build_opener",
+                   side_effect=[FailingOpener(refused), FailingOpener(forbidden)]):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                updater._open_url(urllib.request.Request("https://api.github.com/test"))
+
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_non_windows_connection_refusal_does_not_bypass_proxy(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+
+        class FailingOpener:
+            def open(self, request, timeout):
+                raise urllib.error.URLError(OSError(10061, "actively refused"))
+
+        with patch("canhost.updater.os.name", "posix"), \
+             patch("canhost.updater.urllib.request.getproxies",
+                   return_value={"https": "http://127.0.0.1:7890"}), \
+             patch("canhost.updater.urllib.request.build_opener",
+                   return_value=FailingOpener()) as build:
+            with self.assertRaises(urllib.error.URLError):
+                updater._open_url(urllib.request.Request("https://cnb.cool/test"))
+
+        build.assert_called_once()
 
     def test_download_worker_rejects_mismatched_checksum(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
