@@ -722,6 +722,43 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
         direct_proxy_handler = build.call_args_list[1].args[0]
         self.assertEqual(direct_proxy_handler.proxies, {})
 
+    def test_windows_direct_retry_rebuilds_proxy_mutated_https_request(self) -> None:
+        updater = HostUpdater(current_version="0.2.0")
+        original = urllib.request.Request(
+            "https://cnb.cool/totok22/can-host/latest.json",
+            headers={"Accept": "application/json", "X-Test": "kept"},
+        )
+        expected = object()
+
+        class ProxyOpener:
+            def open(self, request, timeout):
+                request.add_header("Proxy-Authorization", "Basic must-not-leak")
+                request.set_proxy("127.0.0.1:7890", "https")
+                raise urllib.error.URLError(OSError(10061, "actively refused"))
+
+        class DirectOpener:
+            def open(self, request, timeout):
+                self.request = request
+                return expected
+
+        direct_opener = DirectOpener()
+        with patch("canhost.updater.os.name", "nt"), \
+             patch("canhost.updater.urllib.request.getproxies",
+                   return_value={"https": "http://127.0.0.1:7890"}), \
+             patch("canhost.updater.urllib.request.build_opener",
+                   side_effect=[ProxyOpener(), direct_opener]):
+            actual = updater._open_url(original)
+
+        self.assertIs(actual, expected)
+        self.assertIsNot(direct_opener.request, original)
+        self.assertEqual(direct_opener.request.full_url, original.full_url)
+        self.assertEqual(direct_opener.request.host, "cnb.cool")
+        self.assertIsNone(direct_opener.request._tunnel_host)
+        direct_headers = {name.lower(): value for name, value in direct_opener.request.header_items()}
+        self.assertEqual(direct_headers["accept"], "application/json")
+        self.assertEqual(direct_headers["x-test"], "kept")
+        self.assertNotIn("proxy-authorization", direct_headers)
+
     def test_windows_dead_proxy_and_failed_direct_reports_actionable_error(self) -> None:
         updater = HostUpdater(current_version="0.2.0")
 
@@ -743,6 +780,7 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
                 updater._open_url(urllib.request.Request("https://cnb.cool/test"))
 
         self.assertIn("系统代理拒绝连接", str(caught.exception))
+        self.assertIn("network unreachable", str(caught.exception))
 
     def test_windows_dead_proxy_preserves_direct_http_error(self) -> None:
         updater = HostUpdater(current_version="0.2.0")

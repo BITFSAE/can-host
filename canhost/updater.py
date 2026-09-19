@@ -1292,7 +1292,8 @@ class HostUpdater:
         seen: set[int] = set()
         while isinstance(current, BaseException) and id(current) not in seen:
             seen.add(id(current))
-            if (getattr(current, "winerror", None) == WINDOWS_CONNECTION_REFUSED
+            if (isinstance(current, ConnectionRefusedError)
+                    or getattr(current, "winerror", None) == WINDOWS_CONNECTION_REFUSED
                     or getattr(current, "errno", None) == WINDOWS_CONNECTION_REFUSED
                     or "WinError 10061" in str(current)):
                 return True
@@ -1306,6 +1307,30 @@ class HostUpdater:
     def _configured_web_proxy(proxies: dict[str, str]) -> bool:
         return any(proxies.get(scheme) for scheme in ("http", "https", "all"))
 
+    @staticmethod
+    def _direct_request(request: urllib.request.Request) -> urllib.request.Request:
+        """Copy a request before ProxyHandler mutates it for a CONNECT tunnel.
+
+        ``ProxyHandler`` rewrites ``host`` and ``_tunnel_host`` on the Request
+        passed to ``open``. Reusing that object with a proxy-free opener still
+        targets the refused local proxy on Windows, so the retry is not direct.
+        Build the fallback request from the immutable original URL and omit any
+        proxy credentials that a handler may have attached.
+        """
+        headers = {
+            name: value
+            for name, value in request.header_items()
+            if name.lower() != "proxy-authorization"
+        }
+        return urllib.request.Request(
+            request.full_url,
+            data=request.data,
+            headers=headers,
+            origin_req_host=request.origin_req_host,
+            unverifiable=request.unverifiable,
+            method=request.get_method(),
+        )
+
     def _open_url(self, request: urllib.request.Request) -> Any:
         """Refresh proxy settings and bypass a refused Windows proxy once.
 
@@ -1317,6 +1342,9 @@ class HostUpdater:
         that setting still points at a dead proxy, public update endpoints get
         one direct retry instead of requiring a reboot.
         """
+        # Clone before the proxy opener sees the request: HTTPS proxy handling
+        # mutates the object even when opening the proxy socket then fails.
+        direct_request = self._direct_request(request)
         proxies = urllib.request.getproxies()
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler(proxies),
@@ -1334,7 +1362,7 @@ class HostUpdater:
                 urllib.request.HTTPSHandler(context=SSL_CONTEXT),
             )
             try:
-                return direct_opener.open(request, timeout=self.timeout)
+                return direct_opener.open(direct_request, timeout=self.timeout)
             except urllib.error.HTTPError:
                 # Direct TCP/TLS succeeded and the server returned a useful
                 # HTTP status; preserve it for the normal source-specific UI.
@@ -1342,8 +1370,9 @@ class HostUpdater:
             except urllib.error.URLError as direct_error:
                 if self._is_certificate_error(direct_error):
                     raise
+                reason = str(getattr(direct_error, "reason", direct_error))
                 raise urllib.error.URLError(
-                    "Windows 系统代理拒绝连接，自动直连也失败；"
+                    f"Windows 系统代理拒绝连接，自动直连也失败（{reason}）；"
                     "请关闭失效的系统代理或重新启动代理软件"
                 ) from proxy_error
 
