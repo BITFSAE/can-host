@@ -559,8 +559,9 @@ async function toggleMainDockConnection(role) {
   }
   if (!result?.ok) return toast(result?.error || `${role === "can1" ? "CAN1" : "BMS CANB"} 连接失败`, true);
   toast(result.warning || `${role === "can1" ? "CAN1" : "BMS CANB"} 已连接`, !!result.warning);
+  // The status-bar buttons only control connections. Keep the operator's
+  // current workspace in place; the monitor remains available from the nav.
   state.frameSource = "main";
-  showPage("frames");
   await poll();
 }
 

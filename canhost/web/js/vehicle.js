@@ -77,10 +77,9 @@ async function connectVehicle() {
   if (!result?.ok) return toast(result?.error || "整车连接失败", true);
   toast(result.warning || (simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`), !!result.warning);
   if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
-  if (!simulation) {
-    state.frameSource = "vehicle";
-    showPage("frames");
-  }
+  // Select the new stream for a later monitor visit without navigating away
+  // from the page where the connection was requested.
+  if (!simulation) state.frameSource = "vehicle";
   await poll();
 }
 

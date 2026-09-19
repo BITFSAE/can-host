@@ -54,6 +54,20 @@ class MonitorFrameValidationTest(unittest.TestCase):
         self.assertNotIn("PY", section)
         self.assertNotIn("monitor-status", section)
 
+    def test_status_bar_connections_do_not_force_monitor_navigation(self) -> None:
+        web = Path(__file__).parents[1] / "canhost" / "web" / "js"
+        core = (web / "core.js").read_text(encoding="utf-8")
+        main_connect = core.split("async function toggleMainDockConnection", 1)[1].split(
+            "async function toggleVehicleDockConnection", 1)[0]
+        vehicle = (web / "vehicle.js").read_text(encoding="utf-8")
+        vehicle_connect = vehicle.split("async function connectVehicle", 1)[1].split(
+            "async function disconnectVehicle", 1)[0]
+
+        self.assertNotIn('showPage("frames")', main_connect)
+        self.assertNotIn('showPage("frames")', vehicle_connect)
+        self.assertIn('state.frameSource = "main"', main_connect)
+        self.assertIn('state.frameSource = "vehicle"', vehicle_connect)
+
 
 class MonitorTransportTest(unittest.TestCase):
     def make_writable_service(self) -> CanService:
