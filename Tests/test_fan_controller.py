@@ -424,6 +424,38 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertIn("baseline_raw_samples", json_data)
         self.assertIn("baseline_history", json_data)
 
+    def test_aborted_fan_session_remains_exportable_without_completed_points(self) -> None:
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        session.status = "aborted"
+        session.abort_reason = "首个基线有效样本不足"
+        session.run_params = {"channel": 1, "tier": "dcdc"}
+        snapshot = session.get_snapshot()
+        self.assertTrue(snapshot["export_available"])
+        csv_data = session.export_csv()
+        self.assertIn("Session_Status", csv_data)
+        self.assertIn("首个基线有效样本不足", csv_data)
+        json_data = json.loads(session.export_json())
+        self.assertEqual(json_data["status"], "aborted")
+        self.assertEqual(json_data["abort_reason"], "首个基线有效样本不足")
+
+    def test_unstable_baseline_is_kept_as_warning_instead_of_aborting(self) -> None:
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        session._calib_generation = lambda: 1
+        session._wait_for_calib_state = lambda *args, **kwargs: None
+        noisy = [
+            {"t": float(index), "v": 24.0,
+             "i": 2.0 if index % 2 else 2.4,
+             "p": 48.0 if index % 2 else 57.6}
+            for index in range(12)
+        ]
+        session._sample_until = lambda *args, **kwargs: (list(noisy), None)
+        baseline, error = session._measure_baseline(0, "initial", 18.0, 3)
+        self.assertIsNone(error)
+        self.assertIsNotNone(baseline)
+        self.assertFalse(baseline["quality_ok"])
+        self.assertEqual(len(session.quality_warnings), 1)
+        self.assertEqual(len(session.baseline_raw_samples), 24)
+
     def test_fan_calibration_suggested_caps_use_bus_current_and_merge(self) -> None:
         """推荐上限应使用总线总电流，并按档位保守合并。"""
         session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
@@ -478,6 +510,14 @@ class FanControllerToolTest(unittest.TestCase):
             "current_a": 18.5, "delta_current_a": 3.0,
         }]
         self.assertIsNone(session._max_safe_duty(bg_limited, "dcdc"))
+
+        # 波动测点保留用于导出，但不能进入自动推荐。
+        quality_limited = [{
+            "tier": "dcdc", "channel": 1, "duty1_pct": 30, "duty2_pct": 0,
+            "rpm1": 2500, "rpm2": 2500, "rpm3": 0,
+            "current_a": 5.0, "quality_ok": False,
+        }]
+        self.assertIsNone(session._max_safe_duty(quality_limited, "dcdc"))
 
         # 没有有效数据时返回 None，不应生成 15% 的假建议。
         self.assertIsNone(session._max_safe_duty([], "dcdc"))
@@ -591,6 +631,30 @@ class FanControllerToolTest(unittest.TestCase):
         always_short._run(steps=[50], hold_s=3.0, max_current_a=18.0)
         self.assertEqual(always_short.status, "aborted")
         self.assertIn("样本不足", always_short.abort_reason)
+
+    def test_battery_fan_power_variation_is_warning_not_abort(self) -> None:
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        baseline = {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0,
+                    "std_i": 0.0, "std_p": 0.0, "baseline_id": 1,
+                    "step": 0, "quality_ok": True}
+        session._measure_baseline = lambda step, current, start: (dict(baseline), None)
+        session._wait_for_active = lambda *args, **kwargs: None
+        session._wait_for_completed = lambda **kwargs: None
+
+        def noisy_samples(seconds, current, expected_step, expected_duty):
+            return ([{"v": 24.0,
+                      "i": 2.0 if index % 2 else 2.4,
+                      "p": 48.0 if index % 2 else 57.6,
+                      "rpm": 1500.0} for index in range(12)], None)
+
+        session._samples = noisy_samples
+        session.status = "running"
+        session._run(steps=[50], hold_s=3.0, max_current_a=18.0)
+        self.assertEqual(session.status, "completed")
+        self.assertEqual(len(session.records), 1)
+        self.assertFalse(session.records[0]["quality_ok"])
+        self.assertEqual(len(session.quality_warnings), 1)
+        self.assertIsNone(session.suggested_caps["hv_cap_pct"])
 
     def test_calibration_rejects_nonfinite_dcdc_and_temperature_values(self) -> None:
         snap = _calib_snap()

@@ -140,6 +140,8 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertIn("const statusKnown = hasDataAge(fan.status_age)", fan_js)
         self.assertIn("const fanStartReady = available && fanFramesFresh && pdmFresh", fan_js)
         self.assertIn("const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)", fan_js)
+        self.assertIn("calib.export_available === true || records.length > 0", fan_js)
+        self.assertIn("batterySession.export_available === true || batteryRecords.length > 0", fan_js)
 
 
 class VehicleSimulatorTest(unittest.TestCase):

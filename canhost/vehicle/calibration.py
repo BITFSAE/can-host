@@ -43,6 +43,14 @@ CALIB_ABORT_CONTROLLER_TEMP_C = 68.0
 FAN_CALIB_BATTERY_CAP_CURRENT_A = 8.0
 FAN_CALIB_DCDC_CAP_CURRENT_A = 18.0
 
+# PDM 读数稳定性只用于判断测点是否适合生成推荐上限，不是安全保护。
+# 整车背景负载会有正常波动；超过该门槛时保留并标记测量结果、继续扫频，
+# 但不让该点进入自动推荐。真正需要立即停止的条件仍由 _watchdog/
+# _safety_error 中的电流、温度、供电和遥测新鲜度硬门槛负责。
+CALIB_QUALITY_MIN_SAMPLES = 10
+CALIB_QUALITY_MAX_STD_CURRENT_A = 0.10
+CALIB_QUALITY_MAX_STD_POWER_W = 3.0
+
 
 def _fresh_age(value: Any, limit_s: float) -> bool:
     """Return True only for a finite, non-negative telemetry age."""
@@ -75,6 +83,7 @@ class FanCalibrationSession:
         self.current_duty: list[int] = [0, 0]
         self.baseline: dict[str, float] = {}
         self.records: list[dict[str, Any]] = []
+        self.quality_warnings: list[dict[str, Any]] = []
         self.run_params: dict[str, Any] = {}
         self.raw_samples: list[dict[str, Any]] = []
         self.baseline_raw_samples: list[dict[str, Any]] = []
@@ -133,7 +142,8 @@ class FanCalibrationSession:
             if not 0 < duty <= 100:
                 continue
             current = rec.get("current_a")
-            current_ok = (isinstance(current, (int, float))
+            quality_ok = rec.get("quality_ok", True) is not False
+            current_ok = (quality_ok and isinstance(current, (int, float))
                           and math.isfinite(current) and current <= threshold)
             if channel == 1:
                 rpm_values = (rec.get("rpm1"), rec.get("rpm2"))
@@ -402,6 +412,7 @@ class FanCalibrationSession:
             self.raw_samples.clear()
             self.baseline_raw_samples.clear()
             self.baseline_history.clear()
+            self.quality_warnings.clear()
             self.baseline_id = 0
             self._thread = threading.Thread(
                 target=self._run_sweep,
@@ -538,6 +549,10 @@ class FanCalibrationSession:
                 "records": list(self.records),
                 "run_params": dict(self.run_params),
                 "baseline_id": self.baseline_id,
+                "quality_warnings": list(self.quality_warnings),
+                "export_available": bool(self.run_params) and self.status != "idle",
+                "raw_sample_count": len(self.raw_samples),
+                "baseline_raw_sample_count": len(self.baseline_raw_samples),
             }
 
     def is_running(self) -> bool:
@@ -554,7 +569,9 @@ class FanCalibrationSession:
                 "Bus_Voltage_V", "Bus_Current_A", "Bus_Power_W",
                 "Delta_Current_A", "Delta_Power_W",
                 "Baseline_ID", "Baseline_Current_A", "Baseline_Power_W",
-                "Motor_Temp_C", "Controller_Temp_C", "Timestamp"
+                "Motor_Temp_C", "Controller_Temp_C", "Timestamp",
+                "Sample_Count", "Std_Current_A", "Std_Power_W",
+                "Quality_OK", "Quality_Note", "Session_Status", "Abort_Reason"
             ])
             for r in self.records:
                 writer.writerow([
@@ -566,7 +583,17 @@ class FanCalibrationSession:
                     r.get("baseline_id"), r.get("baseline_current_a"), r.get("baseline_power_w"),
                     r.get("motor_temp_c"), r.get("controller_temp_c"),
                     r.get("timestamp"),
+                    r.get("sample_count"), r.get("std_current_a"), r.get("std_power_w"),
+                    r.get("quality_ok"), r.get("quality_note", ""),
+                    self.status, self.abort_reason,
                 ])
+            if not self.records:
+                # 即使在首个基线或首个测点就中止，也要给 CSV 留下一条可检索的
+                # 会话诊断记录；逐样本详情由 JSON 导出提供。
+                writer.writerow(["", self.channel, self.tier, "", "", "", "", "", "",
+                                 "", "", "", "", "", self.baseline_id, "", "", "", "", "",
+                                 0, "", "", False, "未形成完整测点",
+                                 self.status, self.abort_reason])
             return output.getvalue()
 
     def export_json(self) -> str:
@@ -582,6 +609,7 @@ class FanCalibrationSession:
                 "raw_samples": list(self.raw_samples),
                 # 基线的逐样本原始数据必须一起导出，否则无法复核每条记录关联的基线。
                 "baseline_raw_samples": list(self.baseline_raw_samples),
+                "quality_warnings": list(self.quality_warnings),
                 "exported_at": time.time(),
             }
             return json.dumps(data, ensure_ascii=False, indent=2)
@@ -629,7 +657,7 @@ class FanCalibrationSession:
     @staticmethod
     def _stable_summary(samples: list[dict[str, float]]) -> tuple[dict[str, float], bool]:
         """返回中位数/离散度；数量不足或波动过大时标记不稳定。"""
-        if len(samples) < 10:
+        if len(samples) < CALIB_QUALITY_MIN_SAMPLES:
             return {"median_v": 0.0, "median_i": 0.0, "median_p": 0.0,
                     "std_i": 0.0, "std_p": 0.0}, False
         median_v = statistics.median(s["v"] for s in samples)
@@ -637,7 +665,8 @@ class FanCalibrationSession:
         median_p = statistics.median(s["p"] for s in samples)
         std_i = statistics.pstdev(s["i"] for s in samples)
         std_p = statistics.pstdev(s["p"] for s in samples)
-        stable = std_i <= 0.05 and std_p <= 2.0
+        stable = (std_i <= CALIB_QUALITY_MAX_STD_CURRENT_A
+                  and std_p <= CALIB_QUALITY_MAX_STD_POWER_W)
         return {"median_v": median_v, "median_i": median_i, "median_p": median_p,
                 "std_i": std_i, "std_p": std_p}, stable
 
@@ -678,8 +707,6 @@ class FanCalibrationSession:
                 return None, error
             samples.extend(extra)
             summary, stable = self._stable_summary(samples)
-            if not samples or not stable:
-                return None, "0% 基线样本不足或功率未稳定"
         with self.lock:
             self.baseline_id += 1
             baseline_id = self.baseline_id
@@ -705,14 +732,30 @@ class FanCalibrationSession:
                 "std_current_a": round(summary["std_i"], 3),
                 "std_power_w": round(summary["std_p"], 3),
                 "sample_count": len(samples),
+                "quality_ok": stable,
+                "quality_note": ("" if stable else
+                                 "背景负载波动较大；保留基线并继续扫频，相关测点不用于自动推荐"),
                 "captured_at": round(time.time(), 3),
             })
+            if not stable:
+                self.quality_warnings.append({
+                    "kind": "baseline", "baseline_id": baseline_id,
+                    "step": step_label, "direction": direction,
+                    "sample_count": len(samples),
+                    "std_current_a": round(summary["std_i"], 3),
+                    "std_power_w": round(summary["std_p"], 3),
+                    "message": "0% 基线波动较大",
+                })
+        if len(samples) < CALIB_QUALITY_MIN_SAMPLES:
+            return None, (f"0% 基线有效样本不足（{len(samples)}/"
+                          f"{CALIB_QUALITY_MIN_SAMPLES}）；诊断数据可导出")
         return {
             "baseline_id": baseline_id,
             "voltage_v": round(summary["median_v"], 3),
             "current_a": round(summary["median_i"], 3),
             "power_w": round(summary["median_p"], 2),
             "sample_count": len(samples),
+            "quality_ok": stable,
         }, None
 
     def _abort_and_return(self, reason: str) -> None:
@@ -972,11 +1015,31 @@ class FanCalibrationSession:
                 time.sleep(0.1)
             samples.extend(extra)
             summary, stable = self._stable_summary(samples)
-            if not samples or not stable:
-                self._abort_and_return(f"步骤 {step} 数据波动过大或样本不足，中止标定")
+            if len(samples) < CALIB_QUALITY_MIN_SAMPLES:
+                self._abort_and_return(
+                    f"步骤 {step} 有效样本不足（{len(samples)}/"
+                    f"{CALIB_QUALITY_MIN_SAMPLES}），中止标定；诊断数据可导出")
                 return None
 
         last = samples[-1]
+        baseline_quality_ok = baseline.get("quality_ok", True) is not False
+        quality_ok = stable and baseline_quality_ok
+        quality_notes: list[str] = []
+        if not stable:
+            quality_notes.append("测点功率波动较大")
+        if not baseline_quality_ok:
+            quality_notes.append("关联的0%基线波动较大")
+        quality_note = "；".join(quality_notes)
+        if quality_notes:
+            with self.lock:
+                self.quality_warnings.append({
+                    "kind": "step", "step": step, "direction": direction,
+                    "duty1_pct": duty1, "duty2_pct": duty2,
+                    "baseline_id": baseline_id, "sample_count": len(samples),
+                    "std_current_a": round(summary["std_i"], 3),
+                    "std_power_w": round(summary["std_p"], 3),
+                    "message": quality_note,
+                })
         return {
             "step": step,
             "channel": self.channel,
@@ -995,6 +1058,9 @@ class FanCalibrationSession:
             "delta_power_w": round(max(0.0, summary["median_p"] - baseline.get("power_w", 0.0)), 2),
             "std_current_a": round(summary["std_i"], 3),
             "std_power_w": round(summary["std_p"], 3),
+            "sample_count": len(samples),
+            "quality_ok": quality_ok,
+            "quality_note": quality_note,
             "baseline_voltage_v": baseline.get("voltage_v"),
             "baseline_current_a": baseline.get("current_a"),
             "baseline_power_w": baseline.get("power_w"),
@@ -1025,6 +1091,7 @@ class FanCalibrationSession:
                     "current_a": baseline["current_a"],
                     "power_w": baseline["power_w"],
                     "sample_count": baseline.get("sample_count", 0),
+                    "quality_ok": baseline.get("quality_ok", True),
                 }
 
             directions: list[tuple[str, list[int]]] = [("up", steps), ("down", list(reversed(steps)))]
@@ -1047,6 +1114,7 @@ class FanCalibrationSession:
                                 "current_a": fresh["current_a"],
                                 "power_w": fresh["power_w"],
                                 "sample_count": fresh.get("sample_count", 0),
+                                "quality_ok": fresh.get("quality_ok", True),
                             }
 
                     d1 = target_duty if channel == 1 else 0
@@ -1118,6 +1186,7 @@ class BatteryFanCalibrationSession:
         self.baseline_history: list[dict[str, float]] = []
         self.baseline_id = 0
         self.records: list[dict[str, Any]] = []
+        self.quality_warnings: list[dict[str, Any]] = []
         # None means that the sweep did not produce a safe, rotating point for
         # that budget.  Never turn absence of evidence into a 5% recommendation.
         self.suggested_caps: dict[str, int | None] = {
@@ -1139,7 +1208,8 @@ class BatteryFanCalibrationSession:
             if not (isinstance(duty, (int, float)) and math.isfinite(duty)
                     and float(duty).is_integer() and 0 < duty <= 100):
                 continue
-            power_ok = (isinstance(power, (int, float)) and math.isfinite(power)
+            power_ok = (record.get("quality_ok", True) is not False
+                        and isinstance(power, (int, float)) and math.isfinite(power)
                         and power <= budget_w)
             rpm_ok = (isinstance(rpm, (int, float)) and math.isfinite(rpm) and rpm > 0)
             observations.setdefault(int(duty), []).append((power_ok, rpm_ok))
@@ -1254,6 +1324,7 @@ class BatteryFanCalibrationSession:
             self.baseline_history.clear()
             self.baseline_id = 0
             self.records.clear()
+            self.quality_warnings.clear()
             self.suggested_caps = {"chroma_cap_pct": None, "hv_cap_pct": None}
             self.run_params = {"steps": steps, "hold_s": hold_s, "max_current_a": max_current_a}
             self._thread = threading.Thread(target=self._run, args=(steps, hold_s, max_current_a),
@@ -1290,7 +1361,7 @@ class BatteryFanCalibrationSession:
 
     @staticmethod
     def _median(samples: list[dict[str, float]]) -> dict[str, float] | None:
-        if len(samples) < 10:
+        if len(samples) < CALIB_QUALITY_MIN_SAMPLES:
             return None
         result = {key: statistics.median(sample[key] for sample in samples) for key in ("v", "i", "p", "rpm")}
         result["std_i"] = statistics.pstdev(sample["i"] for sample in samples)
@@ -1411,15 +1482,36 @@ class BatteryFanCalibrationSession:
             return None, error
         samples, error = self._samples(2.0, max_current_a, step, 0)
         summary = self._median(samples)
-        if error or summary is None or summary["std_i"] > 0.05 or summary["std_p"] > 2.0:
-            return None, error or "0%基线样本不足或功率未稳定"
+        if not error and (summary is None
+                          or summary["std_i"] > CALIB_QUALITY_MAX_STD_CURRENT_A
+                          or summary["std_p"] > CALIB_QUALITY_MAX_STD_POWER_W):
+            extra, extra_error = self._samples(
+                self.RETRY_SAMPLE_S, max_current_a, step, 0)
+            samples.extend(extra)
+            summary = self._median(samples)
+            error = error or extra_error
+        if error or summary is None:
+            return None, error or (f"0%基线有效样本不足（{len(samples)}/"
+                                   f"{CALIB_QUALITY_MIN_SAMPLES}）；诊断记录可导出")
+        quality_ok = (summary["std_i"] <= CALIB_QUALITY_MAX_STD_CURRENT_A
+                      and summary["std_p"] <= CALIB_QUALITY_MAX_STD_POWER_W)
         with self.lock:
             self.baseline_id += 1
             measured = {key: round(summary[key], 3) for key in ("v", "i", "p", "rpm", "std_i", "std_p")}
             measured["baseline_id"] = self.baseline_id
             measured["step"] = step
+            measured["sample_count"] = len(samples)
+            measured["quality_ok"] = quality_ok
             self.baseline = dict(measured)
             self.baseline_history.append(dict(measured))
+            if not quality_ok:
+                self.quality_warnings.append({
+                    "kind": "baseline", "baseline_id": self.baseline_id,
+                    "step": step, "sample_count": len(samples),
+                    "std_current_a": round(summary["std_i"], 3),
+                    "std_power_w": round(summary["std_p"], 3),
+                    "message": "0%基线波动较大",
+                })
         return measured, None
 
     def _finish_abort(self, reason: str) -> dict[str, Any]:
@@ -1486,8 +1578,9 @@ class BatteryFanCalibrationSession:
                 samples, error = self._samples(
                     max(1.0, hold_s - 2.0), max_current_a, index, int(duty))
                 summary = self._median(samples)
-                if not error and (summary is None or summary["std_i"] > 0.05
-                                  or summary["std_p"] > 2.0):
+                if not error and (summary is None
+                                  or summary["std_i"] > CALIB_QUALITY_MAX_STD_CURRENT_A
+                                  or summary["std_p"] > CALIB_QUALITY_MAX_STD_POWER_W):
                     # 与整车风扇会话对齐：最小 hold 时采样窗口只有 1s，
                     # 样本数或波动卡在门槛上时延长一轮再判，不把瞬态当成稳态。
                     extra, extra_error = self._samples(
@@ -1495,9 +1588,22 @@ class BatteryFanCalibrationSession:
                     samples.extend(extra)
                     summary = self._median(samples)
                     error = error or extra_error
-                if error or summary is None or summary["std_i"] > 0.05 or summary["std_p"] > 2.0:
-                    self._finish_abort(error or f"步骤{index}样本不足或功率未稳定")
+                if error or summary is None:
+                    self._finish_abort(error or
+                                       f"步骤{index}有效样本不足（{len(samples)}/"
+                                       f"{CALIB_QUALITY_MIN_SAMPLES}）；诊断记录可导出")
                     return
+                step_quality_ok = (
+                    summary["std_i"] <= CALIB_QUALITY_MAX_STD_CURRENT_A
+                    and summary["std_p"] <= CALIB_QUALITY_MAX_STD_POWER_W)
+                baseline_quality_ok = baseline.get("quality_ok", True) is not False
+                quality_ok = step_quality_ok and baseline_quality_ok
+                quality_notes: list[str] = []
+                if not step_quality_ok:
+                    quality_notes.append("测点功率波动较大")
+                if not baseline_quality_ok:
+                    quality_notes.append("关联的0%基线波动较大")
+                quality_note = "；".join(quality_notes)
                 record = {
                     "step": index, "duty_pct": int(duty), "rpm": round(summary["rpm"]),
                     "voltage_v": round(summary["v"], 3), "current_a": round(summary["i"], 3),
@@ -1509,10 +1615,22 @@ class BatteryFanCalibrationSession:
                     "baseline_id": int(baseline["baseline_id"]),
                     "std_current_a": round(summary["std_i"], 3),
                     "std_power_w": round(summary["std_p"], 3),
+                    "sample_count": len(samples),
+                    "quality_ok": quality_ok,
+                    "quality_note": quality_note,
                 }
                 with self.lock:
                     self.current_step = index
                     self.records.append(record)
+                    if quality_notes:
+                        self.quality_warnings.append({
+                            "kind": "step", "step": index,
+                            "duty_pct": int(duty), "baseline_id": int(baseline["baseline_id"]),
+                            "sample_count": len(samples),
+                            "std_current_a": round(summary["std_i"], 3),
+                            "std_power_w": round(summary["std_p"], 3),
+                            "message": quality_note,
+                        })
             with self._stop_lock:
                 with self.lock:
                     if self.status != "running" or self._stop_event.is_set():
@@ -1588,6 +1706,8 @@ class BatteryFanCalibrationSession:
                     "records": list(self.records),
                     "suggested_caps": dict(self.suggested_caps), "baseline": dict(self.baseline),
                     "baseline_history": list(self.baseline_history),
+                    "quality_warnings": list(self.quality_warnings),
+                    "export_available": bool(self.run_params) and self.status != "idle",
                     "run_params": dict(self.run_params)}
 
     def is_running(self) -> bool:
@@ -1600,7 +1720,14 @@ class BatteryFanCalibrationSession:
             writer = csv.DictWriter(output, fieldnames=[
                 "step", "duty_pct", "rpm", "voltage_v", "current_a", "power_w",
                 "delta_current_a", "delta_power_w", "baseline_current_a", "baseline_power_w",
-                "baseline_id", "std_current_a", "std_power_w"])
+                "baseline_id", "std_current_a", "std_power_w", "sample_count",
+                "quality_ok", "quality_note", "session_status", "abort_reason"])
             writer.writeheader()
-            writer.writerows(self.records)
+            for record in self.records:
+                writer.writerow({**record, "session_status": self.status,
+                                 "abort_reason": self.abort_reason})
+            if not self.records:
+                writer.writerow({"quality_ok": False, "quality_note": "未形成完整测点",
+                                 "session_status": self.status,
+                                 "abort_reason": self.abort_reason})
             return output.getvalue()

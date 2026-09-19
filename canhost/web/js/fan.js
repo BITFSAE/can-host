@@ -578,7 +578,8 @@ function renderFan() {
     // 扫频中的绿色与旁边进度条的运行色一致。
     running: { text: `扫频中 (${calib.current_step || 0}/${calib.total_steps || 0})`, cls: "ok" },
     aborted: { text: `已中止：${calib.abort_reason || "未知"}`, cls: "bad" },
-    completed: { text: "已完成", cls: "ok" },
+    completed: { text: (calib.quality_warnings || []).length
+      ? `已完成 · ${(calib.quality_warnings || []).length} 项待复核` : "已完成", cls: "ok" },
     stale: { text: "旧连接记录", cls: "neutral" },
   };
   const tagInfo = tagMap[calibStatus] || { text: calibStatus, cls: "neutral" };
@@ -636,8 +637,9 @@ function renderFan() {
     $("#commitFanCapsButton").title = firmwareCalibCompleted ? "" : "需先完成并停止固件标定会话";
   }
   if ($("#clearFanCapsButton")) $("#clearFanCapsButton").disabled = !available || calibRunning;
-  if ($("#exportFanCalibCsv")) $("#exportFanCalibCsv").disabled = records.length === 0;
-  if ($("#exportFanCalibJson")) $("#exportFanCalibJson").disabled = records.length === 0;
+  const fanExportAvailable = calib.export_available === true || records.length > 0;
+  if ($("#exportFanCalibCsv")) $("#exportFanCalibCsv").disabled = !fanExportAvailable;
+  if ($("#exportFanCalibJson")) $("#exportFanCalibJson").disabled = !fanExportAvailable;
 
   const tbody = $("#fanCalibTableBody");
   if (tbody) {
@@ -646,7 +648,7 @@ function renderFan() {
     } else {
       tbody.innerHTML = records.map(r => `
         <tr>
-          <td><strong>#${r.step}</strong></td>
+          <td title="${r.quality_note || ""}"><strong>#${r.step}${r.quality_ok === false ? " · 待复核" : ""}</strong></td>
           <td>${r.duty1_pct}%</td>
           <td>${r.duty2_pct}%</td>
           <td>${r.rpm1} / ${r.rpm2} / ${r.rpm3}</td>
@@ -710,7 +712,9 @@ function renderFan() {
   text("#batteryFanCalibProgress", batterySession.status === "running"
     ? `扫频中 · 步骤 ${batterySession.current_step || 0}/${batterySession.total_steps || 0} · 已记录 ${batteryRecords.length} 点`
     : batterySession.status === "completed"
-      ? (suggested.chroma_cap_pct == null || suggested.hv_cap_pct == null
+      ? ((batterySession.quality_warnings || []).length
+        ? `扫频完成 · ${(batterySession.quality_warnings || []).length} 项波动记录已保留并排除出推荐`
+        : suggested.chroma_cap_pct == null || suggested.hv_cap_pct == null
         ? "扫频完成，但没有同时满足转速与功率预算的有效点"
         : `扫频完成 · 建议 35W ${suggested.chroma_cap_pct}% / 70W ${suggested.hv_cap_pct}%`)
       : batterySession.status === "aborted" ? `已中止：${batterySession.abort_reason || "未知原因"}`
@@ -771,7 +775,9 @@ function renderFan() {
     $("#batteryFanAutoStartButton").title = batteryStartReady ? "" : batteryStartHint;
   }
   if ($("#batteryFanAutoStopButton")) $("#batteryFanAutoStopButton").disabled = batterySession.status !== "running";
-  if ($("#batteryFanExportButton")) $("#batteryFanExportButton").disabled = batteryRecords.length === 0;
+  if ($("#batteryFanExportButton")) {
+    $("#batteryFanExportButton").disabled = !(batterySession.export_available === true || batteryRecords.length > 0);
+  }
 }
 
 function renderFanCalibProgress(session, running) {
@@ -794,7 +800,10 @@ function renderFanCalibProgress(session, running) {
   } else if (status === "aborted") {
     label.textContent = `已中止：${session?.abort_reason || "未知原因"}`;
   } else if (status === "completed") {
-    label.textContent = "扫描完成 · 核对下方推荐上限后再保存";
+    const warningCount = Number(session?.quality_warnings?.length || 0);
+    label.textContent = warningCount > 0
+      ? `扫描完成 · ${warningCount} 项波动记录已保留并排除出自动推荐，请导出复核`
+      : "扫描完成 · 核对下方推荐上限后再保存";
   } else {
     label.textContent = "尚未开始扫描";
   }
