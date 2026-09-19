@@ -19,9 +19,10 @@ from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                            TOOL_PROTOCOL_VERSION, BmsProtocol, build_command, command_ack_matches,
-                           frame_name)
+                           frame_name, is_can1_slave_frame)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
                        build_bms_fan_command, bms_fan_ack_matches, canb_frame_name,
+                       CANB_ONLY_EXT_IDS, CANB_ONLY_NODE_STD_IDS,
                        FAN_COMMAND_ID, BMS_FAN_COMMAND_ID)
 from .monitor import CanMonitor, normalize_message_spec
 from .vehicle.protocol import VehicleProtocol
@@ -82,6 +83,10 @@ class CanService:
         self.bench_last_tx_error_time = 0.0
         self.protocol = self._new_protocol()
         self.monitor = CanMonitor(self._monitor_frame_name)
+        # 疑似接反判定只统计“对侧独有帧”的接收：CAN1 档案收到整车 CANB 节点帧，
+        # 或 CANB 档案收到从控逐串帧。模拟 / 回放 / 台架模式不参与。
+        self._bus_evidence: dict[str, Any] = {"can1_count": 0, "can1_last": None,
+                                               "canb_count": 0, "canb_last": None}
         self.monitor_tx_tasks: dict[str, dict[str, Any]] = {}
         self.monitor_tx_stop = threading.Event()
         self.monitor_tx_thread: threading.Thread | None = None
@@ -123,6 +128,8 @@ class CanService:
             self.monitor.clear()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
+            self._bus_evidence = {"can1_count": 0, "can1_last": None,
+                                  "canb_count": 0, "canb_last": None}
             self.connection.update({"connected": False, "mode": mode, "channel": channel,
                                     "bitrate": bitrate, "bus_profile": profile, "status": "正在连接", "error": None})
         try:
@@ -628,6 +635,9 @@ class CanService:
 
     def _connection_snapshot_locked(self) -> dict[str, Any]:
         connection = dict(self.connection)
+        mismatch = self._bus_mismatch_locked()
+        if mismatch:
+            connection["bus_mismatch"] = mismatch
         if connection.get("mode") == "replay":
             connection["replay"] = {
                 "position": round(self.replay_position, 3), "duration": round(self.replay_duration, 3),
@@ -641,6 +651,40 @@ class CanService:
         elif self.last_record_path:
             connection["last_recording"] = {"path": self.last_record_path}
         return connection
+
+    def _note_bus_evidence_locked(self, frame: CanFrame) -> None:
+        """Record receive-side frames that only exist on one of the two buses."""
+        if self.connection.get("mode") != "pcan" or frame.direction != "rx":
+            return
+        now = time.monotonic()
+        if is_can1_slave_frame(frame.arbitration_id, frame.is_extended_id):
+            self._bus_evidence["can1_count"] += 1
+            self._bus_evidence["can1_last"] = now
+        elif ((not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS)
+              or (frame.is_extended_id and frame.arbitration_id in CANB_ONLY_EXT_IDS)):
+            self._bus_evidence["canb_count"] += 1
+            self._bus_evidence["canb_last"] = now
+
+    def _bus_mismatch_locked(self) -> dict[str, Any] | None:
+        """Suspected CAN1/CANB wiring swap on the current real PCAN connection.
+
+        提示用途，不做连接锁定：只在持续收到对侧独有帧时报告，
+        证据停止 3 秒后自动消失。
+        """
+        if self.connection.get("mode") != "pcan" or not self.connection.get("connected"):
+            return None
+        profile = self.connection.get("bus_profile")
+        expected = "can1" if profile == "can1" else "canb" if profile in ("canb", "canb_legacy") else None
+        if expected is None:
+            return None
+        detected = "canb" if expected == "can1" else "can1"
+        count = int(self._bus_evidence[f"{detected}_count"])
+        last = self._bus_evidence[f"{detected}_last"]
+        if count < 2 or last is None or time.monotonic() - last > 3.0:
+            return None
+        return {"expected": expected, "detected": detected,
+                "evidence_count": count,
+                "evidence_age": round(time.monotonic() - last, 2)}
 
     def _monitor_snapshot_locked(self) -> dict[str, Any]:
         snapshot = self.monitor.snapshot()
@@ -696,9 +740,13 @@ class CanService:
     def quick_snapshot(self) -> dict[str, Any]:
         """Small state polled by the always-visible quick-value strip."""
         with self.lock:
-            return {"connection": {key: self.connection.get(key) for key in
-                                   ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error",
-                                    "rx_count", "tx_count")},
+            connection = {key: self.connection.get(key) for key in
+                          ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error",
+                           "rx_count", "tx_count")}
+            mismatch = self._bus_mismatch_locked()
+            if mismatch:
+                connection["bus_mismatch"] = mismatch
+            return {"connection": connection,
                     **self.protocol.quick_values()}
 
     def _start_bench(self, profile: str) -> None:
@@ -1487,6 +1535,7 @@ class CanService:
             self._accept_frame_locked(frame)
 
     def _accept_frame_locked(self, frame: CanFrame, *, record: bool = True) -> None:
+        self._note_bus_evidence_locked(frame)
         self.protocol.ingest(frame)
         self.monitor.ingest(frame)
         if record:

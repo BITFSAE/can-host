@@ -102,6 +102,12 @@ if CHROMA_DERIVED_STD_IDS & CANB_OCCUPIED_WITHOUT_CHROMA:
         CHROMA_DERIVED_STD_IDS & CANB_OCCUPIED_WITHOUT_CHROMA))
     raise RuntimeError(f"Chroma 节点基准与现有 CANB ID 冲突：{occupied}")
 
+# 只在整车 CANB 上存在的节点帧。真实 PCAN 连接按 CAN1 工作时收到这些 ID，
+# 基本可以判定适配器实际接在 CANB 上。IVT 0x512..0x519 不参与判定：
+# 它同时登记在整车 DBC 中，而 IVT 实体接在 CAN1。
+CANB_ONLY_NODE_STD_IDS = frozenset(CANB_OCCUPIED_WITHOUT_CHROMA | CHROMA_DERIVED_STD_IDS)
+CANB_ONLY_EXT_IDS = frozenset({0x18FF50E5})  # Legacy 充电机反馈
+
 CANB_IDS = {
     0x071: "胎温测点 1-4（轮位待确认）",
     0x072: "胎温测点 5-8（轮位待确认）",

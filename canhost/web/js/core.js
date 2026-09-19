@@ -37,6 +37,7 @@ var state = {
   saveWatch: null,
   cellRefs: null,
   pcanScanInFlight: null,
+  busMismatchPrompted: { main: null, vehicle: null },
 };
 window.state = state;
 
@@ -788,6 +789,8 @@ function renderBusDock() {
 function updateScopeStrips(main, vehicle) {
   const mainConnected = main.connected === true;
   const vehicleConnected = vehicle.connected === true;
+  const mainMismatch = main.bus_mismatch || null;
+  const vehicleMismatch = vehicle.bus_mismatch || null;
   let frameSource = state.frameSource || "main";
   const selectedReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
   if (!selectedReady && (mainConnected || vehicleConnected)) {
@@ -799,11 +802,38 @@ function updateScopeStrips(main, vehicle) {
     button.disabled = button.dataset.source === "vehicle" ? !vehicleConnected : !mainConnected;
   });
 
-  const can1Writable = mainConnected && main.bus_profile === "can1";
+  // 疑似接反时按“不可写”呈现：F405 不接受来自 CANB 的工具命令，
+  // 此时保持按钮可用只会让操作者误以为命令能送达。
+  const can1Writable = mainConnected && main.bus_profile === "can1" && !mainMismatch;
   const controlStrip = $("#controlScopeStrip");
   if (controlStrip) controlStrip.hidden = can1Writable;
   document.body.classList.toggle("control-write-locked", !can1Writable);
   $("#page-control")?.classList.toggle("scope-warning", !can1Writable && (mainConnected || vehicleConnected));
+  if (!can1Writable) {
+    text("#controlScopeTitle", mainMismatch ? "CAN1 写命令不可用 · 总线疑似接反" : "CAN1 写命令不可用");
+    text("#controlScopeDetail", mainMismatch
+      ? busMismatchDetail("当前主连接", mainMismatch)
+      : "只有 CAN1 主监视连接才能发送 F405 工具命令");
+  }
+
+  // 数据页顶部连接提示：未连接时说明需要什么连接，疑似接反时醒目提醒，正常后隐藏。
+  const mainWaiting = !mainConnected;
+  setBmsScopeStrip("#overviewScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
+    "点击底部“CAN1”或“BMS CANB”按钮连接后开始监视。");
+  setBmsScopeStrip("#cellsScopeStrip", mainWaiting, mainMismatch, "等待 CAN1 连接",
+    "逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。");
+  setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
+    "连接 CAN1 或 BMS CANB 后显示故障码、告警等级与历史记录。");
+
+  const vehicleUsable = vehicleConnected
+    && ["canb", "canb_legacy"].includes(vehicle.bus_profile) && !vehicleMismatch;
+  updateScopeStrip("#vehicleScopeStrip", vehicleUsable ? { show: false } : {
+    show: true, danger: !!vehicleMismatch,
+    title: vehicleMismatch ? "总线疑似接反" : "等待整车 CANB 连接",
+    detail: vehicleMismatch
+      ? busMismatchDetail("整车连接", vehicleMismatch)
+      : "点击底部“整车 CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。",
+  });
 
   // 可写判定必须与风扇页 fanConnectionAvailable() 一致：内置模拟通道只提供数据，
   // 命令发不出去，此时仍要显示提示并把写入按钮锁上。
@@ -811,16 +841,63 @@ function updateScopeStrips(main, vehicle) {
     && vehicle.bus_profile !== "canb_legacy";
   const fanStrip = $("#fanScopeStrip");
   if (fanStrip) {
-    fanStrip.hidden = fanWritable;
-    text("#fanScopeDetail", fanWritable
+    fanStrip.hidden = fanWritable && !vehicleMismatch;
+    text("#fanScopeDetail", fanWritable && !vehicleMismatch
       ? ""
-      : !vehicleConnected
-        ? "点击底部“整车 CANB”直接连接后，才能查看和命令风扇"
-        : vehicle.mode !== "pcan"
-          ? "当前整车连接是内置模拟数据；风扇命令需要实体 CANB"
-          : "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s");
+      : vehicleMismatch
+        ? busMismatchDetail("整车连接", vehicleMismatch)
+        : !vehicleConnected
+          ? "点击底部“整车 CANB”直接连接后，才能查看和命令风扇"
+          : vehicle.mode !== "pcan"
+            ? "当前整车连接是内置模拟数据；风扇命令需要实体 CANB"
+            : "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s");
   }
   document.body.classList.toggle("fan-write-locked", !fanWritable);
+
+  maybeNotifyBusMismatch("main", "BMS 主连接", main);
+  maybeNotifyBusMismatch("vehicle", "整车连接", vehicle);
+}
+
+/** 统一驱动 BMS 数据页的顶部提示条：未连接给引导，接反给醒目警示。 */
+function setBmsScopeStrip(id, waiting, mismatch, waitTitle, waitDetail) {
+  updateScopeStrip(id, waiting || mismatch ? {
+    show: true, danger: !!mismatch,
+    title: mismatch ? "总线疑似接反" : waitTitle,
+    detail: mismatch ? busMismatchDetail("BMS 主连接", mismatch) : waitDetail,
+  } : { show: false });
+}
+
+function updateScopeStrip(id, { show, danger = false, title = null, detail = null } = {}) {
+  const strip = $(id);
+  if (!strip) return;
+  strip.hidden = !show;
+  strip.classList.toggle("danger", danger);
+  if (title != null) strip.querySelector("b").textContent = title;
+  if (detail != null) strip.querySelector("small").textContent = detail;
+}
+
+function busMismatchDetail(scopeLabel, mismatch) {
+  const names = { can1: "CAN1", canb: "CANB" };
+  const evidence = mismatch.detected === "canb"
+    ? "整车 CANB 独有的节点帧（PDM / 风扇 / ECU 等）"
+    : "CAN1 从控逐串帧";
+  return `${scopeLabel}按${names[mismatch.expected]}工作，却持续收到${evidence}；PCAN 疑似实际接在${names[mismatch.detected]}上，请核对接线。`;
+}
+
+/** 疑似接反只弹窗提醒一次；同一连接不再重复打扰，其他弹窗打开时顺延。 */
+function maybeNotifyBusMismatch(slot, scopeLabel, connection) {
+  const mismatch = connection?.bus_mismatch;
+  if (!mismatch) {
+    state.busMismatchPrompted[slot] = null;
+    return;
+  }
+  const key = [connection.mode, connection.channel, connection.bus_profile,
+               connection.bitrate, mismatch.expected, mismatch.detected].join("|");
+  if (state.busMismatchPrompted[slot] === key) return;
+  if ($("dialog[open]")) return;
+  state.busMismatchPrompted[slot] = key;
+  text("#busMismatchMessage", busMismatchDetail(scopeLabel, mismatch));
+  $("#busMismatchDialog")?.showModal();
 }
 
 function renderConnection(connection) {

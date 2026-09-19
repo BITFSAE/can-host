@@ -105,6 +105,10 @@
     <div class="workspace">
       <main id="main">
         <section class="page active" id="page-overview" aria-label="运行总览">
+          <div class="scope-strip" id="overviewScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="overviewScopeTitle">等待 BMS 主连接</b><small id="overviewScopeDetail">点击底部“CAN1”或“BMS CANB”按钮连接后开始监视。</small></div>
+          </div>
           <div class="overview-status" id="overviewStatus">
             <div class="machine-state">
               <span>状态机</span><strong id="stateName">等待 CAN 数据</strong><small id="stateDescription">连接后开始监视</small>
@@ -207,6 +211,10 @@
         </section>
 
         <section class="page" id="page-cells" aria-label="电芯与温度">
+          <div class="scope-strip" id="cellsScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="cellsScopeTitle">等待 CAN1 连接</b><small id="cellsScopeDetail">逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。</small></div>
+          </div>
           <div class="cell-overview-bar">
             <dl class="cell-summary-register">
               <div><dt>电压最高</dt><dd id="gridMax">—</dd></div>
@@ -245,6 +253,10 @@
         </section>
 
         <section class="page" id="page-alarms" aria-label="故障与记录">
+          <div class="scope-strip" id="alarmsScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="alarmsScopeTitle">等待 BMS 主连接</b><small id="alarmsScopeDetail">连接 CAN1 或 BMS CANB 后显示故障码、告警等级与历史记录。</small></div>
+          </div>
           <div class="diagnostic-head">
             <div class="fault-readout"><span>统一故障码</span><b id="faultCode">等待数据</b><button class="link-button" type="button" id="copyFaultCode">复制</button></div>
             <dl><div><dt>当前等级</dt><dd id="alarmPageLevel">—</dd></div><div><dt>活动告警</dt><dd id="alarmActiveCount">—</dd></div></dl>
@@ -393,6 +405,10 @@
         </section>
 
         <section class="page" id="page-vehicle" aria-label="整车总览">
+          <div class="scope-strip" id="vehicleScopeStrip" hidden>
+            <span class="scope-strip-icon" aria-hidden="true"></span>
+            <div><b id="vehicleScopeTitle">等待整车 CANB 连接</b><small id="vehicleScopeDetail">点击底部“整车 CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。</small></div>
+          </div>
           <div class="vehicle-layout">
 
           <div class="vehicle-column">
@@ -1286,6 +1302,19 @@
       <footer>
         <button value="cancel" class="outline-button" type="submit">取消</button>
         <button type="button" class="danger-button" id="doConfirm" disabled>确认发送</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="busMismatchDialog" class="modal" data-backdrop-close>
+    <form method="dialog">
+      <header><h2>总线疑似接反</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <div class="modal-body">
+        <p class="confirm-text" id="busMismatchMessage"></p>
+        <p class="note">这只是接线提醒，不会锁定连接。请核对适配器接线，或断开后按实际总线重新连接。</p>
+      </div>
+      <footer>
+        <button value="cancel" class="action-button" type="submit">知道了</button>
       </footer>
     </form>
   </dialog>

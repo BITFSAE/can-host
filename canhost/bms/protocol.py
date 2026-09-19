@@ -139,6 +139,21 @@ IMD_STATUS_NAMES = {
 }
 
 
+def is_can1_slave_frame(arbitration_id: int, extended: bool) -> bool:
+    """从控逐串电压 / 温度帧只在 CAN1 上出现。
+
+    CANB 连接收到这类扩展帧时，基本可以判定适配器实际接在 CAN1 上；
+    用于总线接反提醒，不参与协议解码。
+    """
+    if not extended:
+        return False
+    delta = arbitration_id - CAN1_CELL_VOLT_BASE
+    if 0 <= delta <= (35 << 16) and delta & 0xFFFF == 0:
+        return True
+    delta = arbitration_id - CAN1_CELL_TEMP_BASE
+    return 0 <= delta <= (5 << 16) and delta & 0xFFFF == 0
+
+
 def frame_name(arbitration_id: int, extended: bool) -> str:
     if extended:
         delta = arbitration_id - CAN1_CELL_VOLT_BASE

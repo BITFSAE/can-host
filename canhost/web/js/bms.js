@@ -775,10 +775,20 @@ function renderControls() {
   $("#chargeModeTag").className = `tag ${charge == null ? "neutral" : charge ? "warn" : "neutral"}`;
   text("#heroChargeMode", chargeLabel);
   renderRtcReply(state.snapshot.rtc_reply || {}, runtime);
-  const connectedCan1 = connection.connected && connection.bus_profile === "can1";
+  const mismatch = connection.bus_mismatch || null;
+  const connectedCan1 = connection.connected && connection.bus_profile === "can1" && !mismatch;
   const fresh = connection.summary_age != null && connection.summary_age <= 1.5;
   const allowedState = fresh && [2, 3, 7].includes(overview.state);
-  setClass("#lockConnected", "ok", connectedCan1); setClass("#lockState", "ok", allowedState); setClass("#lockFresh", "ok", fresh);
+  setClass("#lockState", "ok", allowedState); setClass("#lockFresh", "ok", fresh);
+  // 徽标必须反映实际可用的写通道：接反或非 CAN1 时不能再显示“CAN1 已连接”。
+  setClass("#lockConnected", "ok", connectedCan1);
+  text("#lockConnected", connectedCan1 ? "CAN1 已连接"
+    : mismatch ? "CAN1 疑似接反"
+    : connection.connected ? "非 CAN1 连接" : "CAN1 未连接");
+  const lockNode = $("#lockConnected");
+  if (lockNode) lockNode.title = connectedCan1 ? "当前主连接为 CAN1"
+    : mismatch ? "通道持续收到对侧总线独有帧；F405 工具命令不会在此连接上生效"
+    : "F405 工具命令需要 CAN1 主监视连接";
 }
 
 const RTC_STATUS_NAMES = {

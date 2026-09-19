@@ -840,7 +840,12 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("整车总览", html)
         self.assertIn('class="brand-title">CAN HOST</span>', html)
         self.assertNotIn('<strong>CAN</strong><small>HOST</small>', html)
-        self.assertNotIn('id="overviewScopeStrip"', html)
+        # 数据页顶部的连接提示条与接反提醒弹窗：正常连接后自动隐藏。
+        self.assertIn('id="overviewScopeStrip"', html)
+        self.assertIn('id="cellsScopeStrip"', html)
+        self.assertIn('id="alarmsScopeStrip"', html)
+        self.assertIn('id="vehicleScopeStrip"', html)
+        self.assertIn('id="busMismatchDialog"', html)
         self.assertIn('id="connectDialog"', html)
         self.assertIn('id="connectionSettingsButton"', html)
         self.assertIn('id="saveConnectionSettings"', html)
