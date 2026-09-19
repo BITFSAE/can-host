@@ -546,7 +546,7 @@ body.is-tool-page .quick-bar { display: none; }
   background: var(--wash-faint);
 }
 .scope-strip[hidden] { display: none; }
-.scope-strip-icon { width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--ok); flex: none; box-shadow: 0 0 0 4px var(--ok-dim); }
+.scope-strip-icon { width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--idle); flex: none; }
 .scope-strip.danger .scope-strip-icon { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-dim); }
 .scope-strip > div { display: grid; gap: 1px; min-width: 0; }
 .scope-strip b { overflow: hidden; color: var(--text); font-family: var(--cjk); font-size: var(--fs-label); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }

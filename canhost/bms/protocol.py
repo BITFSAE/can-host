@@ -154,6 +154,12 @@ def is_can1_slave_frame(arbitration_id: int, extended: bool) -> bool:
     return 0 <= delta <= (5 << 16) and delta & 0xFFFF == 0
 
 
+def is_can1_bus_signature(arbitration_id: int, extended: bool) -> bool:
+    """Return whether a frame is an exact CAN1-only BMS signature."""
+    return extended and (arbitration_id in CAN1_IDS
+                         or is_can1_slave_frame(arbitration_id, extended))
+
+
 def frame_name(arbitration_id: int, extended: bool) -> str:
     if extended:
         delta = arbitration_id - CAN1_CELL_VOLT_BASE

@@ -782,7 +782,7 @@ function renderControls() {
   setClass("#lockState", "ok", allowedState); setClass("#lockFresh", "ok", fresh);
   // 徽标必须反映实际可用的写通道：接反或非 CAN1 时不能再显示“CAN1 已连接”。
   setClass("#lockConnected", "ok", connectedCan1);
-  text("#lockConnected", connectedCan1 ? "CAN1 已连接"
+  text("#lockConnectedText", connectedCan1 ? "CAN1 已连接"
     : mismatch ? "CAN1 疑似接反"
     : connection.connected ? "非 CAN1 连接" : "CAN1 未连接");
   const lockNode = $("#lockConnected");

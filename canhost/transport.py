@@ -19,7 +19,7 @@ from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD
                   compare_readback, expected_bms_can1_config, resolve_bms_can1_periods)
 from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, CAN1_TOOL_IDS,
                            TOOL_PROTOCOL_VERSION, BmsProtocol, build_command, command_ack_matches,
-                           frame_name, is_can1_slave_frame)
+                           frame_name, is_can1_bus_signature)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
                        build_bms_fan_command, bms_fan_ack_matches, canb_frame_name,
                        CANB_ONLY_EXT_IDS, CANB_ONLY_NODE_STD_IDS,
@@ -27,6 +27,10 @@ from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
 from .monitor import CanMonitor, normalize_message_spec
 from .vehicle.protocol import VehicleProtocol
 from .vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSession
+
+
+BUS_EVIDENCE_WINDOW_S = 2.0
+BUS_EVIDENCE_STALE_S = 3.0
 
 
 class CanService:
@@ -84,7 +88,7 @@ class CanService:
         self.protocol = self._new_protocol()
         self.monitor = CanMonitor(self._monitor_frame_name)
         # 疑似接反判定只统计“对侧独有帧”的接收：CAN1 档案收到整车 CANB 节点帧，
-        # 或 CANB 档案收到从控逐串帧。模拟 / 回放 / 台架模式不参与。
+        # 或 CANB 档案收到 F405 / 从控 CAN1 专属帧。模拟 / 回放 / 台架模式不参与。
         self._bus_evidence: dict[str, Any] = {"can1_count": 0, "can1_last": None,
                                                "canb_count": 0, "canb_last": None}
         self.monitor_tx_tasks: dict[str, dict[str, Any]] = {}
@@ -657,13 +661,21 @@ class CanService:
         if self.connection.get("mode") != "pcan" or frame.direction != "rx":
             return
         now = time.monotonic()
-        if is_can1_slave_frame(frame.arbitration_id, frame.is_extended_id):
-            self._bus_evidence["can1_count"] += 1
-            self._bus_evidence["can1_last"] = now
+        if is_can1_bus_signature(frame.arbitration_id, frame.is_extended_id):
+            kind = "can1"
         elif ((not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS)
               or (frame.is_extended_id and frame.arbitration_id in CANB_ONLY_EXT_IDS)):
-            self._bus_evidence["canb_count"] += 1
-            self._bus_evidence["canb_last"] = now
+            kind = "canb"
+        else:
+            return
+        last_key = f"{kind}_last"
+        count_key = f"{kind}_count"
+        last = self._bus_evidence[last_key]
+        self._bus_evidence[count_key] = (
+            int(self._bus_evidence[count_key]) + 1
+            if last is not None and now - last <= BUS_EVIDENCE_WINDOW_S else 1
+        )
+        self._bus_evidence[last_key] = now
 
     def _bus_mismatch_locked(self) -> dict[str, Any] | None:
         """Suspected CAN1/CANB wiring swap on the current real PCAN connection.
@@ -680,7 +692,7 @@ class CanService:
         detected = "canb" if expected == "can1" else "can1"
         count = int(self._bus_evidence[f"{detected}_count"])
         last = self._bus_evidence[f"{detected}_last"]
-        if count < 2 or last is None or time.monotonic() - last > 3.0:
+        if count < 2 or last is None or time.monotonic() - last > BUS_EVIDENCE_STALE_S:
             return None
         return {"expected": expected, "detected": detected,
                 "evidence_count": count,

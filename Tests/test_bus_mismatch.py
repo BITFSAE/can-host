@@ -1,13 +1,13 @@
 """总线疑似接反判定：只按对侧独有帧提示，不改变任何连接或命令门控。
 
 接反证据来自真实 PCAN 连接的接收帧：CAN1 档案收到整车 CANB 节点帧、
-CANB 档案收到从控逐串帧。判定结果只写进快照供界面提醒。
+CANB 档案收到 F405 或从控的 CAN1 专属扩展帧。判定结果只写进快照供界面提醒。
 """
 
 import time
 import unittest
 
-from canhost.bms.protocol import is_can1_slave_frame
+from canhost.bms.protocol import is_can1_bus_signature, is_can1_slave_frame
 from canhost.decoders import (CANB_ONLY_EXT_IDS, CANB_ONLY_NODE_STD_IDS, CanFrame)
 from canhost.transport import CanService
 
@@ -45,6 +45,12 @@ class Can1SlaveFrameTest(unittest.TestCase):
         self.assertFalse(is_can1_slave_frame(0x180050F3 + (36 << 16), True))
         self.assertFalse(is_can1_slave_frame(0x180050F3 + 1, True))
 
+    def test_f405_periodic_frames_are_can1_signatures(self):
+        self.assertTrue(is_can1_bus_signature(0x186050F4, True))
+        self.assertTrue(is_can1_bus_signature(0x187650F4, True))
+        self.assertFalse(is_can1_bus_signature(0x18FF50E5, True))
+        self.assertFalse(is_can1_bus_signature(0x4B0, False))
+
 
 class CanbOnlyIdSetTest(unittest.TestCase):
     def test_vehicle_nodes_are_canb_only(self):
@@ -78,6 +84,13 @@ class BusMismatchTest(unittest.TestCase):
         self.assertEqual(mismatch["expected"], "canb")
         self.assertEqual(mismatch["detected"], "can1")
 
+    def test_canb_profile_hearing_f405_periodic_frames_reports_can1(self):
+        service = pcan_service("canb")
+        feed(service, rx(0x186050F4, b"\x00" * 7, extended=True))
+        feed(service, rx(0x187650F4, extended=True))
+        mismatch = service.snapshot()["connection"]["bus_mismatch"]
+        self.assertEqual((mismatch["expected"], mismatch["detected"]), ("canb", "can1"))
+
     def test_vehicle_service_reports_mismatch(self):
         service = pcan_service("canb", protocol_kind="vehicle")
         for _ in range(2):
@@ -101,6 +114,15 @@ class BusMismatchTest(unittest.TestCase):
     def test_single_frame_is_not_enough(self):
         service = pcan_service("can1")
         feed(service, rx(0x5A2))
+        self.assertNotIn("bus_mismatch", service.snapshot()["connection"])
+
+    def test_evidence_outside_two_second_window_restarts_count(self):
+        service = pcan_service("can1")
+        feed(service, rx(0x5A2))
+        with service.lock:
+            service._bus_evidence["canb_last"] = time.monotonic() - 2.1
+        feed(service, rx(0x5A0))
+        self.assertEqual(service._bus_evidence["canb_count"], 1)
         self.assertNotIn("bus_mismatch", service.snapshot()["connection"])
 
     def test_stale_evidence_disappears(self):

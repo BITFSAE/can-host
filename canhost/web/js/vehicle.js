@@ -59,6 +59,7 @@ async function connectVehicle() {
     await state.api.disconnect_can();
     state.snapshot = await state.api.get_snapshot();
   }
+  state.busMismatchPrompted.vehicle = null;
   setBusConnecting("canb_vehicle", true);
   let result;
   try {
@@ -85,6 +86,7 @@ async function connectVehicle() {
 
 async function disconnectVehicle() {
   if (!state.api) return;
+  state.busMismatchPrompted.vehicle = null;
   setBusConnecting("canb_vehicle", true);
   try { await state.api.disconnect_vehicle(); }
   catch (error) { return toast(`整车断开失败：${error}`, true); }

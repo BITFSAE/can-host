@@ -846,6 +846,7 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="alarmsScopeStrip"', html)
         self.assertIn('id="vehicleScopeStrip"', html)
         self.assertIn('id="busMismatchDialog"', html)
+        self.assertIn('id="lockConnectedText"', html)
         self.assertIn('id="connectDialog"', html)
         self.assertIn('id="connectionSettingsButton"', html)
         self.assertIn('id="saveConnectionSettings"', html)
@@ -875,6 +876,9 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("bindBackdropDismissal", core_js)
         self.assertIn("event.target !== dialog", core_js)
         self.assertIn('dialog.close("cancel")', core_js)
+        self.assertIn('const cellsWaiting = !(mainConnected && main.bus_profile === "can1");', core_js)
+        self.assertIn('prompted = { connectionKey, shown: false };', core_js)
+        self.assertNotIn('text("#lockConnected",', (Path(__file__).parents[1] / "canhost" / "web" / "js" / "bms.js").read_text(encoding="utf-8"))
 
     def test_fan_js_defines_known_sample_state_used_for_fresh_tag(self) -> None:
         js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")

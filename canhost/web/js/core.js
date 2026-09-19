@@ -539,6 +539,7 @@ async function toggleMainDockConnection(role) {
   if (!channel) return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
   const profile = role === "can1" ? "can1" : (profileOption?.value || "canb");
   const bitrate = role === "can1" ? 500000 : Number(profileOption?.dataset?.bitrate || 500000);
+  state.busMismatchPrompted.main = null;
   const vehicle = vehicleConnectionState();
   if (vehicle.connected === true && vehicle.mode === "simulation") {
     await state.api.disconnect_vehicle();
@@ -677,6 +678,7 @@ function updateBusButtonsEnabled() {
 async function disconnectCan() {
   if (!state.api) return;
   const role = mainConnectionRole() || "can1";
+  state.busMismatchPrompted.main = null;
   resetChargeTiming();
   setBusConnecting(role, true);
   try { await state.api.disconnect_can(); }
@@ -818,9 +820,10 @@ function updateScopeStrips(main, vehicle) {
 
   // 数据页顶部连接提示：未连接时说明需要什么连接，疑似接反时醒目提醒，正常后隐藏。
   const mainWaiting = !mainConnected;
+  const cellsWaiting = !(mainConnected && main.bus_profile === "can1");
   setBmsScopeStrip("#overviewScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
     "点击底部“CAN1”或“BMS CANB”按钮连接后开始监视。");
-  setBmsScopeStrip("#cellsScopeStrip", mainWaiting, mainMismatch, "等待 CAN1 连接",
+  setBmsScopeStrip("#cellsScopeStrip", cellsWaiting, mainMismatch, "等待 CAN1 连接",
     "逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。");
   setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
     "连接 CAN1 或 BMS CANB 后显示故障码、告警等级与历史记录。");
@@ -842,6 +845,8 @@ function updateScopeStrips(main, vehicle) {
   const fanStrip = $("#fanScopeStrip");
   if (fanStrip) {
     fanStrip.hidden = fanWritable && !vehicleMismatch;
+    fanStrip.classList.toggle("danger", !!vehicleMismatch);
+    text("#fanScopeTitle", vehicleMismatch ? "总线疑似接反" : "整车风扇需 CANB 整车遥测");
     text("#fanScopeDetail", fanWritable && !vehicleMismatch
       ? ""
       : vehicleMismatch
@@ -887,15 +892,20 @@ function busMismatchDetail(scopeLabel, mismatch) {
 /** 疑似接反只弹窗提醒一次；同一连接不再重复打扰，其他弹窗打开时顺延。 */
 function maybeNotifyBusMismatch(slot, scopeLabel, connection) {
   const mismatch = connection?.bus_mismatch;
-  if (!mismatch) {
+  if (connection?.connected !== true) {
     state.busMismatchPrompted[slot] = null;
     return;
   }
-  const key = [connection.mode, connection.channel, connection.bus_profile,
-               connection.bitrate, mismatch.expected, mismatch.detected].join("|");
-  if (state.busMismatchPrompted[slot] === key) return;
+  const connectionKey = [connection.mode, connection.channel, connection.bus_profile,
+                         connection.bitrate].join("|");
+  let prompted = state.busMismatchPrompted[slot];
+  if (!prompted || prompted.connectionKey !== connectionKey) {
+    prompted = { connectionKey, shown: false };
+    state.busMismatchPrompted[slot] = prompted;
+  }
+  if (!mismatch || prompted.shown) return;
   if ($("dialog[open]")) return;
-  state.busMismatchPrompted[slot] = key;
+  prompted.shown = true;
   text("#busMismatchMessage", busMismatchDetail(scopeLabel, mismatch));
   $("#busMismatchDialog")?.showModal();
 }
