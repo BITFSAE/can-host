@@ -367,21 +367,14 @@ class IvtPcanTool:
         return self.wait_alive(timeout=3.0)
 
     def restart_to_bitrate(self, bitrate: int) -> tuple[can.Message, can.Message]:
-        mapping = {250000: 0x08, 500000: 0x04, 1000000: 0x02}
+        mapping = {500000: 0x04, 1000000: 0x02}
         try:
             selector = mapping[bitrate]
         except KeyError as exc:
-            raise ValueError("restart-to-bitrate only supports 250000/500000/1000000") from exc
+            raise ValueError("restart-to-bitrate only supports 500000/1000000") from exc
         response = self.request([0x3A, selector, 0, 0, 0, 0, 0, 0], STORE_RSP_MUX, timeout=2.0)
         self.reopen(bitrate)
         return response, self.wait_alive(timeout=4.0)
-
-    def switch_bms_canb_bitrate(self, bitrate: int, startup: str) -> tuple[can.Message, can.Message]:
-        self.cmd_id = BMS_CAN1_CMD_ID
-        self.rsp_id = BMS_CAN1_RSP_ID
-        self.set_mode("stop", startup)
-        time.sleep(0.01)
-        return self.restart_to_bitrate(bitrate)
 
     def get_device_id(self) -> can.Message:
         return self.request([0x79, 0, 0, 0, 0, 0, 0, 0], DEVICE_ID_RSP_MUX)
@@ -771,14 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("restart", help="restart device and wait alive")
 
     restart_bitrate = subparsers.add_parser("restart-to-bitrate", help="restart to configured bitrate")
-    restart_bitrate.add_argument("--target-bitrate", type=int, choices=[250000, 500000, 1000000], required=True)
-
-    bms_bitrate = subparsers.add_parser(
-        "bms-can1-bitrate",
-        help="switch the BMS-owned IVT between 250/500kbps and verify Alive; CAN1 target is 500kbps",
-    )
-    bms_bitrate.add_argument("--target-bitrate", type=int, choices=[250000, 500000], required=True)
-    bms_bitrate.add_argument("--startup", choices=["stop", "run"], default="run")
+    restart_bitrate.add_argument("--target-bitrate", type=int, choices=[500000, 1000000], required=True)
 
     setup = subparsers.add_parser("setup-intel", help="full setup for 0..7 cyclic little-endian")
     setup.add_argument("--startup", choices=["stop", "run"], default="run")
@@ -973,16 +959,6 @@ def main(argv: Sequence[str]) -> int:
             response, alive = tool.restart_to_bitrate(args.target_bitrate)
             print_message("rsp", response)
             print_message("alive", alive)
-            return 0
-
-        if args.command == "bms-can1-bitrate":
-            response, alive = tool.switch_bms_canb_bitrate(args.target_bitrate, args.startup)
-            print_message("rsp", response)
-            print_message("alive", alive)
-            print(
-                f"BMS-owned IVT now uses {args.target_bitrate}bps; "
-                f"command=0x{BMS_CAN1_CMD_ID:03X} response=0x{BMS_CAN1_RSP_ID:03X}"
-            )
             return 0
 
         if args.command == "setup-intel":

@@ -4,11 +4,11 @@ const PACK_CAPACITY_AH = 16.2;
 const MACHINE_STATE_CLASSES = { 2: "self-test", 3: "standby", 4: "precharge", 5: "hv-on", 7: "fault" };
 const SAVE_KINDS = {
   alarm_thresholds: "config", alarm_switches: "config", charge_config: "config",
-  charger_type: "config", current_direction: "direction",
+  current_direction: "direction",
 };
 const SAVE_LABELS = {
   alarm_thresholds: "告警阈值", alarm_switches: "告警开关", charge_config: "充电请求",
-  charger_type: "充电机类型", current_direction: "电流方向",
+  current_direction: "电流方向",
 };
 const IMD_FREQUENCY_NOTES = {
   0: "无有效 PWM", 1: "DCP", 2: "DCP", 3: "SST", 4: "设备错误", 5: "接地线错误", 15: "未知频率",
@@ -71,13 +71,6 @@ function bindBmsControls() {
     const inverted = value === "1";
     confirmCommand("current_direction", { inverted }, "写入电流方向", `明确设置为“${inverted ? "反转" : "正常"}”。此设置保存到 Flash Sector2。`);
   });
-  $("#sendChargerType").addEventListener("click", () => {
-    const value = $("#chargerType").value;
-    if (!["0", "1"].includes(value)) return toast("尚未收到充电机类型，暂不能写入", true);
-    const charger_type = +value;
-    confirmCommand("charger_type", { charger_type }, "切换充电机类型",
-      `设置为“${charger_type ? "Chroma · 500 kbit/s" : "Legacy · 250 kbit/s"}”。实体充电按钮决定是否进入充电模式。`);
-  });
   $("#clearFaultLog").addEventListener("click", () => {
     confirmCommand("log_clear", {}, "清除 Flash 故障日志",
       "发送独立的三字节确认请求。不会清除当前实时告警，也不会解除故障保持。", true);
@@ -111,7 +104,6 @@ function bindBmsControls() {
     updateSwitchRowState();
   });
   $("#currentDirection").addEventListener("change", () => state.dirty.direction = true);
-  $("#chargerType").addEventListener("change", () => state.dirty.chargerType = true);
 }
 
 function renderOverview() {
@@ -599,7 +591,6 @@ function renderConfig() {
   const hasSwitchReport = switchesFresh && Object.keys(switches).length > 0;
   const runtimeFresh = isFresh(config.runtime_age);
   const directionKnown = runtimeFresh && config.current_direction_inverted != null;
-  const chargerTypeKnown = runtimeFresh && config.charger_type != null;
   const flashState = flashPersistenceState();
 
   text("#displayOv", hasThresholdReport ? `${thresholds.ov_mv} mV` : "等待数据");
@@ -652,15 +643,8 @@ function renderConfig() {
   } else if (!directionKnown && !state.dirty.direction) {
     $("#currentDirection").value = "";
   }
-  if (chargerTypeKnown && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
-    $("#chargerType").value = String(config.charger_type);
-  } else if (!chargerTypeKnown && !state.dirty.chargerType) {
-    $("#chargerType").value = "";
-  }
   $("#currentDirection").disabled = !directionKnown && !state.dirty.direction;
   setPersistentButtonState("#sendCurrentDirection", !directionKnown && !state.dirty.direction, flashState);
-  $("#chargerType").disabled = !chargerTypeKnown && !state.dirty.chargerType;
-  setPersistentButtonState("#sendChargerType", !chargerTypeKnown && !state.dirty.chargerType, flashState);
 }
 
 function watchFlashSave(command, ack) {
@@ -755,11 +739,6 @@ function renderControls() {
   const runtime = state.snapshot.runtime_diag || {};
   renderSaveStatus(runtime);
   setPersistentButtonState("#sendChargeConfig", !requestFresh && !state.dirty.charge, flashPersistenceState());
-  const config = state.snapshot.config || {};
-  if (isFresh(config.runtime_age) && config.charger_type != null
-      && !state.dirty.chargerType && document.activeElement !== $("#chargerType")) {
-    $("#chargerType").value = String(config.charger_type);
-  }
   const runtimeFresh = runtime.age != null && runtime.age <= 1.5;
   if (runtimeFresh && runtime.charger_feedback_voltage_v != null && runtime.charger_feedback_current_a != null && runtime.charger_feedback_fresh) {
     text("#chargeFeedbackEcho", `${fmt(runtime.charger_feedback_voltage_v, 1)} V / ${fmt(runtime.charger_feedback_current_a, 1)} A`);
@@ -770,7 +749,7 @@ function renderControls() {
   }
   const faultFresh = fault.received === true && fault.age != null && fault.age <= 1.5;
   const charge = faultFresh ? fault.flags?.charge_mode : null;
-  const chargeLabel = charge == null ? "模式未知" : charge ? `充电 · ${fault.flags.charger_type}` : "放电 / 待机";
+  const chargeLabel = charge == null ? "模式未知" : charge ? "充电 · Chroma" : "放电 / 待机";
   text("#chargeModeTag", chargeLabel);
   $("#chargeModeTag").className = `tag ${charge == null ? "neutral" : charge ? "warn" : "neutral"}`;
   text("#heroChargeMode", chargeLabel);

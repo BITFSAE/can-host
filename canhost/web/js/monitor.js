@@ -317,8 +317,7 @@ function monitorTxSpec(row) {
 
 function monitorWritable() {
   const connection = monitorConnection();
-  return connection.connected === true && connection.mode === "pcan"
-    && connection.bus_profile !== "canb_legacy";
+  return connection.connected === true && connection.mode === "pcan";
 }
 
 function periodicTaskMap() {

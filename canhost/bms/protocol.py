@@ -122,7 +122,6 @@ COMMAND_CODES = {
     "log_info": 0x81,
     "log_read": 0x82,
     "log_clear": 0x83,
-    "charger_type": 0x84,
 }
 
 
@@ -332,7 +331,6 @@ class BmsProtocol:
             feedback_flags = data[7]
             self.runtime_diag = {
                 "protocol_version": data[0], "current_direction_inverted": bool(flags & 0x01),
-                "charger_type": "Chroma" if flags & 0x02 else "Legacy",
                 "balance_compiled": bool(flags & 0x04), "balance_enabled": bool(flags & 0x08),
                 "flash_ready": bool(flags & 0x10), "config_save_pending": bool(flags & 0x20),
                 "current_direction_save_pending": bool(flags & 0x40), "rtc_valid": bool(flags & 0x80),
@@ -347,21 +345,15 @@ class BmsProtocol:
             }
             self.last_runtime_diag_monotonic = now_mono
             self.config["current_direction_inverted"] = bool(flags & 0x01)
-            self.config["charger_type"] = 1 if flags & 0x02 else 0
             self.relay.update({key: value for key, value in self.runtime_diag.items()
                                if key.startswith("charger_") or key == "chroma_output_state"})
         elif can_id == 0x186C50F4 and len(data) >= 8:
             variants = {0: "Debug", 1: "Release", 2: "Debug-Bringup"}
-            charger_variants = {0: "Runtime", 1: "Legacy-fixed"}
             variant = data[1] & 0x03
-            charger_variant_code = (data[1] >> 2) & 0x03
             self.slave_sample_timeout_s = 0.35
             build_date = self.firmware.get("build_date")
             self.firmware = {"protocol_version": data[0], "variant_code": variant,
                              "variant": variants.get(variant, f"未知 {variant}"),
-                             "charger_variant_code": charger_variant_code,
-                             "charger_variant": charger_variants.get(charger_variant_code,
-                                                                       f"未知 {charger_variant_code}"),
                              "dirty": bool(data[1] & 0x80), "git": data[2:8].hex(),
                              "build_date": build_date}
         elif can_id == 0x186C51F4 and len(data) >= 4:
@@ -485,13 +477,9 @@ class BmsProtocol:
                     self._flash_record_parts.pop(sequence, None)
         elif not frame.is_extended_id and 0x512 <= can_id <= 0x519 and len(data) >= 6:
             self._decode_ivt(can_id, data)
-        elif can_id == 0x18FF50E5 and len(data) >= 5:
-            self.relay.update({"charger_feedback_voltage_v": u16be(data) / 10.0,
-                               "charger_feedback_current_a": u16be(data, 2) / 10.0,
-                               "charger_feedback_state": data[4]})
         elif can_id in (CHROMA_VOLT_STD_ID, CHROMA_CURR_STD_ID) and not frame.is_extended_id and len(data) >= 7:
             charge_flags = self.fault.get("flags", {})
-            if charge_flags.get("charge_mode") and charge_flags.get("charger_type") == "Chroma":
+            if charge_flags.get("charge_mode"):
                 import struct
                 value = struct.unpack("<f", data[3:7])[0]
                 if value >= 0.0 and value < 10000.0:
@@ -769,13 +757,6 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     if name == "log_clear":
         request = request_header(operation["maintenance"])
         request.extend(bytes.fromhex("03 C3 3C A5 00 00"))
-        return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
-    if name == "charger_type":
-        charger_type = int(values.get("charger_type", -1))
-        if charger_type not in (0, 1):
-            raise ValueError("充电机类型必须是 0=Legacy 或 1=Chroma")
-        request = request_header(operation["maintenance"])
-        request.extend(bytes([4, charger_type, 0, 0, 0, 0]))
         return CanFrame(CAN1_COMMAND_REQ_EXT_ID, bytes(request), True, now, "tx")
     if name == "rtc":
         value = values.get("datetime")

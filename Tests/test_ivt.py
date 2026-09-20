@@ -204,6 +204,17 @@ class IvtProtocolTest(unittest.TestCase):
 
 
 class IvtServiceBoundaryTest(unittest.TestCase):
+    def test_api_rejects_250k_ivt_connection(self) -> None:
+        from canhost.app import Api
+
+        api = Api()
+        try:
+            result = api.connect_ivt({"channel": "PCAN_USBBUS1", "bitrate": 250000})
+            self.assertFalse(result["ok"])
+            self.assertIn("固定使用 CAN1 500 kbit/s", result["error"])
+        finally:
+            api.close()
+
     def test_service_passes_editable_periods_to_setup_and_comparison(self) -> None:
         periods = {"I": 25, "U1": 80, "U2": 90, "U3": 100,
                    "T": 110, "W": 120, "As": 130, "Wh": 140}

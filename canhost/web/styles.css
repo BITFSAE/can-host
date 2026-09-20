@@ -2621,8 +2621,6 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .ivt-action-fact { display: grid; gap: 4px; padding: var(--sp-2) var(--sp-2); border: 1px solid var(--line-soft); border-radius: var(--r-ctl); background: var(--surface-2); }
 .ivt-action-fact b { color: var(--text-2); font-size: var(--fs-unit); }
 .ivt-action-fact span { color: var(--text); font: var(--fs-unit)/1.4 var(--mono); }
-.legacy-panel .panel-head h3 { color: var(--warn); }
-.bitrate-actions { margin-top: 0; }
 .ivt-readback { gap: var(--sp-2); }
 .ivt-detail { border-top: 1px solid var(--line-soft); }
 .ivt-detail summary { padding: var(--sp-2) 0 var(--sp-2); color: var(--text-2); cursor: pointer; font-size: var(--fs-label); }
@@ -2832,7 +2830,6 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .bench-state-panel .panel-body { min-height: 90px; }
 
 .ivt-action-fact small { color: var(--text-2); font-size: var(--fs-unit); line-height: 1.45; }
-.bitrate-actions .outline-button { min-height: 36px; }
 
 /* Keep the collapsed rail icon-only. The tool summary must not wrap its label
    into a vertical column, and tool icons use the same 48px hit area as the
@@ -2917,10 +2914,6 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 
 .tool-connection-controls .tool-channel-select {
   min-width: 135px;
-}
-
-.tool-connection-controls .tool-bitrate-select {
-  min-width: 110px;
 }
 
 .tool-connection-controls button {

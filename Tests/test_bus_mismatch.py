@@ -8,7 +8,7 @@ import time
 import unittest
 
 from canhost.bms.protocol import is_can1_bus_signature, is_can1_slave_frame
-from canhost.decoders import (CANB_ONLY_EXT_IDS, CANB_ONLY_NODE_STD_IDS, CanFrame)
+from canhost.decoders import CANB_ONLY_NODE_STD_IDS, CanFrame
 from canhost.transport import CanService
 
 
@@ -48,7 +48,6 @@ class Can1SlaveFrameTest(unittest.TestCase):
     def test_f405_periodic_frames_are_can1_signatures(self):
         self.assertTrue(is_can1_bus_signature(0x186050F4, True))
         self.assertTrue(is_can1_bus_signature(0x187650F4, True))
-        self.assertFalse(is_can1_bus_signature(0x18FF50E5, True))
         self.assertFalse(is_can1_bus_signature(0x4B0, False))
 
 
@@ -56,7 +55,6 @@ class CanbOnlyIdSetTest(unittest.TestCase):
     def test_vehicle_nodes_are_canb_only(self):
         for can_id in (0x4A0, 0x4B0, 0x4B1, 0x4B2, 0x502, 0x521, 0x5A0, 0x5AE, 0x201, 0x291):
             self.assertIn(can_id, CANB_ONLY_NODE_STD_IDS)
-        self.assertIn(0x18FF50E5, CANB_ONLY_EXT_IDS)
 
     def test_ivt_result_ids_are_not_canb_only(self):
         # IVT 同时登记在整车 DBC 中，而实体接在 CAN1，不能作为接反证据。
@@ -150,13 +148,6 @@ class BusMismatchTest(unittest.TestCase):
             feed(service, rx(0x5A2))
         service.connection["connected"] = False
         self.assertNotIn("bus_mismatch", service.snapshot()["connection"])
-
-    def test_legacy_charger_feedback_is_canb_evidence(self):
-        service = pcan_service("can1")
-        for _ in range(2):
-            feed(service, rx(0x18FF50E5, extended=True))
-        mismatch = service.snapshot()["connection"]["bus_mismatch"]
-        self.assertEqual(mismatch["detected"], "canb")
 
     def test_quick_snapshot_carries_mismatch(self):
         # get_quick_snapshot() 只使用整车服务；快照条也用于风扇页的接反提示。

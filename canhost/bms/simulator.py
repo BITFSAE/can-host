@@ -18,7 +18,7 @@ ALARM_SWITCH_FRAME_VERSION = 7
 
 class BmsSimulator:
     def __init__(self, sink: Callable[[CanFrame], None], bus_profile: str = "can1") -> None:
-        if bus_profile not in {"can1", "canb", "canb_legacy"}:
+        if bus_profile not in {"can1", "canb"}:
             raise ValueError(f"未知模拟总线：{bus_profile}")
         self.sink = sink
         self.bus_profile = bus_profile
@@ -29,7 +29,6 @@ class BmsSimulator:
         self.request_voltage = 5700
         self.request_current = 30
         self.current_inverted = True
-        self.charger_type = 1
         self.tick = 0
         self.log_clear_pending_cycles = 0
         self.config_save_pending_cycles = 0
@@ -161,13 +160,6 @@ class BmsSimulator:
                     result = 9
                 else:
                     self.log_clear_pending_cycles = 2
-            elif subcommand == 4:
-                if data[4:8] != b"\x00\x00\x00\x00" or data[3] > 1:
-                    result = 5
-                else:
-                    self.charger_type = data[3]
-                    self.config_save_pending_cycles = 2
-                    detail = self.charger_type
             else:
                 result = 5
         else:
@@ -221,8 +213,6 @@ class BmsSimulator:
         fault_data = bytes([(self._state() << 4), 0, 0, 0, 0, log_flags, 0, 4])
         self._send(0x4B1, fault_data, False)
         self._send(0x4B2, bytes(8), False)
-        if self.bus_profile == "canb_legacy":
-            self._send(0x18FF50E5, bytes.fromhex("16 30 00 1C 01"), True)
 
     def _emit_ivt(self, voltage_01v: int, current_01a: int) -> None:
         """Emit the self-owned IVT frames available only on CAN1."""
@@ -288,7 +278,7 @@ class BmsSimulator:
         self._send(0x187750F4, self.thresholds[0].to_bytes(2, "big") + self.thresholds[1].to_bytes(2, "big") + bytes(self.thresholds[2:]))
         self._send(0x187F50F4, bytes(self.switch_bytes) + bytes([ALARM_SWITCH_FRAME_VERSION]))
         runtime_flags = ((1 if self.current_inverted else 0)
-                         | (2 if self.charger_type else 0)
+                         | 2
                          | (0x20 if self.config_save_pending_cycles else 0)
                          | (0x40 if self.direction_save_pending_cycles else 0)
                          | 0x90)

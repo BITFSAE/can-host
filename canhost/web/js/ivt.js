@@ -12,8 +12,6 @@ function bindIvtControls() {
     confirmIvtAction("configure", options, "配置 IVT 为 BMS CAN1",
       "将停止 IVT，写入 8 个通道和 10 个 CAN ID，保存到 IVT 非易失存储，重启后再逐项读回核对。执行前确认配置总线上只有目标 IVT。", true);
   });
-  $("#switchIvt250").addEventListener("click", () => confirmIvtBitrate(250000));
-  $("#switchIvt500").addEventListener("click", () => confirmIvtBitrate(500000));
   $("#loadIvtReadbackPeriods").addEventListener("click", loadIvtReadbackPeriods);
   document.querySelectorAll("[data-ivt-period]").forEach(input => {
     input.addEventListener("input", () => {
@@ -26,7 +24,7 @@ function bindIvtControls() {
 
 async function connectIvt() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const bitrate = Number($("#ivtBitrateSelect").value || 500000);
+  const bitrate = 500000;
   const button = $("#connectIvtButton");
   button.disabled = true; button.textContent = "连接中…";
   const result = await state.api.connect_ivt({
@@ -176,11 +174,8 @@ function confirmIvtAction(kind, options, title, message, destructive = false) {
   text("#confirmTitle", title);
   text("#confirmMessage", message);
   setConfirmModeBadge(destructive ? "IVT 高危写入 · 需二次确认" : "IVT 配置操作", destructive ? "bad" : "");
-  const operation = kind === "configure" ? "完整配置并重启 IVT"
-    : "切换到 " + (options.target_bitrate / 1000) + " kbit/s";
-  const periodText = kind === "configure"
-    ? "\n周期：" + IVT_PERIOD_CHANNELS.map(name => `${name} ${options.channel_periods_ms[name]} ms`).join(" · ")
-    : "";
+  const operation = "完整配置并重启 IVT";
+  const periodText = "\n周期：" + IVT_PERIOD_CHANNELS.map(name => `${name} ${options.channel_periods_ms[name]} ms`).join(" · ");
   text("#confirmPayload", "通道：" + (conn.channel || "PCAN") + "\n"
     + "目标：CAN1 · " + ((conn.bitrate || 500000) / 1000) + " kbit/s\n"
     + "Command：0x" + cmdId.toString(16).toUpperCase() + "\n"
@@ -192,30 +187,16 @@ function confirmIvtAction(kind, options, title, message, destructive = false) {
   $("#confirmDialog").showModal();
 }
 
-function confirmIvtBitrate(targetBitrate) {
-  const options = readIvtOptions();
-  if (!options) return;
-  options.target_bitrate = targetBitrate;
-  confirmIvtAction("bitrate", options, "切换 IVT 到 " + (targetBitrate / 1000) + " kbit/s",
-    "IVT 会停止并重启到目标位率。上位机会关闭当前 PCAN，再用目标位率重新打开并等待 Alive。执行前确认配置总线上只有目标 IVT。正式接入 CAN1 前必须切回 500 kbit/s。", true);
-}
-
 function renderIvtConfig() {
   const snapshot = state.toolSnapshots.ivt || {};
   const connection = snapshot.connection || {};
   const available = ivtConnectionAvailable();
-  const currentBitrate = Number(connection.bitrate || 0);
-  if (currentBitrate && document.activeElement !== $("#ivtBitrateSelect")) {
-    $("#ivtBitrateSelect").value = String(currentBitrate);
-  }
   const readback = snapshot?.ivt_config;
   const comparison = readback?.comparison;
   $("#connectIvtButton").classList.toggle("hidden", available);
   $("#disconnectIvtButton").classList.toggle("hidden", !available);
   if ($("#readIvtConfig")) $("#readIvtConfig").disabled = !available;
   if ($("#loadIvtReadbackPeriods")) $("#loadIvtReadbackPeriods").disabled = !readback;
-  if ($("#switchIvt250")) $("#switchIvt250").disabled = !available || currentBitrate === 250000;
-  if ($("#switchIvt500")) $("#switchIvt500").disabled = !available || currentBitrate === 500000;
   renderIvtConfigureButton();
   renderIvtPeriodRate();
 

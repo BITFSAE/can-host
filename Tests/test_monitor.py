@@ -122,15 +122,6 @@ class MonitorTransportTest(unittest.TestCase):
             self.assertFalse(protected_fan["ok"])
             self.assertIn("受保护", protected_fan["error"])
 
-            service.connection["bus_profile"] = "canb_legacy"
-            legacy = service.send_monitor_frame(
-                {"id": "0x290", "data": "01", "cycle_ms": 200}, True)
-            self.assertFalse(legacy["ok"])
-            self.assertIn("只读", legacy["error"])
-            legacy_periodic = service.configure_monitor_periodic(
-                "legacy-row", {"id": "0x290", "data": "01", "cycle_ms": 200}, True, True)
-            self.assertFalse(legacy_periodic["ok"])
-            self.assertIn("只读", legacy_periodic["error"])
         finally:
             # Prevent shutdown() assertions from depending on MagicMock state.
             service.disconnect()

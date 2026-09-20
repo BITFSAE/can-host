@@ -338,8 +338,8 @@
                     <dt>请求值</dt>
                     <dd id="chargeRequestEcho">— V / — A</dd>
                   </div>
-                  <div title="Legacy / Chroma 充电机返回的实际电压和电流">
-                    <dt>充电机反馈</dt>
+                  <div title="Chroma 充电机返回的实际电压和电流">
+                    <dt>Chroma 反馈</dt>
                     <dd id="chargeFeedbackEcho">等待反馈</dd>
                   </div>
                 </dl>
@@ -369,13 +369,6 @@
                     <span class="action-controls">
                       <select id="currentDirection" aria-label="电流方向"><option value="" disabled>等待数据</option><option value="0">正常</option><option value="1">反转</option></select>
                       <button class="outline-button" type="button" id="sendCurrentDirection">写入</button>
-                    </span>
-                  </li>
-                  <li>
-                    <span class="action-text"><b>充电机类型</b><small>待机态切换 Legacy / Chroma，并保存到 Flash</small></span>
-                    <span class="action-controls">
-                      <select id="chargerType" aria-label="充电机类型"><option value="" disabled>等待数据</option><option value="0">Legacy</option><option value="1">Chroma</option></select>
-                      <button class="outline-button" type="button" id="sendChargerType">写入</button>
                     </span>
                   </li>
                 </ul>
@@ -557,10 +550,7 @@
               <span id="ivtConfigStatus" class="tag neutral">未读取</span>
               <div class="tool-connection-controls">
                 <select id="ivtChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
-                <select id="ivtBitrateSelect" aria-label="当前位率" class="tool-bitrate-select">
-                  <option value="500000">500 kbit/s</option>
-                  <option value="250000">250 kbit/s</option>
-                </select>
+                <span class="tag neutral">500 kbit/s</span>
                 <button class="action-button" type="button" id="connectIvtButton">连接</button>
                 <button class="danger-outline hidden" type="button" id="disconnectIvtButton">断开</button>
               </div>
@@ -595,12 +585,6 @@
                 </div>
               </article>
 
-              <article class="panel ivt-action-panel legacy-panel">
-                <header class="panel-head"><h3>旧充电机过渡</h3><span class="tag warn">按需使用</span></header>
-                <div class="panel-body">
-                  <div class="ivt-actions bitrate-actions"><button class="outline-button" type="button" id="switchIvt250">切到 250 kbit/s</button><button class="outline-button" type="button" id="switchIvt500">切到 500 kbit/s</button></div>
-                </div>
-              </article>
             </div>
           </div>
 
@@ -1171,18 +1155,11 @@
           <section class="connection-map-card" aria-labelledby="canbMapTitle">
             <div class="connection-map-head">
               <div><b id="canbMapTitle">CANB</b><small>BMS 镜像、整车节点与风扇</small></div>
-              <span>整车总线</span>
+              <span>500 kbit/s · 固定</span>
             </div>
             <label class="field">
               <span class="field-label">连接整车 CANB 的 PCAN 通道</span>
               <select id="canbConnectChannel" aria-describedby="connectionSettingsMessage"></select>
-            </label>
-            <label class="field">
-              <span class="field-label">CANB 位率</span>
-              <select id="canbConnectBitrate">
-                <option value="500000">500 kbit/s（标准整车 CANB）</option>
-                <option value="250000">250 kbit/s（Legacy，只读）</option>
-              </select>
             </label>
           </section>
         </div>

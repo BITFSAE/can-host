@@ -24,7 +24,7 @@ const VEH_INTERVENTION_NAMES = { 0: "正常", 1: "降额", 2: "过流归零", 3:
 function vehicleConnectionAvailable() {
   const connection = state.vehicleSnapshot?.connection;
   return connection?.connected === true
-    && ["canb", "canb_legacy"].includes(connection.bus_profile);
+    && connection.bus_profile === "canb" && Number(connection.bitrate) === 500000;
 }
 
 function bindVehicleControls() {
@@ -32,14 +32,12 @@ function bindVehicleControls() {
 }
 
 function populateVehicleOptions() {
-  // Static 500/250 kbit/s options are declared in index.html.
+  // CANB is fixed at 500 kbit/s.
 }
 
 async function connectVehicle() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const bitrateSelect = $("#canbConnectBitrate");
-  const bitrateRaw = bitrateSelect?.value || "500000";
-  const bitrate = Number(bitrateRaw);
+  const bitrate = 500000;
   const channelSelect = $("#canbConnectChannel");
   if (!channelSelect?.value) {
     return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
@@ -57,7 +55,7 @@ async function connectVehicle() {
       mode: "pcan",
       channel: channelSelect.value,
       bitrate,
-      bus_profile: bitrate === 500000 ? "canb" : "canb_legacy",
+      bus_profile: "canb",
       auto_record: typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true,
     });
   } catch (error) {
@@ -136,13 +134,6 @@ function renderVehicle() {
   const snapshot = state.vehicleSnapshot || {};
   const connection = snapshot.connection || {};
   const available = vehicleConnectionAvailable();
-  const currentBitrate = Number(connection.bitrate || 0);
-  const bitrateSelect = $("#canbConnectBitrate");
-  if (bitrateSelect && document.activeElement !== bitrateSelect) {
-    const targetValue = String(currentBitrate);
-    const match = [...bitrateSelect.options].find(option => option.value === targetValue);
-    if (match) bitrateSelect.value = match.value;
-  }
   // -- SOP ---------------------------------------------------------------
   const sop = snapshot.sop || {};
   const limits = sop.limits || {};

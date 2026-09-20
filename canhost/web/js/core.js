@@ -30,7 +30,7 @@ var state = {
   pendingMonitorAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false,
-           chargerType: false, fan: false, fanCaps: false, batteryFanCaps: false },
+           fan: false, fanCaps: false, batteryFanCaps: false },
   onlyActiveAlarms: false,
   theme: document.documentElement.dataset.theme || "dark",
   uiScale: 1,
@@ -276,7 +276,6 @@ async function init() {
         message: "后端未就绪，暂时显示手动通道列表", error: String(error) }, profiles: [
       { key: "can1", name: "CAN1 · F405 主控 / 从控 / 工具", bitrate: 500000 },
       { key: "canb", name: "CANB · ECU / Chroma · 500 kbit/s", bitrate: 500000 },
-      { key: "canb_legacy", name: "CANB · Legacy · 250 kbit/s", bitrate: 250000 },
     ]};
     populateConnectionOptions(fallback);
     populateToolChannelOptions(fallback);
@@ -496,26 +495,24 @@ function restoreConnectionPreferences() {
   const automatic = state.bootstrap?.pcan_scan?.automatic === true;
   const can1Saved = prefs.can1Channel || prefs.mainChannel || channels[0] || "";
   let canbSaved = prefs.canbChannel || prefs.vehicleChannel || "";
-  const legacyPrefs = Number(prefs.version || 0) < 2;
+  const oldPrefs = Number(prefs.version || 0) < 2;
   if (!canbSaved) {
     canbSaved = automatic
       ? channels.find(channel => channel !== can1Saved) || channels[0] || ""
       : channels[0] || "";
-  } else if (automatic && legacyPrefs && canbSaved === can1Saved && channels.length > 1) {
+  } else if (automatic && oldPrefs && canbSaved === can1Saved && channels.length > 1) {
     canbSaved = channels.find(channel => channel !== can1Saved) || channels[0] || "";
   }
   apply("#can1ConnectChannel", can1Saved);
   apply("#canbConnectChannel", canbSaved);
-  apply("#canbConnectBitrate", prefs.canbBitrate || prefs.vehicleBitrate || "500000");
   renderConnectionSettingsMessage();
 }
 
 function saveConnectionPreferences() {
   const prefs = {
-    version: 2,
+    version: 3,
     can1Channel: $("#can1ConnectChannel")?.value || "",
     canbChannel: $("#canbConnectChannel")?.value || "",
-    canbBitrate: $("#canbConnectBitrate")?.value || "500000",
   };
   try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
   $("#connectDialog")?.close();
@@ -885,8 +882,8 @@ function updateScopeStrips(main, vehicle, bmsData) {
   setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
     "连接 CAN1 或 CANB 后显示故障码、告警等级与历史记录。");
 
-  const vehicleUsable = vehicleConnected
-    && ["canb", "canb_legacy"].includes(vehicle.bus_profile) && !vehicleMismatch;
+  const vehicleUsable = vehicleConnected && vehicle.bus_profile === "canb"
+    && Number(vehicle.bitrate) === 500000 && !vehicleMismatch;
   updateScopeStrip("#vehicleScopeStrip", vehicleUsable ? { show: false } : {
     show: true, danger: !!vehicleMismatch,
     title: vehicleMismatch ? "总线疑似接反" : "等待 CANB 连接",
@@ -898,7 +895,7 @@ function updateScopeStrips(main, vehicle, bmsData) {
   // 可写判定必须与风扇页 fanConnectionAvailable() 一致：内置模拟通道只提供数据，
   // 命令发不出去，此时仍要显示提示并把写入按钮锁上。
   const fanWritable = vehicleConnected && vehicle.mode === "pcan"
-    && vehicle.bus_profile !== "canb_legacy";
+    && vehicle.bus_profile === "canb" && Number(vehicle.bitrate) === 500000;
   const fanStrip = $("#fanScopeStrip");
   if (fanStrip) {
     fanStrip.hidden = fanWritable && !vehicleMismatch;
@@ -912,7 +909,7 @@ function updateScopeStrips(main, vehicle, bmsData) {
           ? "点击底部“CANB”直接连接后，才能查看和命令风扇"
           : vehicle.mode !== "pcan"
             ? "当前 CANB 数据来自内置模拟；风扇命令需要实体 CANB"
-            : "当前 CANB 为 Legacy 250 kbit/s；风扇命令需要 CANB 500 kbit/s");
+            : "当前连接不是 CANB 500 kbit/s");
   }
   document.body.classList.toggle("fan-write-locked", !fanWritable);
 
@@ -922,7 +919,6 @@ function updateScopeStrips(main, vehicle, bmsData) {
 
 function busProfileLabel(connection, fallback) {
   const profile = connection?.bus_profile;
-  if (profile === "canb_legacy") return "CANB Legacy";
   if (profile === "canb") return "CANB";
   if (profile === "can1") return "CAN1";
   return fallback;
@@ -1011,7 +1007,6 @@ function renderConnection() {
   const firmware = state.mainSnapshot?.firmware || {};
   const firmwareText = [
     firmware.variant,
-    firmware.charger_variant && firmware.charger_variant !== "Runtime" ? firmware.charger_variant : "",
     firmware.git,
     firmware.build_date ? `构建 ${firmware.build_date}` : "",
   ].filter(Boolean).join(" · ") || "等待数据";
@@ -1139,9 +1134,7 @@ async function sendPendingCommand() {
   if (state.pendingIvtAction) {
     const pending = state.pendingIvtAction;
     $("#doConfirm").disabled = true;
-    const result = pending.kind === "configure"
-      ? await state.api.configure_ivt_bms_can1(pending.options)
-      : await state.api.switch_ivt_bitrate(pending.options);
+    const result = await state.api.configure_ivt_bms_can1(pending.options);
     if (result.ok) {
       $("#confirmDialog").close();
       state.pendingIvtAction = null;
@@ -1194,7 +1187,7 @@ async function sendPendingCommand() {
   const command = state.pendingCommand.name;
   const result = await state.api.send_command(command, state.pendingCommand.values, true);
   if (result.ok) {
-    const dirtyMap = { alarm_thresholds: "thresholds", alarm_switches: "switches", charge_config: "charge", current_direction: "direction", charger_type: "chargerType" };
+    const dirtyMap = { alarm_thresholds: "thresholds", alarm_switches: "switches", charge_config: "charge", current_direction: "direction" };
     if (dirtyMap[command]) state.dirty[dirtyMap[command]] = false;
     watchFlashSave(command, result.ack);
     $("#confirmDialog").close(); toast(result.message || "命令已发送");

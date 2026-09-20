@@ -89,7 +89,7 @@ SPECIAL_CAN_TARGETS = {
 }
 
 INTEL_SETUP_DB1 = 0x42
-BITRATE_PRESETS = (250000, 500000)
+BITRATE_PRESETS = (500000,)
 IVT_RESPONSE_MUXES = {
     SET_MODE_RSP_MUX, STORE_RSP_MUX, TRIGGER_RSP_MUX,
     THRESHOLD_POS_RSP_MUX, THRESHOLD_NEG_RSP_MUX,
@@ -551,9 +551,9 @@ class IvtClient:
         return self.wait_alive()
 
     def restart_to_bitrate(self, bitrate: int, reopen: Callable[[int], None]) -> tuple[IvtFrame, IvtFrame]:
-        mapping = {250000: 0x08, 500000: 0x04, 1000000: 0x02}
+        mapping = {500000: 0x04, 1000000: 0x02}
         if bitrate not in mapping:
-            raise ValueError("IVT 位率预设只支持 250000、500000、1000000")
+            raise ValueError("IVT 位率预设只支持 500000、1000000")
         response = self.request([0x3A, mapping[bitrate], 0, 0, 0, 0, 0, 0], STORE_RSP_MUX, timeout=2.0)
         reopen(int(bitrate))
         return response, self.wait_alive()

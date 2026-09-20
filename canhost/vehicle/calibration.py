@@ -201,7 +201,7 @@ class FanCalibrationSession:
         if not conn.get("connected", False) or conn.get("mode") != "pcan":
             return {"ok": False, "error": "请先连接真实 PCAN 上的 CANB，禁止模拟连接发送标定命令"}
         if conn.get("bus_profile") != "canb" or conn.get("bitrate") != 500000:
-            return {"ok": False, "error": "风扇标定只允许使用整车 CANB 500 kbit/s；禁止使用 Legacy 250 kbit/s"}
+            return {"ok": False, "error": "风扇标定只允许使用整车 CANB 500 kbit/s"}
 
         fan = snap.get("fan", {})
         fan_status = fan.get("status", {})

@@ -22,7 +22,7 @@ from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, C
                            frame_name, is_can1_bus_signature)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
                        build_bms_fan_command, bms_fan_ack_matches, canb_frame_name,
-                       CANB_ONLY_EXT_IDS, CANB_ONLY_NODE_STD_IDS,
+                       CANB_ONLY_NODE_STD_IDS,
                        FAN_COMMAND_ID, BMS_FAN_COMMAND_ID)
 from .monitor import CanMonitor, normalize_message_spec
 from .vehicle.protocol import VehicleProtocol
@@ -125,7 +125,7 @@ class CanService:
         self.disconnect()
         mode = config.get("mode", "pcan")
         profile = config.get("bus_profile", "can1")
-        bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
+        bitrate = int(config.get("bitrate") or 500000)
         requested_channel = config.get("channel")
         if mode != "simulation" and not requested_channel:
             return {"ok": False, "error": "未选择 PCAN 通道；请先刷新并选择已连接设备"}
@@ -134,8 +134,8 @@ class CanService:
             return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；真实 IVT 也应接 CAN1"}
         if mode == "bench" and self.protocol_kind != "bms":
             return {"ok": False, "error": "台架注入只支持 BMS 协议连接"}
-        if mode == "simulation" and self.protocol_kind == "vehicle" and profile == "can1":
-            return {"ok": False, "error": "整车连接只在 CANB 上工作；请选择 CANB 或 Legacy 位率"}
+        if self.protocol_kind == "vehicle" and (profile != "canb" or bitrate != 500000):
+            return {"ok": False, "error": "整车连接固定使用 CANB 500 kbit/s"}
         with self.lock:
             self.protocol = self._new_protocol()
             if self.protocol_kind == "vehicle":
@@ -276,8 +276,6 @@ class CanService:
             return {"ok": False, "error": "CAN 尚未连接"}
         if connection.get("mode") != "pcan" or bus is None:
             return {"ok": False, "error": "原始发送只允许当前真实 PCAN 连接；模拟和回放不可写"}
-        if connection.get("bus_profile") == "canb_legacy":
-            return {"ok": False, "error": "Legacy 250 kbit/s CANB 为只读，不能发送 CAN 帧"}
         try:
             import can
             payload = bytes(normalized["data_bytes"])
@@ -313,8 +311,6 @@ class CanService:
             if (not self.connection.get("connected") or self.connection.get("mode") != "pcan"
                     or self.bus is None):
                 return {"ok": False, "error": "周期发送只允许当前真实 PCAN 连接"}
-            if self.connection.get("bus_profile") == "canb_legacy":
-                return {"ok": False, "error": "Legacy 250 kbit/s CANB 为只读，不能启用周期发送"}
             self.monitor_tx_tasks[key] = {
                 "id": key, "spec": normalized, "active": True, "count": 0,
                 "next_at": time.monotonic(), "last_error": None,
@@ -377,7 +373,6 @@ class CanService:
                 return {"ok": False, "error": "历史回放为只读，不能发送 CAN 命令"}
             profile = self.connection.get("bus_profile")
             state = self.protocol.overview.get("state")
-            charge_mode = bool(self.protocol.fault.get("flags", {}).get("charge_mode"))
             summary_seen = self.protocol.last_summary_monotonic
             summary_age = None if summary_seen is None else max(0.0, self.protocol.clock() - summary_seen)
             runtime_protocol_version = self.protocol.runtime_diag.get("protocol_version")
@@ -390,12 +385,10 @@ class CanService:
                     "error": (f"主控工具协议版本为 {runtime_protocol_version}，"
                               f"当前上位机要求版本 {TOOL_PROTOCOL_VERSION}；请烧录匹配固件或使用匹配的上位机")}
         if name in {"charge_config", "alarm_thresholds", "alarm_switches", "current_direction",
-                    "charger_type", "log_info", "log_read", "log_clear"} and state not in {2, 3, 7}:
+                    "log_info", "log_read", "log_clear"} and state not in {2, 3, 7}:
             return {"ok": False, "error": "主控仅在自检、待机或故障保持状态接受此命令"}
         if name == "fault_reset" and state != 7:
             return {"ok": False, "error": "故障复位命令仅在故障保持状态处理"}
-        if name == "charger_type" and charge_mode:
-            return {"ok": False, "error": "必须先释放实体充电按钮并退出充电模式，才能切换充电机类型"}
         try:
             command_values = dict(values)
             expects_unified_ack = name != "rtc"
@@ -495,7 +488,7 @@ class CanService:
                 return {"ok": False, "error": "风扇命令只允许使用真实 PCAN 发送"}
             if (self.connection.get("bus_profile") != "canb"
                     or self.connection.get("bitrate") != 500000):
-                return {"ok": False, "error": "风扇命令只允许从整车 CANB 500 kbit/s 发送；Legacy 250 kbit/s 禁止写入"}
+                return {"ok": False, "error": "风扇命令只允许从整车 CANB 500 kbit/s 发送"}
             self.fan_command_sequence = (self.fan_command_sequence + 1) & 0xFF
             sequence = self.fan_command_sequence
             # A late lease-expiry ACK (result 5) may reuse an old sequence;
@@ -553,7 +546,7 @@ class CanService:
                 return {"ok": False, "error": "电池箱风扇命令只允许使用真实 PCAN 发送"}
             if (self.connection.get("bus_profile") != "canb"
                     or self.connection.get("bitrate") != 500000):
-                return {"ok": False, "error": "电池箱风扇命令只允许从整车 CANB 500 kbit/s 发送；Legacy 250 kbit/s 禁止写入"}
+                return {"ok": False, "error": "电池箱风扇命令只允许从整车 CANB 500 kbit/s 发送"}
             self.battery_fan_command_sequence = (self.battery_fan_command_sequence + 1) & 0xFF
             sequence = self.battery_fan_command_sequence
             self.protocol.battery_fan_acks.pop(sequence, None)
@@ -689,8 +682,7 @@ class CanService:
         now = time.monotonic()
         if is_can1_bus_signature(frame.arbitration_id, frame.is_extended_id):
             kind = "can1"
-        elif ((not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS)
-              or (frame.is_extended_id and frame.arbitration_id in CANB_ONLY_EXT_IDS)):
+        elif not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS:
             kind = "canb"
         else:
             return
@@ -712,7 +704,7 @@ class CanService:
         if self.connection.get("mode") != "pcan" or not self.connection.get("connected"):
             return None
         profile = self.connection.get("bus_profile")
-        expected = "can1" if profile == "can1" else "canb" if profile in ("canb", "canb_legacy") else None
+        expected = "can1" if profile == "can1" else "canb" if profile == "canb" else None
         if expected is None:
             return None
         detected = "canb" if expected == "can1" else "can1"
@@ -917,7 +909,7 @@ class CanService:
         if connection.get("bus_profile") != "can1":
             raise RuntimeError("IVT 命令只允许从独立 CAN1 配置连接发送")
         if connection.get("bitrate") not in BITRATE_PRESETS:
-            raise RuntimeError("IVT 操作只支持 250 或 500 kbit/s 预设；正式 CAN1 目标为 500 kbit/s")
+            raise RuntimeError("IVT 配置连接固定使用 CAN1 500 kbit/s")
         return connection
 
     def _clear_ivt_rx(self) -> None:
@@ -949,7 +941,7 @@ class CanService:
     def _reopen_pcan(self, bitrate: int) -> None:
         """Reopen the isolated IVT configuration connection after restart."""
         if bitrate not in BITRATE_PRESETS:
-            raise ValueError("IVT 位率预设只支持 250 或 500 kbit/s")
+            raise ValueError("IVT 配置连接固定使用 CAN1 500 kbit/s")
         with self.lock:
             if self.bus is None or self.connection.get("mode") != "pcan":
                 raise RuntimeError("PCAN 已断开，无法重新打开 IVT 配置连接")
@@ -1083,35 +1075,6 @@ class CanService:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def switch_ivt_bitrate(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
-        options = dict(options or {})
-        try:
-            connection = self._check_ivt_access()
-            target_bitrate = int(options.get("target_bitrate"))
-            if target_bitrate not in BITRATE_PRESETS:
-                raise ValueError("IVT 位率预设只支持 250 或 500 kbit/s")
-            if target_bitrate == int(connection["bitrate"]):
-                raise ValueError("目标位率与当前 PCAN 位率相同")
-            with self.ivt_operation_lock:
-                with self.lock:
-                    self.ivt_config = None
-                client = self._probe_ivt_client(options)
-                client.set_mode("stop", str(options.get("startup") or "run"))
-                response, alive = client.restart_to_bitrate(target_bitrate, self._reopen_pcan)
-                self._clear_ivt_rx()
-                readback = client.readback(bitrate=target_bitrate)
-                expected = self._ivt_expected({**options, "bitrate": target_bitrate}, target_bitrate)
-                readback["comparison"] = compare_readback(readback, expected)
-                readback["expected"] = expected
-                readback["bitrate_switch"] = {"target_bitrate": target_bitrate,
-                                                "response": list(response.data), "alive": list(alive.data)}
-                with self.lock:
-                    self.ivt_config = readback
-                return {"ok": True, "readback": readback,
-                        "message": f"IVT 已重启到 {target_bitrate // 1000} kbit/s，并完成读回核对"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-
     def load_replay(self, path: str) -> dict[str, Any]:
         """Load a native BMS log or CSV and start read-only replay."""
         if self.protocol_kind != "bms":
@@ -1168,11 +1131,9 @@ class CanService:
                 inferred_profile = "can1" if any(is_can1(frame) for frame in frames) else "canb"
 
             profile = metadata.get("bus_profile") or inferred_profile
-            if profile not in {"can1", "canb", "canb_legacy"}:
-                profile = inferred_profile
-            bitrate = int(metadata.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
-            if bitrate not in {250000, 500000}:
-                bitrate = 250000 if profile == "canb_legacy" else 500000
+            bitrate = int(metadata.get("bitrate") or 500000)
+            if profile not in {"can1", "canb"} or bitrate != 500000:
+                raise ValueError("记录使用当前版本不支持的总线档案；请使用对应归档分支版本回放")
             self.disconnect()
             with self.lock:
                 self.protocol = self._new_protocol(clock=lambda: self.replay_position)

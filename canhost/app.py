@@ -167,8 +167,6 @@ class Api:
              "writable": True, "ivt_writable": True},
             {"key": "canb", "name": "CANB · ECU / Chroma · 500 kbit/s", "bitrate": 500000,
              "writable": False},
-            {"key": "canb_legacy", "name": "CANB · Legacy · 250 kbit/s", "bitrate": 250000,
-             "writable": False},
         ]
         if self._service.allow_simulation:
             profiles.insert(0, {
@@ -417,11 +415,12 @@ class Api:
         return self._bench_service.bench_snapshot()
 
     def connect_ivt(self, config: dict[str, Any]) -> dict[str, Any]:
-        profile = "can1"
         bitrate = int(config.get("bitrate") or 500000)
+        if bitrate != 500000:
+            return {"ok": False, "error": "IVT 配置连接固定使用 CAN1 500 kbit/s"}
         return self._ivt_service.connect({
-            "mode": "pcan", "bus_profile": profile,
-            "channel": config.get("channel"), "bitrate": bitrate,
+            "mode": "pcan", "bus_profile": "can1",
+            "channel": config.get("channel"), "bitrate": 500000,
         })
 
     def disconnect_ivt(self) -> dict[str, Any]:
@@ -433,9 +432,9 @@ class Api:
     def connect_vehicle(self, config: dict[str, Any]) -> dict[str, Any]:
         mode = "simulation" if config.get("mode") == "simulation" else "pcan"
         profile = str(config.get("bus_profile") or "canb")
-        if profile not in {"canb", "canb_legacy"}:
-            return {"ok": False, "error": "统一 CANB 连接只接受 CANB 或 Legacy 位率档案"}
-        bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
+        bitrate = int(config.get("bitrate") or 500000)
+        if profile != "canb" or bitrate != 500000:
+            return {"ok": False, "error": "统一 CANB 连接固定使用 CANB 500 kbit/s"}
         with getattr(self, "_can_connection_lock", nullcontext()):
             conflict = self._physical_channel_conflict(config, self._service, "CAN1")
             if conflict:
@@ -626,9 +625,6 @@ class Api:
 
     def configure_ivt_bms_can1(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._ivt_service.configure_ivt_bms_can1(options)
-
-    def switch_ivt_bitrate(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._ivt_service.switch_ivt_bitrate(options)
 
     def bench_command(self, command: str) -> dict[str, Any]:
         return self._bench_service.bench_command(command)

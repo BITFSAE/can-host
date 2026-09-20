@@ -30,7 +30,6 @@ class SharedDecoderTest(unittest.TestCase):
         self.assertEqual(decoded["state_name"], "FAULT")
         self.assertTrue(decoded["flags"]["latched"])
         self.assertTrue(decoded["flags"]["charge_mode"])
-        self.assertEqual(decoded["flags"]["charger_type"], "Chroma")
         self.assertTrue(decoded["slave_offline"][0])
         self.assertTrue(decoded["slave_offline"][5])
         self.assertFalse(decoded["slave_offline"][1])

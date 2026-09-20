@@ -338,17 +338,12 @@ class FanControllerToolTest(unittest.TestCase):
         finally:
             service.disconnect()
 
-    def test_fan_writes_reject_legacy_250k_profile(self) -> None:
+    def test_vehicle_service_rejects_non_500k_profile(self) -> None:
         service = CanService(protocol_kind="vehicle")
         try:
-            service.connection.update({"connected": True, "mode": "pcan",
-                                       "bus_profile": "canb_legacy", "bitrate": 250000})
-            fan = service.send_fan_command("fan_query", {}, True)
-            battery = service.send_battery_fan_command("battery_fan_query", {}, True)
-            self.assertFalse(fan["ok"])
-            self.assertFalse(battery["ok"])
-            self.assertIn("500 kbit/s", fan["error"])
-            self.assertIn("500 kbit/s", battery["error"])
+            result = service.connect({"mode": "simulation", "bus_profile": "canb", "bitrate": 250000})
+            self.assertFalse(result["ok"])
+            self.assertIn("固定使用 CANB 500 kbit/s", result["error"])
         finally:
             service.disconnect()
 

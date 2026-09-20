@@ -491,7 +491,7 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["config"]["current_direction_inverted"])
         self.assertEqual(snapshot["relay"]["charger_feedback_voltage_v"], 568.0)
         self.assertEqual(snapshot["firmware"]["variant"], "Release")
-        self.assertEqual(snapshot["firmware"]["charger_variant"], "Runtime")
+        self.assertNotIn("charger_variant", snapshot["firmware"])
         self.assertTrue(snapshot["firmware"]["dirty"])
         self.assertEqual(snapshot["firmware"]["build_date"], "2026-08-03")
         self.assertEqual(snapshot["sensor_diag"]["soc_zero_bias_ma"], -100)
@@ -507,12 +507,12 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(ack["command"], 3)
         self.assertFalse(ack["accepted"])
 
-    def test_identity_decodes_fixed_legacy_charger_variant(self) -> None:
+    def test_identity_ignores_removed_variant_bits(self) -> None:
         protocol = BmsProtocol()
         protocol.ingest(CanFrame(0x186C50F4, bytes.fromhex("04 05 12 34 56 78 9A BC"), True))
         firmware = protocol.snapshot({"connected": True})["firmware"]
         self.assertEqual(firmware["variant"], "Release")
-        self.assertEqual(firmware["charger_variant"], "Legacy-fixed")
+        self.assertNotIn("charger_variant", firmware)
 
     def test_build_date_rejects_non_leap_year_february_29(self) -> None:
         protocol = BmsProtocol()
@@ -821,7 +821,14 @@ class BmsProtocolTest(unittest.TestCase):
                 "channel": "PCAN_USBBUS2", "bitrate": 500000,
             })
             self.assertFalse(wrong_vehicle_profile["ok"])
-            self.assertIn("只接受 CANB", wrong_vehicle_profile["error"])
+            self.assertIn("固定使用 CANB 500 kbit/s", wrong_vehicle_profile["error"])
+
+            wrong_vehicle_bitrate = api.connect_vehicle({
+                "mode": "pcan", "bus_profile": "canb",
+                "channel": "PCAN_USBBUS2", "bitrate": 250000,
+            })
+            self.assertFalse(wrong_vehicle_bitrate["ok"])
+            self.assertIn("固定使用 CANB 500 kbit/s", wrong_vehicle_bitrate["error"])
         finally:
             api.close()
 
@@ -900,6 +907,11 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="can1ConnectChannel"', html)
         self.assertIn('id="canbConnectChannel"', html)
         self.assertIn('id="swapConnectionChannels"', html)
+        self.assertNotIn('id="canbConnectBitrate"', html)
+        self.assertNotIn('id="switchIvt250"', html)
+        self.assertNotIn('id="chargerType"', html)
+        self.assertNotIn("250 kbit/s", html)
+        self.assertNotIn("Legacy", html)
         self.assertIn('id="simulationBusButton"', html)
         self.assertIn('id="frameSource"', html)
         self.assertIn('id="page-telemetry"', html)

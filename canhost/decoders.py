@@ -106,7 +106,6 @@ if CHROMA_DERIVED_STD_IDS & CANB_OCCUPIED_WITHOUT_CHROMA:
 # 基本可以判定适配器实际接在 CANB 上。IVT 0x512..0x519 不参与判定：
 # 它同时登记在整车 DBC 中，而 IVT 实体接在 CAN1。
 CANB_ONLY_NODE_STD_IDS = frozenset(CANB_OCCUPIED_WITHOUT_CHROMA | CHROMA_DERIVED_STD_IDS)
-CANB_ONLY_EXT_IDS = frozenset({0x18FF50E5})  # Legacy 充电机反馈
 
 CANB_IDS = {
     0x071: "胎温测点 1-4（轮位待确认）",
@@ -162,8 +161,6 @@ CANB_IDS = {
     0x5AC: "BMS 电池箱风扇应答",
     0x5AD: "BMS 电池箱风扇标定状态",
     0x5AE: "风扇两档标定限值",
-    0x1806E5F4: "Legacy 充电请求",
-    0x18FF50E5: "Legacy 充电反馈",
 }
 
 def canb_frame_name(can_id: int) -> str:
@@ -210,7 +207,6 @@ def decode_fault_fields(data: bytes) -> dict[str, Any]:
             "latched": bool(flags & 0x80), "bms_output_latched": bool(flags & 0x40),
             "reset_pending": bool(flags & 0x20), "log_write_pending": bool(flags & 0x10),
             "log_clear_pending": bool(flags & 0x08), "charge_mode": bool(flags & 0x04),
-            "charger_type": "Chroma" if flags & 0x02 else "Legacy",
         },
         "slave_offline": [bool(data[6] & (1 << i)) for i in range(6)],
     }
