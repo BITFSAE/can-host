@@ -503,6 +503,53 @@ class Api:
     def export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
         return self._vehicle_service.export_fan_calibration(format_type)
 
+    def _choose_calibration_export(self, format_type: str, *, battery_fan: bool) -> dict[str, Any]:
+        """Save calibration records through the native file dialog."""
+        if not self._window:
+            return {"ok": False, "error": "窗口尚未就绪"}
+        export_format = str(format_type).lower()
+        if battery_fan:
+            if export_format != "csv":
+                return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 导出"}
+        elif export_format not in {"csv", "json"}:
+            return {"ok": False, "error": "整车风扇标定仅支持 CSV 或 JSON 导出"}
+
+        try:
+            import webview
+            extension = ".json" if export_format == "json" else ".csv"
+            prefix = "battery_fan_calibration" if battery_fan else "fan_calibration"
+            file_types = (("JSON 文件 (*.json)",) if export_format == "json"
+                          else ("CSV 文件 (*.csv)",))
+            selected = self._window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=f"{prefix}_{datetime.now():%Y%m%d_%H%M%S}{extension}",
+                file_types=file_types,
+            )
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            selected_path = selected if isinstance(selected, str) else selected[0]
+            path = Path(selected_path).expanduser()
+            if path.suffix.lower() != extension:
+                path = path.with_suffix(extension)
+
+            exported = (self._vehicle_service.export_battery_fan_calibration()
+                        if battery_fan else
+                        self._vehicle_service.export_fan_calibration(export_format))
+            if not exported.get("ok"):
+                return exported
+            data = exported.get("data")
+            if not isinstance(data, str):
+                return {"ok": False, "error": "标定导出内容无效"}
+            encoding = "utf-8" if export_format == "json" else "utf-8-sig"
+            path.write_text(data, encoding=encoding, newline="")
+            return {"ok": True, "path": str(path), "format": export_format}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def choose_export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        """Choose a destination and persist FanController calibration data."""
+        return self._choose_calibration_export(format_type, battery_fan=False)
+
     def start_battery_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         if options is not None and not isinstance(options, dict):
             return {"ok": False, "error": "标定参数必须是对象"}
@@ -520,6 +567,10 @@ class Api:
 
     def export_battery_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.export_battery_fan_calibration()
+
+    def choose_export_battery_fan_calibration(self) -> dict[str, Any]:
+        """Choose a destination and persist F405 fan calibration data."""
+        return self._choose_calibration_export("csv", battery_fan=True)
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()

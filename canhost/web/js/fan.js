@@ -175,9 +175,13 @@ function bindFanControls() {
     toast(res?.ok ? "已中止电池箱风扇标定" : `中止失败：${res?.error || "未知原因"}`, !res?.ok);
   });
   $("#batteryFanExportButton")?.addEventListener("click", async () => {
-    const res = await pywebview.api.export_battery_fan_calibration();
-    if (res?.ok) downloadFile(res.data, `battery_fan_calibration_${Date.now()}.csv`, "text/csv");
-    else toast(`导出失败：${res?.error || "未知原因"}`, true);
+    try {
+      const res = await state.api.choose_export_battery_fan_calibration();
+      if (res?.ok) toast(`标定记录已导出：${res.path}`);
+      else if (!res?.cancelled) toast(res?.error || "标定记录导出失败", true);
+    } catch (e) {
+      toast(`导出失败：${e}`, true);
+    }
   });
   $("#batteryFanCalibButton")?.addEventListener("click", () => {
     const action = +$("#batteryFanCalibAction").value;
@@ -211,12 +215,9 @@ function bindFanControls() {
 
   $("#exportFanCalibCsv")?.addEventListener("click", async () => {
     try {
-      const res = await pywebview.api.export_fan_calibration("csv");
-      if (res && res.ok && res.data) {
-        downloadFile(res.data, `fan_calibration_${Date.now()}.csv`, "text/csv");
-      } else {
-        toast("无可用标定数据导出", true);
-      }
+      const res = await state.api.choose_export_fan_calibration("csv");
+      if (res?.ok) toast(`CSV 已导出：${res.path}`);
+      else if (!res?.cancelled) toast(res?.error || "CSV 导出失败", true);
     } catch (e) {
       toast(`导出失败：${e}`, true);
     }
@@ -224,12 +225,9 @@ function bindFanControls() {
 
   $("#exportFanCalibJson")?.addEventListener("click", async () => {
     try {
-      const res = await pywebview.api.export_fan_calibration("json");
-      if (res && res.ok && res.data) {
-        downloadFile(res.data, `fan_calibration_${Date.now()}.json`, "application/json");
-      } else {
-        toast("无可用标定数据导出", true);
-      }
+      const res = await state.api.choose_export_fan_calibration("json");
+      if (res?.ok) toast(`JSON 已导出：${res.path}`);
+      else if (!res?.cancelled) toast(res?.error || "JSON 导出失败", true);
     } catch (e) {
       toast(`导出失败：${e}`, true);
     }
@@ -248,18 +246,6 @@ function bindFanControls() {
   renderFanControlFields();
   renderBatteryFanControlFields();
   renderBatteryFanCalibFields();
-}
-
-function downloadFile(content, fileName, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 function confirmFanCommand(name, values, title, message, destructive = false) {

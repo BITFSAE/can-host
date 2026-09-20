@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+from canhost.app import Api
 from canhost.decoders import (CanFrame, build_fan_command, fan_ack_matches,
                               decode_fan_power_status, decode_fan_calib_status,
                               build_bms_fan_command, decode_bms_fan_detail)
@@ -14,6 +19,51 @@ from canhost.vehicle.calibration import FanCalibrationSession, BatteryFanCalibra
 
 
 class FanControllerToolTest(unittest.TestCase):
+    def test_calibration_exports_use_native_save_dialog_after_abort(self) -> None:
+        api = Api.__new__(Api)
+        api._window = MagicMock()
+        api._vehicle_service = MagicMock()
+        api._vehicle_service.export_fan_calibration.side_effect = lambda format_type: {
+            "ok": True,
+            "data": ("会话状态,中止原因\r\naborted,用户手动停止\r\n"
+                     if format_type == "csv" else
+                     json.dumps({"status": "aborted", "abort_reason": "用户手动停止"},
+                                ensure_ascii=False)),
+        }
+        api._vehicle_service.export_battery_fan_calibration.return_value = {
+            "ok": True, "data": "session_status,abort_reason\r\naborted,保护中止\r\n",
+        }
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+                "sys.modules", {"webview": SimpleNamespace(SAVE_DIALOG="save")}):
+            root = Path(directory)
+            fan_csv = root / "fan-aborted.csv"
+            fan_json = root / "fan-aborted.json"
+            battery_csv = root / "battery-aborted.csv"
+            for path, action in (
+                    (fan_csv, lambda: api.choose_export_fan_calibration("csv")),
+                    (fan_json, lambda: api.choose_export_fan_calibration("json")),
+                    (battery_csv, api.choose_export_battery_fan_calibration)):
+                api._window.create_file_dialog.return_value = str(path)
+                result = action()
+                self.assertTrue(result["ok"])
+                self.assertEqual(Path(result["path"]), path)
+                self.assertTrue(path.exists())
+
+            self.assertIn("用户手动停止", fan_csv.read_text(encoding="utf-8-sig"))
+            self.assertEqual(json.loads(fan_json.read_text(encoding="utf-8"))["status"], "aborted")
+            self.assertIn("保护中止", battery_csv.read_text(encoding="utf-8-sig"))
+
+    def test_calibration_export_cancel_does_not_generate_data(self) -> None:
+        api = Api.__new__(Api)
+        api._window = MagicMock()
+        api._window.create_file_dialog.return_value = None
+        api._vehicle_service = MagicMock()
+        with patch.dict("sys.modules", {"webview": SimpleNamespace(SAVE_DIALOG="save")}):
+            result = api.choose_export_fan_calibration("csv")
+        self.assertTrue(result["cancelled"])
+        api._vehicle_service.export_fan_calibration.assert_not_called()
+
     def test_battery_fan_calibration_safety_and_cap_calculation_helpers(self) -> None:
         snap = {
             "connection": {"connected": True, "mode": "pcan",
