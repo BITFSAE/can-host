@@ -11,7 +11,8 @@
 
 浏览器打开 http://127.0.0.1:8801/index.html?mock=live，`mock` 可取：
 
-    live   已连接实体 CANB 的赛场状态（默认，数据新鲜）
+    live   CAN1 与 CANB 同时连接的赛场状态（默认，数据新鲜）
+    canb   仅连接实体 CANB，核对 BMS 镜像回退
     stale  风扇/PDM 数据超出新鲜窗口，用于核对过期配色
     calib  整车标定进行中、电池箱风扇标定已完成
     sim    内置模拟通道（只能读、不能下发），用于核对写入锁定与横幅
@@ -36,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 from canhost.app import Api  # noqa: E402
 
-VARIANTS = ("live", "stale", "calib", "sim")
+VARIANTS = ("live", "canb", "stale", "calib", "sim")
 
 # 只桩接 pywebview：未列出的方法一律返回 {ok: True}，界面新增调用不会让预览报错。
 STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
@@ -58,6 +59,7 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
     bootstrap: async () => clone((await load()).bootstrap),
     refresh_pcan_channels: async () => clone((await load()).bootstrap.pcan_scan),
     get_snapshot: async () => clone((await load()).snapshot),
+    get_canb_bms_snapshot: async () => clone((await load()).canb_bms),
     get_vehicle_snapshot: async () => clone((await load()).vehicle),
     get_quick_snapshot: async () => clone((await load()).quick),
     get_bench_snapshot: ok,
@@ -98,6 +100,7 @@ def collect(api: Api) -> dict:
     return {
         "bootstrap": api.bootstrap(),
         "snapshot": api.get_snapshot(),
+        "canb_bms": api.get_canb_bms_snapshot(),
         "vehicle": api.get_vehicle_snapshot(),
         "quick": api.get_quick_snapshot(),
     }
@@ -141,6 +144,7 @@ def as_field_connection(data: dict) -> None:
         "connected": True, "mode": "pcan", "bus_profile": "can1", "bitrate": 500000,
         "channel": "PCAN_USBBUS1", "status": "已连接", "last_rx_age": 0.1,
     })
+    data["canb_bms"]["connection"].update(data["vehicle"]["connection"])
     data["quick"]["vehicle"]["connection"] = data["vehicle"]["connection"]
 
 
@@ -217,6 +221,13 @@ def write_variants(out_dir: Path) -> None:
 
     as_field_connection(data)
     (out_dir / "mock-live.json").write_text(json.dumps(data, ensure_ascii=False))
+
+    canb_only = json.loads(json.dumps(data))
+    canb_only["snapshot"]["connection"].update({
+        "connected": False, "mode": None, "channel": None, "bitrate": None,
+        "bus_profile": "can1", "status": "未连接", "error": None,
+    })
+    (out_dir / "mock-canb.json").write_text(json.dumps(canb_only, ensure_ascii=False))
 
     stale = json.loads(json.dumps(data))
     apply_stale(stale)

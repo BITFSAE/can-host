@@ -9,7 +9,9 @@ window.$$ = $$;
 var state = {
   api: null,
   bootstrap: null,
+  mainSnapshot: null,
   snapshot: null,
+  canbBmsSnapshot: null,
   toolSnapshots: { bench: null, ivt: null, simulator: null },
   vehicleSnapshot: null,
   telemetrySnapshot: null,
@@ -334,15 +336,17 @@ function bindBackdropDismissal() {
 function bindCoreControls() {
   bindBackdropDismissal();
   $("#themeToggle")?.addEventListener("click", toggleTheme);
-  $("#can1BusButton")?.addEventListener("click", () => toggleMainDockConnection("can1"));
-  $("#canbBmsBusButton")?.addEventListener("click", () => toggleMainDockConnection("canb_bms"));
-  $("#canbVehicleBusButton")?.addEventListener("click", toggleVehicleDockConnection);
+  $("#can1BusButton")?.addEventListener("click", toggleMainDockConnection);
+  $("#canbBusButton")?.addEventListener("click", toggleVehicleDockConnection);
   $("#simulationBusButton")?.addEventListener("click", toggleSimulationChannels);
   $("#connectionSettingsButton")?.addEventListener("click", () => {
     $("#connectDialog")?.showModal();
     refreshPcanChannels(false);
   });
   $("#refreshPcanChannelsButton")?.addEventListener("click", () => refreshPcanChannels(true));
+  $("#can1ConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
+  $("#canbConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
+  $("#swapConnectionChannels")?.addEventListener("click", swapConnectionChannels);
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#confirmDialog").addEventListener("close", () => {
@@ -395,21 +399,16 @@ function bindCoreControls() {
 function populateConnectionOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data) return;
-  const previousProfile = $("#connectProfile")?.value;
-  // 模拟入口只在底栏开发按钮出现，连接弹窗只配置真实 PCAN，避免同一模式重复入口。
-  const profiles = [...(data.profiles || [])].filter(item => ["canb", "canb_legacy"].includes(item.key));
-  $("#connectProfile").innerHTML = profiles.map(item =>
-    `<option value="${item.key}" data-mode="${item.mode || "pcan"}" data-bitrate="${item.bitrate}">${item.name}</option>`
-  ).join("");
-  if (profiles.some(item => item.key === previousProfile)) $("#connectProfile").value = previousProfile;
-  populatePcanSelect("#connectChannel", data);
+  populatePcanSelect("#can1ConnectChannel", data);
+  populatePcanSelect("#canbConnectChannel", data);
   renderPcanDiscoveryStatus(data.pcan_scan);
+  renderConnectionSettingsMessage();
 }
 
 function populateToolChannelOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data?.channels) return;
-  ["#benchChannelSelect", "#ivtChannelSelect", "#vehicleConnectChannel"]
+  ["#benchChannelSelect", "#ivtChannelSelect"]
     .forEach(id => populatePcanSelect(id, data));
 }
 
@@ -488,33 +487,76 @@ async function refreshPcanChannels(announce = false) {
 function restoreConnectionPreferences() {
   let prefs = {};
   try { prefs = JSON.parse(localStorage.getItem(CONNECTION_PREFS_KEY) || "{}"); } catch { /* 使用默认项 */ }
+  const options = selector => [...($(selector)?.options || [])].map(option => option.value).filter(Boolean);
   const apply = (selector, value) => {
     const node = $(selector);
     if (node && [...node.options].some(option => option.value === String(value))) node.value = String(value);
   };
-  apply("#connectChannel", prefs.mainChannel || "PCAN_USBBUS1");
-  apply("#connectProfile", prefs.bmsCanbProfile || "canb");
-  apply("#vehicleConnectChannel", prefs.vehicleChannel || "PCAN_USBBUS1");
-  apply("#vehicleConnectBitrate", prefs.vehicleBitrate || "500000");
+  const channels = options("#can1ConnectChannel");
+  const automatic = state.bootstrap?.pcan_scan?.automatic === true;
+  const can1Saved = prefs.can1Channel || prefs.mainChannel || channels[0] || "";
+  let canbSaved = prefs.canbChannel || prefs.vehicleChannel || "";
+  const legacyPrefs = Number(prefs.version || 0) < 2;
+  if (!canbSaved) {
+    canbSaved = automatic
+      ? channels.find(channel => channel !== can1Saved) || channels[0] || ""
+      : channels[0] || "";
+  } else if (automatic && legacyPrefs && canbSaved === can1Saved && channels.length > 1) {
+    canbSaved = channels.find(channel => channel !== can1Saved) || channels[0] || "";
+  }
+  apply("#can1ConnectChannel", can1Saved);
+  apply("#canbConnectChannel", canbSaved);
+  apply("#canbConnectBitrate", prefs.canbBitrate || prefs.vehicleBitrate || "500000");
+  renderConnectionSettingsMessage();
 }
 
 function saveConnectionPreferences() {
   const prefs = {
-    mainChannel: $("#connectChannel")?.value || "",
-    bmsCanbProfile: $("#connectProfile")?.value || "canb",
-    vehicleChannel: $("#vehicleConnectChannel")?.value || "",
-    vehicleBitrate: $("#vehicleConnectBitrate")?.value || "500000",
+    version: 2,
+    can1Channel: $("#can1ConnectChannel")?.value || "",
+    canbChannel: $("#canbConnectChannel")?.value || "",
+    canbBitrate: $("#canbConnectBitrate")?.value || "500000",
   };
   try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
   $("#connectDialog")?.close();
-  toast("CAN 连接设置已保存");
+  const shared = prefs.can1Channel && prefs.can1Channel === prefs.canbChannel;
+  toast(shared
+    ? "设置已保存；同一 PCAN 通道不能同时连接 CAN1 与 CANB"
+    : "CAN1 / CANB 通道分配已保存");
 }
 
-function mainConnectionRole() {
-  const main = (state.snapshot || {}).connection || {};
-  if (main.connected !== true || main.mode === "simulation") return null;
-  if (main.connected === true && ["canb", "canb_legacy"].includes(main.bus_profile)) return "canb_bms";
-  return "can1";
+function renderConnectionSettingsMessage() {
+  const message = $("#connectionSettingsMessage");
+  if (!message) return;
+  const can1 = $("#can1ConnectChannel")?.value || "";
+  const canb = $("#canbConnectChannel")?.value || "";
+  const shared = can1 && can1 === canb;
+  message.classList.toggle("warn", !!shared);
+  message.textContent = shared
+    ? `${can1} 同时分配给两条总线；可单通道轮换，双通道设备请点击自动分配。`
+    : can1 && canb
+      ? `CAN1 使用 ${can1}，CANB 使用 ${canb}。`
+      : "请为 CAN1 和 CANB 选择 PCAN 通道。";
+}
+
+function swapConnectionChannels() {
+  const can1 = $("#can1ConnectChannel");
+  const canb = $("#canbConnectChannel");
+  if (!can1 || !canb || !can1.value || !canb.value) return;
+  if (can1.value === canb.value) {
+    const alternative = [...canb.options].find(option => option.value && option.value !== can1.value);
+    if (alternative) canb.value = alternative.value;
+    renderConnectionSettingsMessage();
+    return;
+  }
+  const previous = can1.value;
+  can1.value = canb.value;
+  canb.value = previous;
+  renderConnectionSettingsMessage();
+}
+
+function mainConnectionState() {
+  return state.mainSnapshot?.connection || state.snapshot?.connection || {};
 }
 
 function vehicleConnectionState() {
@@ -524,21 +566,17 @@ function vehicleConnectionState() {
 function roleButton(role) {
   return {
     can1: $("#can1BusButton"),
-    canb_bms: $("#canbBmsBusButton"),
-    canb_vehicle: $("#canbVehicleBusButton"),
+    canb: $("#canbBusButton"),
     simulation: $("#simulationBusButton"),
   }[role];
 }
 
-async function toggleMainDockConnection(role) {
+async function toggleMainDockConnection() {
   if (!state.api) return toast("应用后端未就绪", true);
-  if (roleButton(role)?.classList.contains("connecting")) return;
-  if (mainConnectionRole() === role) return disconnectCan();
-  const profileOption = $("#connectProfile")?.selectedOptions?.[0];
-  const channel = $("#connectChannel")?.value;
+  if (roleButton("can1")?.classList.contains("connecting")) return;
+  if (mainConnectionState().connected === true && mainConnectionState().mode !== "simulation") return disconnectCan();
+  const channel = $("#can1ConnectChannel")?.value;
   if (!channel) return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
-  const profile = role === "can1" ? "can1" : (profileOption?.value || "canb");
-  const bitrate = role === "can1" ? 500000 : Number(profileOption?.dataset?.bitrate || 500000);
   state.busMismatchPrompted.main = null;
   const vehicle = vehicleConnectionState();
   if (vehicle.connected === true && vehicle.mode === "simulation") {
@@ -546,21 +584,21 @@ async function toggleMainDockConnection(role) {
     state.vehicleSnapshot = null;
   }
   resetChargeTiming();
-  setBusConnecting(role, true);
+  setBusConnecting("can1", true);
   let result;
   try {
     result = await state.api.connect_can({
-      mode: "pcan", bus_profile: profile,
-      channel, bitrate,
+      mode: "pcan", bus_profile: "can1",
+      channel, bitrate: 500000,
       auto_record: typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true,
     });
   } catch (error) {
     return toast(`连接失败：${error}`, true);
   } finally {
-    setBusConnecting(role, false);
+    setBusConnecting("can1", false);
   }
-  if (!result?.ok) return toast(result?.error || `${role === "can1" ? "CAN1" : "BMS CANB"} 连接失败`, true);
-  toast(result.warning || `${role === "can1" ? "CAN1" : "BMS CANB"} 已连接`, !!result.warning);
+  if (!result?.ok) return toast(result?.error || "CAN1 连接失败", true);
+  toast(result.warning || "CAN1 已连接", !!result.warning);
   // The status-bar buttons only control connections. Keep the operator's
   // current workspace in place; the monitor remains available from the nav.
   state.frameSource = "main";
@@ -569,7 +607,7 @@ async function toggleMainDockConnection(role) {
 
 async function toggleVehicleDockConnection() {
   if (!state.api) return toast("应用后端未就绪", true);
-  if (roleButton("canb_vehicle")?.classList.contains("connecting")) return;
+  if (roleButton("canb")?.classList.contains("connecting")) return;
   const vehicle = vehicleConnectionState();
   if (vehicle.connected === true && vehicle.mode !== "simulation") return disconnectVehicle();
   await connectVehicle();
@@ -584,7 +622,7 @@ function simulationServices() {
 
 function simulationState() {
   const services = simulationServices();
-  const main = state.snapshot?.connection || {};
+  const main = mainConnectionState();
   const vehicle = vehicleConnectionState();
   const running = services.filter(service => service === "main"
     ? main.connected === true && main.mode === "simulation"
@@ -598,7 +636,7 @@ async function toggleSimulationChannels() {
   const sim = simulationState();
   if (!sim.services.length) return toast("当前版本未启用模拟通道", true);
   if (sim.complete) return disconnectSimulationChannels();
-  const main = state.snapshot?.connection || {};
+  const main = mainConnectionState();
   const vehicle = vehicleConnectionState();
   const realConnected = (main.connected === true && main.mode !== "simulation")
     || (vehicle.connected === true && vehicle.mode !== "simulation");
@@ -631,7 +669,7 @@ async function toggleSimulationChannels() {
 }
 
 async function disconnectSimulationChannels() {
-  const main = state.snapshot?.connection || {};
+  const main = mainConnectionState();
   const vehicle = vehicleConnectionState();
   if (main.connected === true && main.mode === "simulation") await state.api.disconnect_can();
   if (vehicle.connected === true && vehicle.mode === "simulation") await state.api.disconnect_vehicle();
@@ -649,13 +687,13 @@ function setBusConnecting(role, active) {
 }
 
 function updateBusButtonsEnabled() {
-  const mainRole = mainConnectionRole();
+  const main = mainConnectionState();
   const vehicle = vehicleConnectionState();
   const sim = simulationState();
+  const mainReplay = main.connected === true && main.mode === "replay";
   const states = {
-    can1: mainRole === "can1",
-    canb_bms: mainRole === "canb_bms",
-    canb_vehicle: vehicle.connected === true && vehicle.mode !== "simulation",
+    can1: main.connected === true && main.mode !== "simulation",
+    canb: vehicle.connected === true && vehicle.mode !== "simulation",
     simulation: sim.complete,
   };
   Object.entries(states).forEach(([role, active]) => {
@@ -667,9 +705,10 @@ function updateBusButtonsEnabled() {
   const simulationButton = roleButton("simulation");
   simulationButton?.classList.toggle("partial", sim.running.length > 0 && !sim.complete);
   const titles = {
-    can1: states.can1 ? "CAN1 已连接，点击断开" : "按保存设置直接连接 CAN1",
-    canb_bms: states.canb_bms ? "BMS CANB 已连接，点击断开" : "按保存设置直接连接 BMS CANB（只读）",
-    canb_vehicle: states.canb_vehicle ? "整车 CANB 已连接，点击断开" : "按保存设置直接连接整车 CANB",
+    can1: mainReplay
+      ? `${busProfileLabel(main, "CAN1")} 历史回放中，点击停止`
+      : states.can1 ? "CAN1 已连接，点击断开" : "按保存设置直接连接 CAN1",
+    canb: states.canb ? "CANB 已连接，点击断开" : "按保存设置直接连接 CANB",
     simulation: sim.complete ? "开发模拟通道已启动，点击停止" : sim.running.length ? "模拟通道未完整启动，点击重试" : "启动开发模拟通道",
   };
   Object.entries(titles).forEach(([role, title]) => roleButton(role)?.setAttribute("title", title));
@@ -677,14 +716,14 @@ function updateBusButtonsEnabled() {
 
 async function disconnectCan() {
   if (!state.api) return;
-  const role = mainConnectionRole() || "can1";
+  const replay = mainConnectionState().mode === "replay";
   state.busMismatchPrompted.main = null;
   resetChargeTiming();
-  setBusConnecting(role, true);
+  setBusConnecting("can1", true);
   try { await state.api.disconnect_can(); }
   catch (error) { return toast(`断开失败：${error}`, true); }
-  finally { setBusConnecting(role, false); }
-  toast("BMS 主连接已断开");
+  finally { setBusConnecting("can1", false); }
+  toast(replay ? "历史回放已停止" : "CAN1 已断开");
   await poll();
 }
 
@@ -700,7 +739,7 @@ async function poll() {
   state.pollTimer = null;
   state.pollInFlight = true;
   try {
-    state.snapshot = await state.api.get_snapshot();
+    state.mainSnapshot = await state.api.get_snapshot();
     const page = state.page;
     // Optional/side snapshots must never prevent the main BMS snapshot from
     // being rendered. If one of them fails (for example a transient PyWebView
@@ -734,6 +773,11 @@ async function poll() {
     if (!TOOL_PAGES.includes(page) && state.api.get_quick_snapshot) {
       await optionalSnapshot(state.api.get_quick_snapshot, value => { state.quickSnapshot = value; });
     }
+    if (!TOOL_PAGES.includes(page) && state.mainSnapshot?.connection?.connected !== true
+        && state.api.get_canb_bms_snapshot) {
+      await optionalSnapshot(state.api.get_canb_bms_snapshot, value => { state.canbBmsSnapshot = value; });
+    }
+    state.snapshot = effectiveBmsSnapshot();
     if (state.snapshot) {
       renderChargeTiming(state.snapshot.overview, state.snapshot.connection, state.snapshot.fault || {});
     }
@@ -747,9 +791,17 @@ async function poll() {
   }
 }
 
+function effectiveBmsSnapshot() {
+  const main = state.mainSnapshot;
+  const canb = state.canbBmsSnapshot;
+  if (main?.connection?.connected === true) return main;
+  if (canb?.connection?.connected === true) return canb;
+  return main || canb;
+}
+
 function render() {
   const snap = state.snapshot; if (!snap) return;
-  renderConnection(snap.connection);
+  renderConnection();
   renderTelemetryBadge();
   renderCellBadge();
   renderAlarmSummary();
@@ -781,18 +833,21 @@ function render() {
 }
 
 function renderBusDock() {
-  const main = (state.snapshot || {}).connection || {};
+  const main = mainConnectionState();
   const vehicle = state.quickSnapshot?.vehicle?.connection
     || state.vehicleSnapshot?.connection || {};
-  updateScopeStrips(main, vehicle || {});
+  const bmsData = state.snapshot?.connection || {};
+  updateScopeStrips(main, vehicle || {}, bmsData);
   updateBusButtonsEnabled();
 }
 
-function updateScopeStrips(main, vehicle) {
+function updateScopeStrips(main, vehicle, bmsData) {
   const mainConnected = main.connected === true;
   const vehicleConnected = vehicle.connected === true;
+  const bmsDataConnected = bmsData.connected === true;
   const mainMismatch = main.bus_mismatch || null;
   const vehicleMismatch = vehicle.bus_mismatch || null;
+  renderFrameSourceLabels(main, vehicle);
   let frameSource = state.frameSource || "main";
   const selectedReady = frameSource === "vehicle" ? vehicleConnected : mainConnected;
   if (!selectedReady && (mainConnected || vehicleConnected)) {
@@ -806,7 +861,8 @@ function updateScopeStrips(main, vehicle) {
 
   // 疑似接反时按“不可写”呈现：F405 不接受来自 CANB 的工具命令，
   // 此时保持按钮可用只会让操作者误以为命令能送达。
-  const can1Writable = mainConnected && main.bus_profile === "can1" && !mainMismatch;
+  const can1Writable = mainConnected && main.mode !== "replay"
+    && main.bus_profile === "can1" && !mainMismatch;
   const controlStrip = $("#controlScopeStrip");
   if (controlStrip) controlStrip.hidden = can1Writable;
   document.body.classList.toggle("control-write-locked", !can1Writable);
@@ -814,28 +870,29 @@ function updateScopeStrips(main, vehicle) {
   if (!can1Writable) {
     text("#controlScopeTitle", mainMismatch ? "CAN1 写命令不可用 · 总线疑似接反" : "CAN1 写命令不可用");
     text("#controlScopeDetail", mainMismatch
-      ? busMismatchDetail("当前主连接", mainMismatch)
-      : "只有 CAN1 主监视连接才能发送 F405 工具命令");
+      ? busMismatchDetail("CAN1 连接", mainMismatch)
+      : "只有实体 CAN1 连接才能发送 F405 工具命令");
   }
 
   // 数据页顶部连接提示：未连接时说明需要什么连接，疑似接反时醒目提醒，正常后隐藏。
-  const mainWaiting = !mainConnected;
+  const bmsMismatch = state.snapshot === state.mainSnapshot ? mainMismatch : vehicleMismatch;
+  const mainWaiting = !bmsDataConnected;
   const cellsWaiting = !(mainConnected && main.bus_profile === "can1");
-  setBmsScopeStrip("#overviewScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
-    "点击底部“CAN1”或“BMS CANB”按钮连接后开始监视。");
+  setBmsScopeStrip("#overviewScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
+    "点击底部“CAN1”或“CANB”按钮连接后开始监视。");
   setBmsScopeStrip("#cellsScopeStrip", cellsWaiting, mainMismatch, "等待 CAN1 连接",
     "逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。");
-  setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, mainMismatch, "等待 BMS 主连接",
-    "连接 CAN1 或 BMS CANB 后显示故障码、告警等级与历史记录。");
+  setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
+    "连接 CAN1 或 CANB 后显示故障码、告警等级与历史记录。");
 
   const vehicleUsable = vehicleConnected
     && ["canb", "canb_legacy"].includes(vehicle.bus_profile) && !vehicleMismatch;
   updateScopeStrip("#vehicleScopeStrip", vehicleUsable ? { show: false } : {
     show: true, danger: !!vehicleMismatch,
-    title: vehicleMismatch ? "总线疑似接反" : "等待整车 CANB 连接",
+    title: vehicleMismatch ? "总线疑似接反" : "等待 CANB 连接",
     detail: vehicleMismatch
-      ? busMismatchDetail("整车连接", vehicleMismatch)
-      : "点击底部“整车 CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。",
+      ? busMismatchDetail("CANB 连接", vehicleMismatch)
+      : "点击底部“CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。",
   });
 
   // 可写判定必须与风扇页 fanConnectionAvailable() 一致：内置模拟通道只提供数据，
@@ -846,21 +903,51 @@ function updateScopeStrips(main, vehicle) {
   if (fanStrip) {
     fanStrip.hidden = fanWritable && !vehicleMismatch;
     fanStrip.classList.toggle("danger", !!vehicleMismatch);
-    text("#fanScopeTitle", vehicleMismatch ? "总线疑似接反" : "整车风扇需 CANB 整车遥测");
+    text("#fanScopeTitle", vehicleMismatch ? "总线疑似接反" : "整车风扇需要 CANB");
     text("#fanScopeDetail", fanWritable && !vehicleMismatch
       ? ""
       : vehicleMismatch
-        ? busMismatchDetail("整车连接", vehicleMismatch)
+        ? busMismatchDetail("CANB 连接", vehicleMismatch)
         : !vehicleConnected
-          ? "点击底部“整车 CANB”直接连接后，才能查看和命令风扇"
+          ? "点击底部“CANB”直接连接后，才能查看和命令风扇"
           : vehicle.mode !== "pcan"
-            ? "当前整车连接是内置模拟数据；风扇命令需要实体 CANB"
-            : "当前整车连接为 Legacy 250 kbit/s；风扇命令需要整车 CANB 500 kbit/s");
+            ? "当前 CANB 数据来自内置模拟；风扇命令需要实体 CANB"
+            : "当前 CANB 为 Legacy 250 kbit/s；风扇命令需要 CANB 500 kbit/s");
   }
   document.body.classList.toggle("fan-write-locked", !fanWritable);
 
-  maybeNotifyBusMismatch("main", "BMS 主连接", main);
-  maybeNotifyBusMismatch("vehicle", "整车连接", vehicle);
+  maybeNotifyBusMismatch("main", "CAN1 连接", main);
+  maybeNotifyBusMismatch("vehicle", "CANB 连接", vehicle);
+}
+
+function busProfileLabel(connection, fallback) {
+  const profile = connection?.bus_profile;
+  if (profile === "canb_legacy") return "CANB Legacy";
+  if (profile === "canb") return "CANB";
+  if (profile === "can1") return "CAN1";
+  return fallback;
+}
+
+/** Keep a CANB log from masquerading as a live CAN1 stream.  Replay still
+ * lives in the main service, but every visible source label follows the
+ * profile stored in the recording metadata (or inferred from its frames). */
+function renderFrameSourceLabels(main, vehicle) {
+  const mainReplay = main?.connected === true && main.mode === "replay";
+  const mainBus = busProfileLabel(main, "CAN1");
+  const mainLabel = mainReplay ? `回放 ${mainBus}` : "CAN1";
+  const mainTitle = mainReplay ? `历史回放 · ${mainBus}` : "CAN1 数据流";
+  const mainSourceButton = $('#frameSource button[data-source="main"]');
+  if (mainSourceButton) {
+    mainSourceButton.textContent = mainLabel;
+    mainSourceButton.title = mainTitle;
+  }
+  const vehicleSourceButton = $('#frameSource button[data-source="vehicle"]');
+  if (vehicleSourceButton) {
+    vehicleSourceButton.textContent = "CANB";
+    vehicleSourceButton.title = "CANB 数据流";
+  }
+  const dockLabel = $("#can1BusButton b");
+  if (dockLabel) dockLabel.textContent = mainLabel;
 }
 
 /** 统一驱动 BMS 数据页的顶部提示条：未连接给引导，接反给醒目警示。 */
@@ -868,7 +955,7 @@ function setBmsScopeStrip(id, waiting, mismatch, waitTitle, waitDetail) {
   updateScopeStrip(id, waiting || mismatch ? {
     show: true, danger: !!mismatch,
     title: mismatch ? "总线疑似接反" : waitTitle,
-    detail: mismatch ? busMismatchDetail("BMS 主连接", mismatch) : waitDetail,
+    detail: mismatch ? busMismatchDetail("当前 BMS 数据源", mismatch) : waitDetail,
   } : { show: false });
 }
 
@@ -884,7 +971,7 @@ function updateScopeStrip(id, { show, danger = false, title = null, detail = nul
 function busMismatchDetail(scopeLabel, mismatch) {
   const names = { can1: "CAN1", canb: "CANB" };
   const evidence = mismatch.detected === "canb"
-    ? "整车 CANB 独有的节点帧（PDM / 风扇 / ECU 等）"
+    ? "CANB 独有的节点帧（PDM / 风扇 / ECU 等）"
     : "CAN1 从控逐串帧";
   return `${scopeLabel}按${names[mismatch.expected]}工作，却持续收到${evidence}；PCAN 疑似实际接在${names[mismatch.detected]}上，请核对接线。`;
 }
@@ -910,15 +997,18 @@ function maybeNotifyBusMismatch(slot, scopeLabel, connection) {
   $("#busMismatchDialog")?.showModal();
 }
 
-function renderConnection(connection) {
+function renderConnection() {
+  const connection = mainConnectionState();
   const vehicleConnection = vehicleConnectionState();
   const mainRx = Number(connection.rx_count || 0), mainTx = Number(connection.tx_count || 0);
   const vehicleRx = Number(vehicleConnection.rx_count || 0), vehicleTx = Number(vehicleConnection.tx_count || 0);
   text("#rxCount", (mainRx + vehicleRx).toLocaleString());
   text("#txCount", (mainTx + vehicleTx).toLocaleString());
   const traffic = $(".traffic-group");
-  if (traffic) traffic.title = `BMS RX ${mainRx.toLocaleString()} / TX ${mainTx.toLocaleString()} · 整车 RX ${vehicleRx.toLocaleString()} / TX ${vehicleTx.toLocaleString()}`;
-  const firmware = state.snapshot?.firmware || {};
+  const mainTrafficLabel = connection.mode === "replay"
+    ? `回放 ${busProfileLabel(connection, "CAN")}` : "CAN1";
+  if (traffic) traffic.title = `${mainTrafficLabel} RX ${mainRx.toLocaleString()} / TX ${mainTx.toLocaleString()} · CANB RX ${vehicleRx.toLocaleString()} / TX ${vehicleTx.toLocaleString()}`;
+  const firmware = state.mainSnapshot?.firmware || {};
   const firmwareText = [
     firmware.variant,
     firmware.charger_variant && firmware.charger_variant !== "Runtime" ? firmware.charger_variant : "",
@@ -947,7 +1037,7 @@ function setConfirmModeBadge(label, mode) {
  *  control paths keep their own strict freshness gates. */
 function renderQuickBar() {
   const quick = state.quickSnapshot?.vehicle;
-  const main = state.snapshot || {};
+  const main = state.mainSnapshot || {};
   const overview = main.overview || {};
   const mainConnection = main.connection || {};
   const mainSummaryKnown = hasDataAge(mainConnection.summary_age) && overview.voltage_valid !== undefined;

@@ -87,6 +87,13 @@ class CanService:
         self.bench_last_tx_error = ""
         self.bench_last_tx_error_time = 0.0
         self.protocol = self._new_protocol()
+        # A physical vehicle CANB carries both the BMS vehicle mirror and the
+        # other vehicle nodes.  Decode the BMS projection from the same receive
+        # stream instead of opening the PCAN channel a second time just for the
+        # BMS pages.
+        self.canb_bms_protocol: BmsProtocol | None = (
+            BmsProtocol() if self.protocol_kind == "vehicle" else None
+        )
         self.monitor = CanMonitor(self._monitor_frame_name)
         # 疑似接反判定只统计“对侧独有帧”的接收：CAN1 档案收到整车 CANB 节点帧，
         # 或 CANB 档案收到 F405 / 从控 CAN1 专属帧。模拟 / 回放 / 台架模式不参与。
@@ -131,6 +138,8 @@ class CanService:
             return {"ok": False, "error": "整车连接只在 CANB 上工作；请选择 CANB 或 Legacy 位率"}
         with self.lock:
             self.protocol = self._new_protocol()
+            if self.protocol_kind == "vehicle":
+                self.canb_bms_protocol = BmsProtocol()
             self.monitor.clear()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
@@ -232,6 +241,8 @@ class CanService:
             # RTC replies, fault history, or measurements from the previous
             # device survive into the next connection.
             self.protocol = self._new_protocol()
+            if self.protocol_kind == "vehicle":
+                self.canb_bms_protocol = BmsProtocol()
             self.monitor.clear()
             self.ivt_rx_frames.clear()
             self.ivt_config = None
@@ -265,6 +276,8 @@ class CanService:
             return {"ok": False, "error": "CAN 尚未连接"}
         if connection.get("mode") != "pcan" or bus is None:
             return {"ok": False, "error": "原始发送只允许当前真实 PCAN 连接；模拟和回放不可写"}
+        if connection.get("bus_profile") == "canb_legacy":
+            return {"ok": False, "error": "Legacy 250 kbit/s CANB 为只读，不能发送 CAN 帧"}
         try:
             import can
             payload = bytes(normalized["data_bytes"])
@@ -300,6 +313,8 @@ class CanService:
             if (not self.connection.get("connected") or self.connection.get("mode") != "pcan"
                     or self.bus is None):
                 return {"ok": False, "error": "周期发送只允许当前真实 PCAN 连接"}
+            if self.connection.get("bus_profile") == "canb_legacy":
+                return {"ok": False, "error": "Legacy 250 kbit/s CANB 为只读，不能启用周期发送"}
             self.monitor_tx_tasks[key] = {
                 "id": key, "spec": normalized, "active": True, "count": 0,
                 "next_at": time.monotonic(), "last_error": None,
@@ -639,6 +654,15 @@ class CanService:
                 snap["battery_fan"]["calib_session"] = self.battery_fan_calib_session.get_snapshot()
             return snap
 
+    def canb_bms_snapshot(self) -> dict[str, Any]:
+        """Return the BMS view decoded from the canonical physical CANB stream."""
+        with self.lock:
+            if self.canb_bms_protocol is None:
+                raise RuntimeError("当前连接不提供 CANB BMS 镜像")
+            snap = self.canb_bms_protocol.snapshot(self._connection_snapshot_locked())
+            snap["data_source"] = "canb"
+            return snap
+
     def _connection_snapshot_locked(self) -> dict[str, Any]:
         connection = dict(self.connection)
         mismatch = self._bus_mismatch_locked()
@@ -755,8 +779,13 @@ class CanService:
         """Small state polled by the always-visible quick-value strip."""
         with self.lock:
             connection = {key: self.connection.get(key) for key in
-                          ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error",
-                           "rx_count", "tx_count")}
+                          ("connected", "status", "mode", "channel", "bitrate", "bus_profile", "error")}
+            # Traffic counters belong to the protocol instance.  The base
+            # connection dictionary only stores transport configuration, so
+            # reading counters from it made the always-polled CANB snapshot
+            # report zero even while frames were arriving.
+            connection["rx_count"] = self.protocol.rx_count
+            connection["tx_count"] = self.protocol.tx_count
             mismatch = self._bus_mismatch_locked()
             if mismatch:
                 connection["bus_mismatch"] = mismatch
@@ -1551,6 +1580,8 @@ class CanService:
     def _accept_frame_locked(self, frame: CanFrame, *, record: bool = True) -> None:
         self._note_bus_evidence_locked(frame)
         self.protocol.ingest(frame)
+        if self.canb_bms_protocol is not None:
+            self.canb_bms_protocol.ingest(frame)
         self.monitor.ingest(frame)
         if record:
             self._record(frame)

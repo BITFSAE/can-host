@@ -46,13 +46,23 @@ class MonitorFrameValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8 字节"):
             normalize_message_spec({"id": "0x123", "data": "00 " * 9, "cycle_ms": 20})
 
-    def test_monitor_page_keeps_connection_roles_and_python_out_of_its_copy(self) -> None:
+    def test_monitor_page_names_physical_bus_sources_and_keeps_python_out(self) -> None:
         html = (Path(__file__).parents[1] / "canhost" / "web" / "index.html").read_text(encoding="utf-8")
         section = html.split('id="page-frames"', 1)[1].split('id="page-telemetry"', 1)[0]
-        self.assertNotIn("CAN1", section)
-        self.assertNotIn("CANB", section)
+        self.assertIn('data-source="main" title="CAN1 数据流">CAN1</button>', section)
+        self.assertIn('data-source="vehicle" title="CANB 数据流">CANB</button>', section)
+        self.assertNotIn("连接 1", section)
+        self.assertNotIn("连接 2", section)
         self.assertNotIn("PY", section)
         self.assertNotIn("monitor-status", section)
+
+        core = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        self.assertIn("function renderFrameSourceLabels(main, vehicle)", core)
+        self.assertIn('main.mode === "replay"', core)
+        self.assertIn('`回放 ${mainBus}`', core)
+        self.assertIn('历史回放中，点击停止', core)
+        self.assertIn('`回放 ${busProfileLabel(connection, "CAN")}`', core)
+        self.assertIn('main.mode !== "replay"', core)
 
     def test_status_bar_connections_do_not_force_monitor_navigation(self) -> None:
         web = Path(__file__).parents[1] / "canhost" / "web" / "js"
@@ -111,6 +121,16 @@ class MonitorTransportTest(unittest.TestCase):
                 {"id": "0x5A4", "data": "01", "cycle_ms": 200}, True)
             self.assertFalse(protected_fan["ok"])
             self.assertIn("受保护", protected_fan["error"])
+
+            service.connection["bus_profile"] = "canb_legacy"
+            legacy = service.send_monitor_frame(
+                {"id": "0x290", "data": "01", "cycle_ms": 200}, True)
+            self.assertFalse(legacy["ok"])
+            self.assertIn("只读", legacy["error"])
+            legacy_periodic = service.configure_monitor_periodic(
+                "legacy-row", {"id": "0x290", "data": "01", "cycle_ms": 200}, True, True)
+            self.assertFalse(legacy_periodic["ok"])
+            self.assertIn("只读", legacy_periodic["error"])
         finally:
             # Prevent shutdown() assertions from depending on MagicMock state.
             service.disconnect()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
 import json
 import os
@@ -98,9 +99,9 @@ class Api:
         # sender, the IVT configurator, or the fan tool uses its own PCAN handle.
         self._bench_service = CanService(allow_simulation=False)
         self._ivt_service = CanService(allow_simulation=False)
-        # The vehicle connection is a second independent CANB channel.  It
-        # feeds the vehicle pages and the quick-value strip while the main
-        # BMS connection stays on CAN1 for parameter work.
+        # CANB is one physical connection.  Its receive stream feeds both the
+        # vehicle protocol and a BMS mirror projection while the independent
+        # CAN1 connection remains available for detailed data and commands.
         self._vehicle_service = CanService(protocol_kind="vehicle",
                                            allow_simulation=simulation_available,
                                            calibration_diagnostic_dir=(
@@ -128,6 +129,7 @@ class Api:
         self._update_health_path = update_health_path
         self._shutdown_finished = threading.Event()
         self._window: Any = None
+        self._can_connection_lock = threading.Lock()
         self._preference_lock = threading.Lock()
 
     def _read_update_token(self) -> str | None:
@@ -387,11 +389,20 @@ class Api:
         return {"ok": True}
 
     def connect_can(self, config: dict[str, Any]) -> dict[str, Any]:
-        result = self._service.connect(config)
-        return self._start_auto_trace(self._service, config, result, "CONN1")
+        mode = str(config.get("mode") or "pcan")
+        profile = str(config.get("bus_profile") or "can1")
+        if mode == "pcan" and profile != "can1":
+            return {"ok": False, "error": "实体 CANB 已统一由 CANB 连接管理；此入口只连接 CAN1"}
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            conflict = self._physical_channel_conflict(config, self._vehicle_service, "CANB")
+            if conflict:
+                return conflict
+            result = self._service.connect(config)
+            return self._start_auto_trace(self._service, config, result, "CONN1")
 
     def disconnect_can(self) -> dict[str, Any]:
-        return self._service.disconnect()
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            return self._service.disconnect()
 
     def connect_bench(self, config: dict[str, Any]) -> dict[str, Any]:
         return self._bench_service.connect({
@@ -422,21 +433,48 @@ class Api:
     def connect_vehicle(self, config: dict[str, Any]) -> dict[str, Any]:
         mode = "simulation" if config.get("mode") == "simulation" else "pcan"
         profile = str(config.get("bus_profile") or "canb")
+        if profile not in {"canb", "canb_legacy"}:
+            return {"ok": False, "error": "统一 CANB 连接只接受 CANB 或 Legacy 位率档案"}
         bitrate = int(config.get("bitrate") or (250000 if profile == "canb_legacy" else 500000))
-        result = self._vehicle_service.connect({
-            "mode": mode, "bus_profile": profile,
-            "channel": config.get("channel"), "bitrate": bitrate,
-        })
-        return self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            conflict = self._physical_channel_conflict(config, self._service, "CAN1")
+            if conflict:
+                return conflict
+            result = self._vehicle_service.connect({
+                "mode": mode, "bus_profile": profile,
+                "channel": config.get("channel"), "bitrate": bitrate,
+            })
+            return self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
 
     def disconnect_vehicle(self) -> dict[str, Any]:
-        return self._vehicle_service.disconnect()
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            return self._vehicle_service.disconnect()
 
     def get_vehicle_snapshot(self) -> dict[str, Any]:
         return self._vehicle_service.vehicle_snapshot()
 
+    def get_canb_bms_snapshot(self) -> dict[str, Any]:
+        return self._vehicle_service.canb_bms_snapshot()
+
     def get_quick_snapshot(self) -> dict[str, Any]:
         return {"vehicle": self._vehicle_service.quick_snapshot()}
+
+    @staticmethod
+    def _physical_channel_conflict(config: dict[str, Any], other: CanService,
+                                   other_name: str) -> dict[str, Any] | None:
+        """Reject two live PCAN sessions trying to own the same adapter handle."""
+        if str(config.get("mode") or "pcan") != "pcan":
+            return None
+        channel = str(config.get("channel") or "")
+        connection = other.connection
+        if (channel and connection.get("connected") is True
+                and connection.get("mode") == "pcan"
+                and str(connection.get("channel") or "") == channel):
+            return {
+                "ok": False,
+                "error": f"{channel} 正由 {other_name} 使用；CAN1 与 CANB 同时连接时必须选择两个 PCAN 通道",
+            }
+        return None
 
     def connect_telemetry(self, config: dict[str, Any]) -> dict[str, Any]:
         return self._telemetry_service.connect(config)

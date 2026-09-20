@@ -107,7 +107,7 @@
         <section class="page active" id="page-overview" aria-label="运行总览">
           <div class="scope-strip" id="overviewScopeStrip" hidden>
             <span class="scope-strip-icon" aria-hidden="true"></span>
-            <div><b id="overviewScopeTitle">等待 BMS 主连接</b><small id="overviewScopeDetail">点击底部“CAN1”或“BMS CANB”按钮连接后开始监视。</small></div>
+            <div><b id="overviewScopeTitle">等待 BMS 数据</b><small id="overviewScopeDetail">点击底部“CAN1”或“CANB”按钮连接后开始监视。</small></div>
           </div>
           <div class="overview-status" id="overviewStatus">
             <div class="machine-state">
@@ -255,7 +255,7 @@
         <section class="page" id="page-alarms" aria-label="故障与记录">
           <div class="scope-strip" id="alarmsScopeStrip" hidden>
             <span class="scope-strip-icon" aria-hidden="true"></span>
-            <div><b id="alarmsScopeTitle">等待 BMS 主连接</b><small id="alarmsScopeDetail">连接 CAN1 或 BMS CANB 后显示故障码、告警等级与历史记录。</small></div>
+            <div><b id="alarmsScopeTitle">等待 BMS 数据</b><small id="alarmsScopeDetail">连接 CAN1 或 CANB 后显示故障码、告警等级与历史记录。</small></div>
           </div>
           <div class="diagnostic-head">
             <div class="fault-readout"><span>统一故障码</span><b id="faultCode">等待数据</b><button class="link-button" type="button" id="copyFaultCode">复制</button></div>
@@ -407,7 +407,7 @@
         <section class="page" id="page-vehicle" aria-label="整车总览">
           <div class="scope-strip" id="vehicleScopeStrip" hidden>
             <span class="scope-strip-icon" aria-hidden="true"></span>
-            <div><b id="vehicleScopeTitle">等待整车 CANB 连接</b><small id="vehicleScopeDetail">点击底部“整车 CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。</small></div>
+            <div><b id="vehicleScopeTitle">等待 CANB 连接</b><small id="vehicleScopeDetail">点击底部“CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。</small></div>
           </div>
           <div class="vehicle-layout">
 
@@ -979,8 +979,8 @@
               <input id="frameSearch" placeholder="按 CAN ID、帧名称或数据筛选" aria-label="筛选报文">
             </label>
             <div class="segmented small" id="frameSource" role="group" aria-label="数据源">
-              <button class="active" type="button" data-source="main" title="上位机连接 1 的数据流">连接 1</button>
-              <button type="button" data-source="vehicle" title="上位机连接 2 的数据流">连接 2</button>
+              <button class="active" type="button" data-source="main" title="CAN1 数据流">CAN1</button>
+              <button type="button" data-source="vehicle" title="CANB 数据流">CANB</button>
             </div>
             <div class="segmented small" id="frameType" role="group" aria-label="方向筛选">
               <button class="active" type="button" data-kind="all">全部</button>
@@ -1124,11 +1124,8 @@
           <button class="bus-connect" id="can1BusButton" type="button" data-bus="can1" aria-pressed="false" title="按保存设置直接连接 CAN1">
             <i class="bus-dot" aria-hidden="true"></i><b>CAN1</b>
           </button>
-          <button class="bus-connect" id="canbBmsBusButton" type="button" data-bus="canb-bms" aria-pressed="false" title="按保存设置直接连接 BMS CANB（只读）">
-            <i class="bus-dot" aria-hidden="true"></i><b>BMS CANB</b>
-          </button>
-          <button class="bus-connect" id="canbVehicleBusButton" type="button" data-bus="canb-vehicle" aria-pressed="false" title="按保存设置直接连接整车 CANB">
-            <i class="bus-dot" aria-hidden="true"></i><b>整车 CANB</b>
+          <button class="bus-connect" id="canbBusButton" type="button" data-bus="canb" aria-pressed="false" title="按保存设置直接连接 CANB">
+            <i class="bus-dot" aria-hidden="true"></i><b>CANB</b>
           </button>
           <button class="bus-connect simulation-toggle" id="simulationBusButton" type="button" data-bus="simulation" aria-pressed="false" title="启动临时保留的开发模拟通道；实车与台架验证请连接实体 PCAN">
             <i class="bus-dot" aria-hidden="true"></i><b>调试模拟</b>
@@ -1160,30 +1157,40 @@
           <span id="pcanDiscoveryStatus" role="status" aria-live="polite">正在读取 PCAN 设备…</span>
           <button type="button" class="outline-button" id="refreshPcanChannelsButton">刷新设备</button>
         </div>
-        <label class="field">
-          <span class="field-label">BMS 主连接通道</span>
-          <select id="connectChannel"></select>
-        </label>
-        <label class="field">
-          <span class="field-label">BMS CANB 位率</span>
-          <select id="connectProfile"></select>
-        </label>
-        <dl class="mini-facts spread boxed">
-          <div><dt>CAN1 位率</dt><dd>500 kbit/s（固定）</dd></div>
-        </dl>
-        <div class="connection-settings-divider"><span>整车 CANB</span></div>
-        <label class="field" id="vehicleChannelField">
-          <span class="field-label">整车连接通道</span>
-          <select id="vehicleConnectChannel"></select>
-        </label>
-        <label class="field">
-          <span class="field-label">整车 CANB 位率</span>
-          <select id="vehicleConnectBitrate">
-            <option value="500000">500 kbit/s（标准整车 CANB）</option>
-            <option value="250000">250 kbit/s（旧充电机 / 过渡）</option>
-          </select>
-        </label>
-        <p class="note tight" title="BMS 主连接与整车连接可以使用两个 PCAN 通道并行工作">只决定底部三个按钮下次连接时使用的通道和位率。</p>
+        <div class="connection-map" aria-label="物理 CAN 通道分配">
+          <section class="connection-map-card" aria-labelledby="can1MapTitle">
+            <div class="connection-map-head">
+              <div><b id="can1MapTitle">CAN1</b><small>BMS 详细监视与参数命令</small></div>
+              <span>500 kbit/s · 固定</span>
+            </div>
+            <label class="field">
+              <span class="field-label">连接电池箱 CAN1 的 PCAN 通道</span>
+              <select id="can1ConnectChannel" aria-describedby="connectionSettingsMessage"></select>
+            </label>
+          </section>
+          <section class="connection-map-card" aria-labelledby="canbMapTitle">
+            <div class="connection-map-head">
+              <div><b id="canbMapTitle">CANB</b><small>BMS 镜像、整车节点与风扇</small></div>
+              <span>整车总线</span>
+            </div>
+            <label class="field">
+              <span class="field-label">连接整车 CANB 的 PCAN 通道</span>
+              <select id="canbConnectChannel" aria-describedby="connectionSettingsMessage"></select>
+            </label>
+            <label class="field">
+              <span class="field-label">CANB 位率</span>
+              <select id="canbConnectBitrate">
+                <option value="500000">500 kbit/s（标准整车 CANB）</option>
+                <option value="250000">250 kbit/s（Legacy，只读）</option>
+              </select>
+            </label>
+          </section>
+        </div>
+        <div class="connection-map-tools">
+          <button type="button" class="outline-button" id="swapConnectionChannels">自动分配 / 交换通道</button>
+          <p class="connection-settings-message" id="connectionSettingsMessage" role="status" aria-live="polite"></p>
+        </div>
+        <p class="note tight">设置用于底部 CAN1、CANB 按钮的下次连接；已连接总线不会自动切换通道。</p>
       </div>
       <footer>
         <button value="cancel" class="outline-button" type="submit">取消</button>

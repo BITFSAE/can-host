@@ -1,4 +1,4 @@
-/* 整车页面模块：CANB 整车连接 + 整车总览（SOP/赛会能量计/PDM/ECU/胎温/趋势）。 */
+/* 整车页面模块：统一 CANB 连接 + 整车总览（SOP/赛会能量计/PDM/ECU/胎温/趋势）。 */
 
 const VEH_IVT_CHANNELS = [
   { key: "current_a", label: "电流", unit: "A", digits: 1 },
@@ -28,71 +28,62 @@ function vehicleConnectionAvailable() {
 }
 
 function bindVehicleControls() {
-  $("#vehicleConnectBitrate")?.addEventListener("change", updateVehicleDialog);
+  // CANB hardware preferences live in the shared physical-bus settings dialog.
 }
 
 function populateVehicleOptions() {
-  const select = $("#vehicleConnectBitrate");
-  if (!select) return;
-  updateVehicleDialog();
-}
-
-function updateVehicleDialog() {
-  const select = $("#vehicleConnectBitrate");
-  if (!select) return;
-  const isSim = select.value === "simulation";
-  $("#vehicleChannelField")?.classList.toggle("hidden", isSim);
+  // Static 500/250 kbit/s options are declared in index.html.
 }
 
 async function connectVehicle() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const bitrateSelect = $("#vehicleConnectBitrate");
+  const bitrateSelect = $("#canbConnectBitrate");
   const bitrateRaw = bitrateSelect?.value || "500000";
-  const simulation = bitrateRaw === "simulation";
-  const bitrate = simulation ? 500000 : Number(bitrateRaw);
-  const channelSelect = $("#vehicleConnectChannel");
-  if (!simulation && !channelSelect?.value) {
+  const bitrate = Number(bitrateRaw);
+  const channelSelect = $("#canbConnectChannel");
+  if (!channelSelect?.value) {
     return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);
   }
-  if (!simulation && state.snapshot?.connection?.connected === true
-      && state.snapshot.connection.mode === "simulation") {
+  if (state.mainSnapshot?.connection?.connected === true
+      && state.mainSnapshot.connection.mode === "simulation") {
     await state.api.disconnect_can();
-    state.snapshot = await state.api.get_snapshot();
+    state.mainSnapshot = await state.api.get_snapshot();
   }
   state.busMismatchPrompted.vehicle = null;
-  setBusConnecting("canb_vehicle", true);
+  setBusConnecting("canb", true);
   let result;
   try {
     result = await state.api.connect_vehicle({
-      mode: simulation ? "simulation" : "pcan",
-      channel: simulation ? null : channelSelect?.value,
+      mode: "pcan",
+      channel: channelSelect.value,
       bitrate,
-      bus_profile: simulation || bitrate === 500000 ? "canb" : "canb_legacy",
-      auto_record: !simulation && (typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true),
+      bus_profile: bitrate === 500000 ? "canb" : "canb_legacy",
+      auto_record: typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true,
     });
   } catch (error) {
-    return toast(`整车连接失败：${error}`, true);
+    return toast(`CANB 连接失败：${error}`, true);
   } finally {
-    setBusConnecting("canb_vehicle", false);
+    setBusConnecting("canb", false);
   }
-  if (!result?.ok) return toast(result?.error || "整车连接失败", true);
-  toast(result.warning || (simulation ? "整车模拟数据已启动（CANB）" : `整车连接已建立 · CANB ${bitrate / 1000} kbit/s`), !!result.warning);
+  if (!result?.ok) return toast(result?.error || "CANB 连接失败", true);
+  toast(result.warning || `CANB 已连接 · ${bitrate / 1000} kbit/s`, !!result.warning);
   if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
   // Select the new stream for a later monitor visit without navigating away
   // from the page where the connection was requested.
-  if (!simulation) state.frameSource = "vehicle";
+  state.frameSource = "vehicle";
   await poll();
 }
 
 async function disconnectVehicle() {
   if (!state.api) return;
   state.busMismatchPrompted.vehicle = null;
-  setBusConnecting("canb_vehicle", true);
+  setBusConnecting("canb", true);
   try { await state.api.disconnect_vehicle(); }
-  catch (error) { return toast(`整车断开失败：${error}`, true); }
-  finally { setBusConnecting("canb_vehicle", false); }
+  catch (error) { return toast(`CANB 断开失败：${error}`, true); }
+  finally { setBusConnecting("canb", false); }
   state.vehicleSnapshot = null;
-  toast("整车 CANB 已断开");
+  state.canbBmsSnapshot = null;
+  toast("CANB 已断开");
   await poll();
 }
 
@@ -145,11 +136,10 @@ function renderVehicle() {
   const snapshot = state.vehicleSnapshot || {};
   const connection = snapshot.connection || {};
   const available = vehicleConnectionAvailable();
-  const simulation = connection.mode === "simulation";
   const currentBitrate = Number(connection.bitrate || 0);
-  const bitrateSelect = $("#vehicleConnectBitrate");
+  const bitrateSelect = $("#canbConnectBitrate");
   if (bitrateSelect && document.activeElement !== bitrateSelect) {
-    const targetValue = simulation ? "simulation" : String(currentBitrate);
+    const targetValue = String(currentBitrate);
     const match = [...bitrateSelect.options].find(option => option.value === targetValue);
     if (match) bitrateSelect.value = match.value;
   }

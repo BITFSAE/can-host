@@ -783,6 +783,48 @@ class BmsProtocolTest(unittest.TestCase):
             finally:
                 api.close()
 
+    def test_api_rejects_duplicate_physical_channel_and_old_bms_canb_entry(self) -> None:
+        api = Api()
+        try:
+            api._vehicle_service.connection.update({
+                "connected": True, "mode": "pcan", "bus_profile": "canb",
+                "channel": "PCAN_USBBUS2", "bitrate": 500000,
+            })
+            duplicate = api.connect_can({
+                "mode": "pcan", "bus_profile": "can1",
+                "channel": "PCAN_USBBUS2", "bitrate": 500000,
+            })
+            self.assertFalse(duplicate["ok"])
+            self.assertIn("必须选择两个 PCAN 通道", duplicate["error"])
+
+            obsolete = api.connect_can({
+                "mode": "pcan", "bus_profile": "canb",
+                "channel": "PCAN_USBBUS1", "bitrate": 500000,
+            })
+            self.assertFalse(obsolete["ok"])
+            self.assertIn("统一由 CANB 连接管理", obsolete["error"])
+
+            api._vehicle_service.connection.update({"connected": False, "status": "未连接"})
+            api._service.connection.update({
+                "connected": True, "mode": "pcan", "bus_profile": "can1",
+                "channel": "PCAN_USBBUS1", "bitrate": 500000,
+            })
+            reverse = api.connect_vehicle({
+                "mode": "pcan", "bus_profile": "canb",
+                "channel": "PCAN_USBBUS1", "bitrate": 500000,
+            })
+            self.assertFalse(reverse["ok"])
+            self.assertIn("正由 CAN1 使用", reverse["error"])
+
+            wrong_vehicle_profile = api.connect_vehicle({
+                "mode": "pcan", "bus_profile": "can1",
+                "channel": "PCAN_USBBUS2", "bitrate": 500000,
+            })
+            self.assertFalse(wrong_vehicle_profile["ok"])
+            self.assertIn("只接受 CANB", wrong_vehicle_profile["error"])
+        finally:
+            api.close()
+
     def test_release_transport_rejects_simulation(self) -> None:
         service = CanService(allow_simulation=False)
         try:
@@ -852,8 +894,12 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="saveConnectionSettings"', html)
         self.assertNotIn('id="vehicleConnectDialog"', html)
         self.assertIn('id="can1BusButton"', html)
-        self.assertIn('id="canbBmsBusButton"', html)
-        self.assertIn('id="canbVehicleBusButton"', html)
+        self.assertIn('id="canbBusButton"', html)
+        self.assertNotIn('id="canbBmsBusButton"', html)
+        self.assertNotIn('id="canbVehicleBusButton"', html)
+        self.assertIn('id="can1ConnectChannel"', html)
+        self.assertIn('id="canbConnectChannel"', html)
+        self.assertIn('id="swapConnectionChannels"', html)
         self.assertIn('id="simulationBusButton"', html)
         self.assertIn('id="frameSource"', html)
         self.assertIn('id="page-telemetry"', html)
@@ -872,6 +918,8 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("toggleMainDockConnection", core_js)
         self.assertIn("toggleVehicleDockConnection", core_js)
         self.assertIn("toggleSimulationChannels", core_js)
+        self.assertIn("effectiveBmsSnapshot", core_js)
+        self.assertIn("get_canb_bms_snapshot", core_js)
         self.assertIn("CONNECTION_PREFS_KEY", core_js)
         self.assertIn("bindBackdropDismissal", core_js)
         self.assertIn("event.target !== dialog", core_js)
@@ -879,6 +927,7 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('const cellsWaiting = !(mainConnected && main.bus_profile === "can1");', core_js)
         self.assertIn('prompted = { connectionKey, shown: false };', core_js)
         self.assertNotIn('text("#lockConnected",', (Path(__file__).parents[1] / "canhost" / "web" / "js" / "bms.js").read_text(encoding="utf-8"))
+        self.assertIn('replay ? "历史回放"', (Path(__file__).parents[1] / "canhost" / "web" / "js" / "bms.js").read_text(encoding="utf-8"))
 
     def test_fan_js_defines_known_sample_state_used_for_fresh_tag(self) -> None:
         js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "fan.js").read_text(encoding="utf-8")

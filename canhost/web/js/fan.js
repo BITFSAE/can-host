@@ -1,4 +1,4 @@
-/* 整车风扇页面模块：FanController 遥测与配置，通过整车连接收发。 */
+/* 整车风扇页面模块：FanController 遥测与配置，通过统一 CANB 连接收发。 */
 
 function fanConnectionAvailable() {
   const connection = state.vehicleSnapshot?.connection;
@@ -606,7 +606,7 @@ function renderFan() {
     && Number(limits.protocol_version) === 3 && firmwareTierMatches && dcdcMeasuredReady
     && startCurrentReady && faults === 0 && temperaturesReady;
   let fanStartHint = "";
-  if (!available) fanStartHint = "请先连接真实整车 CANB";
+  if (!available) fanStartHint = "请先连接真实 CANB 500 kbit/s";
   else if (!pdmFresh) fanStartHint = "等待 PDM 低压功率数据";
   else if (!fanFramesFresh) {
     fanStartHint = "等待风扇遥测与标定上限帧";
@@ -728,7 +728,7 @@ function renderFan() {
     && !batteryStatus.flags?.stall_confirmed
     && batteryCalib.chroma_budget_w === 35 && batteryCalib.hv_budget_w === 70;
   let batteryStartHint = "";
-  if (!available) batteryStartHint = "请先连接真实整车 CANB";
+  if (!available) batteryStartHint = "请先连接真实 CANB 500 kbit/s";
   else if (!packFresh || pack.state !== 5) batteryStartHint = "等待 BMS 高压接通";
   else if (pack.temperature_complete !== true) batteryStartHint = "BMS 温度采样不完整";
   else if (!pdmFresh) batteryStartHint = "等待 PDM 低压功率数据";

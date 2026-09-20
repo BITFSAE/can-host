@@ -21,13 +21,13 @@ function monitorAutoRecordEnabled() {
 function monitorConnection(source = state.frameSource) {
   return source === "vehicle"
     ? (state.vehicleSnapshot?.connection || state.quickSnapshot?.vehicle?.connection || {})
-    : (state.snapshot?.connection || {});
+    : (state.mainSnapshot?.connection || {});
 }
 
 function monitorSnapshot(source = state.frameSource) {
   return source === "vehicle"
     ? (state.vehicleSnapshot?.monitor || {})
-    : (state.snapshot?.monitor || {});
+    : (state.mainSnapshot?.monitor || {});
 }
 
 function monitorGroups() {
@@ -112,7 +112,7 @@ function bindMonitorControls() {
   $("#replayPlay")?.addEventListener("click", toggleReplay);
   $("#replaySpeed")?.addEventListener("change", event => state.api?.replay_control("speed", +event.target.value));
   $("#replaySeek")?.addEventListener("change", event => {
-    const replay = state.snapshot?.connection?.replay; if (!replay) return;
+    const replay = state.mainSnapshot?.connection?.replay; if (!replay) return;
     state.api?.replay_control("seek", replay.duration * (+event.target.value / 1000));
   });
   $("#frameRows")?.addEventListener("click", event => {
@@ -226,7 +226,7 @@ function timeLabel(seconds) {
 }
 
 function renderReplay() {
-  const connection = state.snapshot?.connection, replay = connection?.replay;
+  const connection = state.mainSnapshot?.connection, replay = connection?.replay;
   $("#replayBar")?.classList.toggle("hidden", !replay);
   if (!replay) return;
   text("#replayFile", connection.channel);
@@ -272,7 +272,7 @@ async function exportMonitorCsv() {
 
 async function openReplay() {
   if (!state.api) return;
-  if (state.snapshot?.connection?.recording) return toast("请先停止主连接的数据留档", true);
+  if (state.mainSnapshot?.connection?.recording) return toast("请先停止 CAN1 的数据留档", true);
   const result = await state.api.choose_replay_file();
   if (result.ok) {
     state.frameSource = "main";
@@ -283,7 +283,7 @@ async function openReplay() {
 }
 
 async function toggleReplay() {
-  const replay = state.snapshot?.connection?.replay; if (!replay || !state.api) return;
+  const replay = state.mainSnapshot?.connection?.replay; if (!replay || !state.api) return;
   await state.api.replay_control(replay.paused ? "play" : "pause"); await poll();
 }
 
@@ -317,7 +317,8 @@ function monitorTxSpec(row) {
 
 function monitorWritable() {
   const connection = monitorConnection();
-  return connection.connected === true && connection.mode === "pcan";
+  return connection.connected === true && connection.mode === "pcan"
+    && connection.bus_profile !== "canb_legacy";
 }
 
 function periodicTaskMap() {

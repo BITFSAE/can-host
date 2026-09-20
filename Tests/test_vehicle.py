@@ -96,10 +96,30 @@ class VehicleProtocolTest(unittest.TestCase):
     def test_service_quick_snapshot_keeps_vehicle_traffic_counts(self) -> None:
         service = CanService(protocol_kind="vehicle")
         try:
-            service.connection.update({"rx_count": 12, "tx_count": 3})
+            service._ingest(CanFrame(0x4B0, bytes.fromhex("16 44 00 0A 4E 1F 50"), False))
+            service._ingest(CanFrame(0x290, b"\x01", False, direction="tx"))
             quick = service.quick_snapshot()
-            self.assertEqual(quick["connection"]["rx_count"], 12)
-            self.assertEqual(quick["connection"]["tx_count"], 3)
+            self.assertEqual(quick["connection"]["rx_count"], 1)
+            self.assertEqual(quick["connection"]["tx_count"], 1)
+        finally:
+            service.disconnect()
+
+    def test_one_canb_receive_stream_feeds_vehicle_and_bms_views(self) -> None:
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.connection.update({
+                "connected": True, "mode": "pcan", "bus_profile": "canb",
+                "channel": "PCAN_USBBUS2", "bitrate": 500000,
+            })
+            service._ingest(CanFrame(0x4B0, bytes.fromhex("16 44 00 0A 4E 1F 50"), False))
+            vehicle = service.vehicle_snapshot()
+            bms = service.canb_bms_snapshot()
+
+            self.assertEqual(vehicle["pack"]["voltage_v"], 570.0)
+            self.assertEqual(bms["overview"]["voltage_v"], 570.0)
+            self.assertEqual(bms["connection"]["channel"], "PCAN_USBBUS2")
+            self.assertEqual(bms["data_source"], "canb")
+            self.assertFalse(bms["raw_cell_data_available"])
         finally:
             service.disconnect()
 
