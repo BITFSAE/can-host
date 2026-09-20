@@ -316,6 +316,12 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(snapshot["battery_fan"]["status_generation"], 1)
         self.assertEqual(snapshot["battery_fan"]["calibration_generation"], 1)
 
+    def test_calibration_pause_flag_is_decoded(self) -> None:
+        paused = decode_fan_calib_status(bytes.fromhex("01 04 28 00 3C 02 01 00"))
+        self.assertTrue(paused["output_paused"])
+        self.assertEqual(paused["calib_state_name"], "标定中")
+        self.assertEqual(paused["lease_remaining_s"], 60)
+
     def test_send_fan_command_preconditions(self) -> None:
         service = CanService(protocol_kind="vehicle")
         try:
@@ -504,7 +510,7 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertIsNotNone(baseline)
         self.assertFalse(baseline["quality_ok"])
         self.assertEqual(len(session.quality_warnings), 1)
-        self.assertEqual(len(session.baseline_raw_samples), 24)
+        self.assertEqual(len(session.baseline_raw_samples), 36)
 
     def test_fan_calibration_suggested_caps_use_bus_current_and_merge(self) -> None:
         """推荐上限应使用总线总电流，并按档位保守合并。"""
@@ -982,6 +988,109 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertNotIn("固件恢复失败", result["reason"])
         self.assertEqual([item[0] for item in sent], ["fan_calib", "fan_control"])
 
+    def test_firmware_abort_reason_keeps_code_step_and_target(self) -> None:
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        reason = session._watchdog({
+            **_calib_snap(),
+            "fan": {
+                **_calib_snap()["fan"],
+                "calib_status": {
+                    "calib_state": 2, "calib_state_name": "已中止",
+                    "calib_abort_reason": 5, "calib_abort_name": "风扇停转",
+                    "step": 7, "calib_target_pct": [30, 0],
+                    "lease_remaining_s": 0,
+                },
+                "calib_status_age": 0.1,
+            },
+        }, 18.0)
+        self.assertIn("风扇停转", reason)
+        self.assertIn("原因码 5", reason)
+        self.assertIn("步骤 7", reason)
+        self.assertIn("[30, 0]", reason)
+
+    def test_recoverable_timeout_pauses_instead_of_aborting(self) -> None:
+        snap = _calib_snap()
+        snap["pdm"]["bus"]["age"] = 1.6
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        session.status = "running"
+        self.assertIsNone(session._watchdog(snap, 18.0))
+        self.assertIn("暂停", session._communication_pause_reason(snap))
+
+    def test_automatic_calibration_uses_long_lease(self) -> None:
+        sent = []
+        session = FanCalibrationSession(
+            lambda name, values, ack: sent.append((name, values, ack)) or {"ok": True},
+            lambda: {"fan": {"calib_status_generation": 3}},
+        )
+        result, generation = session._send_calib_command(2, 4, 30, 0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(generation, 3)
+        self.assertEqual(sent[0][1]["lease_s"], 60)
+
+    def test_terminal_abort_diagnostic_is_written_atomically(self) -> None:
+        snap = _calib_snap()
+        with tempfile.TemporaryDirectory() as directory:
+            session = FanCalibrationSession(
+                lambda *_: {"ok": True}, lambda: snap, Path(directory))
+            session.status = "aborted"
+            session.current_step = 7
+            session.current_duty = [30, 0]
+            session._persist_terminal_diagnostic("风扇停转（原因码 5）", snap)
+            files = list(Path(directory).glob("fan_calibration_abort_*.json"))
+            self.assertEqual(len(files), 1)
+            payload = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["reason"], "风扇停转（原因码 5）")
+            self.assertEqual(payload["session"]["current_step"], 7)
+            self.assertEqual(session.last_diagnostic_path, str(files[0]))
+            self.assertFalse(list(Path(directory).glob("*.tmp")))
+
+    def test_communication_pause_zeros_then_repeats_current_point(self) -> None:
+        snap = _calib_snap()
+        snap["fan"].update({
+            "calib_status_generation": 0,
+            "calib_status_age": 0.1,
+            "calib_status": {
+                "calib_state": 1, "calib_state_name": "标定中",
+                "calib_abort_reason": 0, "calib_abort_name": "无",
+                "step": 4, "calib_target_pct": [30, 0],
+                "lease_remaining_s": 60, "output_paused": False,
+            },
+        })
+        sent = []
+        pending = {"polls": 0, "step": 4, "duties": [30, 0]}
+
+        def fake_send(name, values, acknowledged):
+            sent.append((name, dict(values), acknowledged))
+            pending.update({"polls": 2, "step": values["step"],
+                            "duties": [values["duty1_pct"], values["duty2_pct"]]})
+            return {"ok": True}
+
+        def snapshot():
+            if pending["polls"] > 0:
+                pending["polls"] -= 1
+                if pending["polls"] == 0:
+                    snap["fan"]["calib_status_generation"] += 1
+                    snap["fan"]["calib_status"].update({
+                        "step": pending["step"],
+                        "calib_target_pct": list(pending["duties"]),
+                        "lease_remaining_s": 60,
+                    })
+            return snap
+
+        session = FanCalibrationSession(fake_send, snapshot)
+        session.status = "running"
+        with patch("canhost.vehicle.calibration.CALIB_RECOVERY_STABLE_S", 0.0):
+            error = session._wait_for_communication_recovery(
+                "测试短时断流", 18.0, 3, 4, (30, 0))
+        self.assertIsNone(error)
+        # 恢复确认后，续租必须沿用重新确认的 30% 目标，不能把暂停期间
+        # 缓存的 0% 安全目标补发回来覆盖当前测点。
+        renew_result = session._renew_lease_once()
+        self.assertTrue(renew_result["ok"])
+        self.assertEqual([item[1]["duty1_pct"] for item in sent], [0, 30, 30])
+        self.assertEqual(session.recovery_count, 1)
+        self.assertEqual(session.pause_reason, "")
+
     def test_battery_calibration_abort_accepts_firmware_aborted_zero_target(self) -> None:
         """F405 已安全中止时，STOP ACK 后不应再要求 COMPLETED。"""
         sent = []
@@ -1178,7 +1287,8 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
             }
         session = FanCalibrationSession(fake_send, snapshot)
         self.assertIsNone(session._watchdog(snapshot(motor=71.8), 18.0))
-        self.assertIn("PDM", session._watchdog(snapshot(offline=True), 18.0))
+        self.assertIsNone(session._watchdog(snapshot(offline=True), 18.0))
+        self.assertIn("PDM", session._communication_pause_reason(snapshot(offline=True)))
         self.assertIn("供电", session._watchdog(snapshot(state=1), 18.0))
         self.assertIn("总线电流", session._watchdog(snapshot(current=18.1), 18.0))
         self.assertIn("电机温度", session._watchdog(snapshot(motor=72.0), 18.0))
@@ -1192,10 +1302,15 @@ class FanCalibrationWatchdogTest(unittest.TestCase):
             "calib_abort_reason": 5,
             "calib_abort_name": "风扇停转",
         })
-        self.assertIn("不活动", session._watchdog(firmware_aborted, 18.0))
+        terminal_reason = session._watchdog(firmware_aborted, 18.0)
+        self.assertIn("风扇停转", terminal_reason)
+        self.assertIn("原因码 5", terminal_reason)
         # 温度失联或温度无效时必须中止，否则标定在没有温度保护的情况下继续。
-        self.assertIn("温度输入失联", session._watchdog(snapshot(faults=0x18), 18.0))
-        self.assertIn("温度无效", session._watchdog(snapshot(motor=None, ctrl=None), 18.0))
+        self.assertIsNone(session._watchdog(snapshot(faults=0x18), 18.0))
+        self.assertIn("温度输入失联", session._communication_pause_reason(snapshot(faults=0x18)))
+        self.assertIsNone(session._watchdog(snapshot(motor=None, ctrl=None), 18.0))
+        self.assertIn("温度输入无效", session._communication_pause_reason(
+            snapshot(motor=None, ctrl=None)))
         self.assertIn("外部改写", session._watchdog(
             snapshot(), 18.0, expected_step=3, expected_duties=(20, 0)))
 

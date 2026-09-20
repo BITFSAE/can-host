@@ -473,6 +473,7 @@ def decode_fan_power_status(data: bytes) -> dict[str, Any]:
 def decode_fan_calib_status(data: bytes) -> dict[str, Any]:
     calib_state = data[0] & 0x0F
     abort_reason = (data[0] >> 4) & 0x0F
+    flags = u16le(data, 6) if len(data) >= 8 else 0
     return {
         "calib_state": calib_state,
         "calib_state_name": FAN_CALIB_STATE_NAMES.get(calib_state, f"未知 ({calib_state})"),
@@ -482,7 +483,10 @@ def decode_fan_calib_status(data: bytes) -> dict[str, Any]:
         "calib_target_pct": [data[2], data[3]],
         "lease_remaining_s": data[4],
         "param_version": data[5],
-        "flags": u16le(data, 6) if len(data) >= 8 else 0,
+        "flags": flags,
+        # 协议 V3 的兼容扩展：bit0=因 PDM 短时失联暂停标定输出。
+        # 会话仍为 ACTIVE；上位机应暂停采样，恢复后重做当前测点。
+        "output_paused": bool(flags & 0x0001),
     }
 
 

@@ -351,8 +351,8 @@ function renderFan() {
   const pdmBattery = snapshot.pdm?.battery || {};
   const pdmValuesValid = [pdmBus.voltage_v, pdmBus.current_a, pdmBus.power_w]
     .every(value => value != null && Number.isFinite(Number(value)));
-  const pdmFresh = !pdmBus.offline && isFresh(pdmBus.age, 1.0) && pdmValuesValid;
-  const pdmBatteryFresh = !pdmBattery.offline && isFresh(pdmBattery.age, 1.0)
+  const pdmFresh = !pdmBus.offline && isFresh(pdmBus.age, 1.5) && pdmValuesValid;
+  const pdmBatteryFresh = !pdmBattery.offline && isFresh(pdmBattery.age, 1.5)
     && [pdmBattery.voltage_v, pdmBattery.current_a]
       .every(value => value != null && Number.isFinite(Number(value)));
   const pack = snapshot.pack || {};
@@ -559,10 +559,13 @@ function renderFan() {
 
   // Calibration session state & table
   const calibRunning = calibStatus === "running";
+  const calibPaused = calibRunning && Boolean(calib.pause_reason);
   const tagMap = {
     idle: { text: "未激活", cls: "neutral" },
     // 扫频中的绿色与旁边进度条的运行色一致。
-    running: { text: `扫频中 (${calib.current_step || 0}/${calib.total_steps || 0})`, cls: "ok" },
+    running: calibPaused
+      ? { text: `安全暂停 · 第 ${calib.recovery_count || 1} 次`, cls: "warn" }
+      : { text: `扫频中 (${calib.current_step || 0}/${calib.total_steps || 0})`, cls: "ok" },
     aborted: { text: `已中止：${calib.abort_reason || "未知"}`, cls: "bad" },
     completed: { text: (calib.quality_warnings || []).length
       ? `已完成 · ${(calib.quality_warnings || []).length} 项待复核` : "已完成", cls: "ok" },
@@ -571,7 +574,7 @@ function renderFan() {
   const tagInfo = tagMap[calibStatus] || { text: calibStatus, cls: "neutral" };
   const calibTag = $("#fanCalibStateTag");
   if (calibTag) {
-    calibTag.textContent = tagInfo.text;
+    if (calibTag.textContent !== tagInfo.text) calibTag.textContent = tagInfo.text;
     calibTag.className = `tag ${tagInfo.cls}`;
   }
 
@@ -596,8 +599,8 @@ function renderFan() {
     && Number(diag.motor_temp_c) < 70 && Number(diag.controller_temp_c) < 65;
   const startCurrentReady = Number.isFinite(selectedMaxCurrent)
     && Number(pdmBus.current_a) <= Math.min(8, selectedMaxCurrent);
-  const fanFramesFresh = isFresh(fan.status_age, 1.0)
-    && isFresh(fan.diagnostic_age, 1.0) && isFresh(fan.power_status_age, 1.0)
+  const fanFramesFresh = isFresh(fan.status_age, 1.5)
+    && isFresh(fan.diagnostic_age, 1.5) && isFresh(fan.power_status_age, 1.5)
     && isFresh(fan.calib_limits_age, 1.5);
   const fanStartReady = available && fanFramesFresh && pdmFresh
     && Number(limits.protocol_version) === 3 && firmwareTierMatches && dcdcMeasuredReady
@@ -630,7 +633,9 @@ function renderFan() {
   const tbody = $("#fanCalibTableBody");
   if (tbody) {
     if (records.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${calibRunning ? "正在测量基准并准备阶梯扫频…" : "尚未运行标定"}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-state">${calibPaused
+        ? `安全暂停：${calib.pause_reason}`
+        : calibRunning ? "正在测量基准并准备阶梯扫频…" : "尚未运行标定"}</td></tr>`;
     } else {
       tbody.innerHTML = records.map(r => `
         <tr>
@@ -780,17 +785,27 @@ function renderFanCalibProgress(session, running) {
   progress.classList.toggle("running", running);
   const label = $("#fanCalibProgressLabel");
   if (!label) return;
+  let labelText;
   if (running) {
-    const states = { running: "自动扫描中", aborted: "已安全中止", completed: "扫描完成" };
-    label.textContent = `${states[status] || "扫描中"} · 步骤 ${step}/${total} · ${pct}%`;
+    if (session?.pause_reason) {
+      const recovered = Number(session?.recovery_count || 0);
+      labelText = `安全暂停 · ${session.pause_reason} · 数据稳定后重做当前测点`
+        + (recovered > 0 ? ` · 本轮第 ${recovered} 次` : "");
+    } else {
+      const states = { running: "自动扫描中", aborted: "已安全中止", completed: "扫描完成" };
+      labelText = `${states[status] || "扫描中"} · 步骤 ${step}/${total} · ${pct}%`;
+    }
   } else if (status === "aborted") {
-    label.textContent = `已中止：${session?.abort_reason || "未知原因"}`;
+    labelText = `已中止：${session?.abort_reason || "未知原因"}`
+      + (session?.last_diagnostic_path ? ` · 诊断：${session.last_diagnostic_path}` : "");
   } else if (status === "completed") {
     const warningCount = Number(session?.quality_warnings?.length || 0);
-    label.textContent = warningCount > 0
+    labelText = warningCount > 0
       ? `扫描完成 · ${warningCount} 项波动记录已保留并排除出自动推荐，请导出复核`
       : "扫描完成 · 核对下方推荐上限后再保存";
   } else {
-    label.textContent = "尚未开始扫描";
+    labelText = "尚未开始扫描";
   }
+  // role=status 只在语义状态真正变化时更新，避免轮询重复播报同一句话。
+  if (label.textContent !== labelText) label.textContent = labelText;
 }

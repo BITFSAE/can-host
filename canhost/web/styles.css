@@ -3004,7 +3004,11 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .progress-track { position: relative; height: 6px; background: var(--surface-3); overflow: hidden; }
 .progress-track > i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
 .fan-calib-progress-row .progress-track.running > i { background: var(--ok); }
-.fan-calib-progress-label { color: var(--text-3); font-size: var(--fs-label); }
+.fan-calib-progress-label {
+  color: var(--text-3);
+  font-size: var(--fs-label);
+  overflow-wrap: anywhere;
+}
 
 /* 标定记录表：沿用 IVT 配置表的写法（表头次级色、行间 1px 线、单元格留白）。 */
 .fan-calib-table-wrap { margin-top: var(--sp-3); border: 1px solid var(--line-soft); overflow-x: auto; }

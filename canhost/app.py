@@ -102,7 +102,9 @@ class Api:
         # feeds the vehicle pages and the quick-value strip while the main
         # BMS connection stays on CAN1 for parameter work.
         self._vehicle_service = CanService(protocol_kind="vehicle",
-                                           allow_simulation=simulation_available)
+                                           allow_simulation=simulation_available,
+                                           calibration_diagnostic_dir=(
+                                               settings_path().parent / "calibration-diagnostics"))
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()

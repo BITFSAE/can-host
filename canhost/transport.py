@@ -34,7 +34,8 @@ BUS_EVIDENCE_STALE_S = 3.0
 
 
 class CanService:
-    def __init__(self, protocol_kind: str = "bms", allow_simulation: bool = True) -> None:
+    def __init__(self, protocol_kind: str = "bms", allow_simulation: bool = True,
+                 calibration_diagnostic_dir: Path | None = None) -> None:
         if protocol_kind not in {"bms", "vehicle"}:
             raise ValueError(f"未知协议类型：{protocol_kind}")
         self.lock = threading.RLock()
@@ -96,7 +97,8 @@ class CanService:
         self.monitor_tx_thread: threading.Thread | None = None
         self.fan_calib_session = FanCalibrationSession(
             send_fn=self._send_fan_calibration_command,
-            snapshot_fn=self.vehicle_snapshot
+            snapshot_fn=self.vehicle_snapshot,
+            diagnostic_dir=calibration_diagnostic_dir,
         ) if self.protocol_kind == "vehicle" else None
         self.battery_fan_calib_session = BatteryFanCalibrationSession(
             send_fn=self._send_battery_fan_calibration_command,
@@ -492,7 +494,7 @@ class CanService:
             self.bus.send(message, timeout=0.2)
             with self.lock:
                 self._accept_frame_locked(frame)
-            deadline = time.monotonic() + 1.0
+            deadline = time.monotonic() + 1.5
             ack = None
             while time.monotonic() < deadline:
                 with self.lock:
@@ -503,7 +505,7 @@ class CanService:
                 time.sleep(0.01)
             if ack is None:
                 return {"ok": False, "sequence": sequence,
-                        "error": "风扇控制器在 1.0s 内没有应答；请确认 FanController 已上电并在 CANB 上"}
+                        "error": "风扇控制器在 1.5s 内没有应答；请确认 FanController 已上电并在 CANB 上"}
             if not ack.get("accepted"):
                 return {"ok": False, "error": f"风扇控制器拒绝：{ack.get('result_name')}", "ack": ack}
             return {"ok": True, "sequence": sequence, "message": ack.get("result_name", "已执行"), "ack": ack}
