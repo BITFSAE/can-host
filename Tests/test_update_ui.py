@@ -56,6 +56,15 @@ class FrontendIdTest(unittest.TestCase):
         self.assertIn("if (updaterPollPromise) return updaterPollPromise", updater)
         self.assertIn("showUpdaterBridgeError(error?.message", updater)
 
+    def test_download_preparation_is_indeterminate_instead_of_fake_zero_percent(self) -> None:
+        updater = (WEB / "js" / "updater.js").read_text(encoding="utf-8")
+        styles = (WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('downloadStage === "archive"', updater)
+        self.assertIn('progressText.textContent', updater)
+        self.assertIn('"处理中"', updater)
+        self.assertIn('progressPanel.classList.toggle("indeterminate"', updater)
+        self.assertIn(".updater-progress.indeterminate .meter i", styles)
+
     def test_frozen_macos_uses_two_click_update_with_dmg_fallback(self) -> None:
         updater = (WEB / "js" / "updater.js").read_text(encoding="utf-8")
         self.assertIn("function isFrozenMacRelease()", updater)

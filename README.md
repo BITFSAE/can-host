@@ -29,7 +29,7 @@ BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CA
 | Apple Silicon macOS 12+ | arm64 DMG | MacCAN `libPCBUSB` 0.13+（arm64） |
 | Python 3.11+ | Windows/macOS 源码运行 | 对应平台驱动 |
 
-发布包可从 [GitHub Releases](https://github.com/BITFSAE/can-host/releases) 或 [CNB 国内镜像](https://cnb.cool/totok22/can-host/-/releases) 获取。macOS 过渡版本和源码运行保留调试模拟；模拟数据不经过驱动、适配器和实体总线，不能作为车辆或台架验收结果。
+发布包可从 [GitHub Releases](https://github.com/BITFSAE/can-host/releases) 或 [CNB 国内镜像](https://cnb.cool/totok22/can-host/-/releases) 获取。“调试模拟”只在本地源码运行时显示，Windows 与 macOS 发布包均隐藏并拒绝该连接模式；模拟数据不经过驱动、适配器和实体总线，不能作为车辆或台架验收结果。
 
 ## 接口与安全
 

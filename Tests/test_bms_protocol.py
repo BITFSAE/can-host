@@ -748,13 +748,23 @@ class BmsProtocolTest(unittest.TestCase):
             self.assertGreater(payload["pid"], 0)
             self.assertFalse(any(target.parent.glob(".update-health.json-*.tmp")))
 
-    def test_frozen_macos_temporarily_keeps_simulation_available(self) -> None:
+    def test_simulation_is_available_in_source_but_not_frozen_releases(self) -> None:
+        self.assertTrue(_simulation_available())
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "darwin"):
-            self.assertTrue(_simulation_available())
-
-    def test_frozen_windows_keeps_hardware_only_policy(self) -> None:
+            self.assertFalse(_simulation_available())
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "platform", "win32"):
             self.assertFalse(_simulation_available())
+
+    def test_hardware_only_bootstrap_hides_simulation_profile(self) -> None:
+        with patch.object(sys, "frozen", True, create=True):
+            api = Api()
+            try:
+                bootstrap = api.bootstrap()
+                self.assertFalse(bootstrap["simulation_enabled"])
+                self.assertFalse(bootstrap["vehicle_simulation_enabled"])
+                self.assertNotIn("simulation", {item["key"] for item in bootstrap["profiles"]})
+            finally:
+                api.close()
 
     def test_frozen_windows_still_ships_local_telemetry_publisher(self) -> None:
         """本地遥测模拟器是两个发布包都带的工程工具，不受调试模拟通道门控影响。"""

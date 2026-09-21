@@ -22,6 +22,17 @@ WEB = ROOT / "canhost" / "web"
 
 
 class ThemeFrontendTest(unittest.TestCase):
+    def test_debug_simulation_button_is_hidden_until_bootstrap_enables_it(self) -> None:
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertRegex(
+            html,
+            r'class="bus-connect simulation-toggle hidden" id="simulationBusButton"',
+        )
+        core = (WEB / "js" / "core.js").read_text(encoding="utf-8")
+        self.assertIn('$("#simulationBusButton")?.classList.toggle(', core)
+        self.assertIn("state.bootstrap.simulation_enabled !== true", core)
+        self.assertIn("state.bootstrap.vehicle_simulation_enabled !== true", core)
+
     def test_theme_is_applied_before_styles_and_has_an_accessible_toggle(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertLess(html.index("canHostTheme"), html.index("styles.css"))

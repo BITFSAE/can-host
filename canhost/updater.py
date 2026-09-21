@@ -1210,7 +1210,7 @@ class HostUpdater:
                 "downloaded_bytes": 0,
                 "total_bytes": int(zip_asset.get("size") or 0) if zip_asset else 0,
                 "download_speed_bps": 0.0,
-                "download_stage": "checksum",
+                "download_stage": "connecting",
                 "downloaded_zip": "",
                 "stage_dir": "",
                 "install_error": None,
@@ -1638,6 +1638,10 @@ class HostUpdater:
                     if progress:
                         elapsed = max(time.monotonic() - started, 0.001)
                         self._set(
+                            # DNS, TLS, redirects and waiting for the first body
+                            # byte all remain an indeterminate connection stage.
+                            # A percentage starts only after bytes really arrive.
+                            download_stage="archive",
                             progress=min(1.0, done / total) if total else 0.0,
                             downloaded_bytes=done,
                             total_bytes=total,
@@ -1650,7 +1654,6 @@ class HostUpdater:
         tag = str(latest.get("tag_name") or "")
         try:
             work_parent = Path(os.environ.get("TEMP") or tempfile.gettempdir()).resolve()
-            cleanup_update_dirs(work_parent)
             zip_asset = find_update_asset(latest)
             if not zip_asset:
                 expected = (
@@ -1666,20 +1669,32 @@ class HostUpdater:
             work_dir = update_temp_dir(work_parent)
             zip_path = work_dir / zip_name
             checksum_path = work_dir / f"{zip_name}.sha256"
-            self._set(download_stage="checksum")
-            self._download_payload(checksum_asset, checksum_path)
-            expected = read_sha256_digest(checksum_path)
             self._set(
-                download_stage="archive",
+                # Stale update directories are already removed by the startup
+                # cleanup thread.  Deleting a previously extracted PyInstaller
+                # tree here used to block Windows downloads at a fake 0% while
+                # Defender inspected thousands of files.
+                download_stage="connecting",
                 downloaded_bytes=0,
                 total_bytes=int(zip_asset.get("size") or 0),
                 download_speed_bps=0.0,
             )
             self._download_payload(zip_asset, zip_path, progress=True)
+            # The checksum is tiny but requires a separate HTTPS request.  Fetch
+            # it after the archive so that its connection setup cannot delay the
+            # first visible download byte.
+            self._set(download_stage="checksum", download_speed_bps=0.0)
+            self._download_payload(checksum_asset, checksum_path)
+            expected = read_sha256_digest(checksum_path)
             self._set(download_stage="verifying")
-            actual = hashlib.sha256(zip_path.read_bytes()).hexdigest().lower()
+            digest = hashlib.sha256()
+            with zip_path.open("rb") as archive_stream:
+                while chunk := archive_stream.read(1024 * 1024):
+                    digest.update(chunk)
+            actual = digest.hexdigest().lower()
             if actual != expected:
                 raise ValueError(f"更新包校验不一致：期望 {expected[:16]}…，实际 {actual[:16]}…")
+            self._set(download_stage="extracting")
             if update_platform() == "macos":
                 stage_dir = extract_update_archive(
                     zip_path, work_dir, platform="macos"

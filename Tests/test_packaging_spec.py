@@ -67,10 +67,12 @@ class PackagingSpecTest(unittest.TestCase):
                 self.assertTrue(REQUIRED_IN_BOTH <= hidden,
                                 f"{spec} 未显式打入 {sorted(REQUIRED_IN_BOTH - hidden)}")
 
-    def test_windows_package_keeps_can_debug_simulation_out(self) -> None:
-        """Windows 发布版是硬件专用的：不打包调试模拟通道，界面与后端也都不提供。"""
-        self.assertIn("canhost.vehicle.simulator",
-                      analysis_lists("can_host.spec", "excludes").get("excludes") or [])
+    def test_release_packages_keep_can_debug_simulation_out(self) -> None:
+        """两个发布包都不打包调试模拟通道，界面与后端也都不提供。"""
+        for spec in SPECS:
+            with self.subTest(spec=spec):
+                self.assertIn("canhost.vehicle.simulator",
+                              analysis_lists(spec, "excludes").get("excludes") or [])
 
     def test_macos_build_publishes_the_in_app_update_archive(self) -> None:
         script = (ROOT / "build_macos.sh").read_text(encoding="utf-8")

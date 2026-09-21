@@ -72,16 +72,14 @@ def _write_update_health(path: Path, version: str) -> None:
 
 
 def _simulation_available() -> bool:
-    """Whether the CAN debug simulation channel may be opened.
+    """Return whether this is a local source run rather than a frozen release.
 
-    Temporarily retain the CAN simulators in source and macOS builds.  Both
-    frozen desktop builds are field tools for real PCAN hardware; the first
-    macOS release keeps the existing simulator entry as a transitional
-    development aid, and this exception must not be used as a hardware
-    fallback.  The local telemetry publisher is a separate engineering tool
-    and ships in both release packages, so it is not gated here.
+    ``python -m canhost`` is the documented launcher, but developer scripts and
+    equivalent source entry points keep the same debug capability.  Windows and
+    macOS release packages are both hardware-only.  The local telemetry
+    publisher is a separate engineering tool and remains available everywhere.
     """
-    return not getattr(sys, "frozen", False) or sys.platform == "darwin"
+    return not getattr(sys, "frozen", False)
 
 
 class Api:
@@ -89,9 +87,8 @@ class Api:
         # PyWebView exposes every public member of js_api to JavaScript. Native
         # Window/WinForms objects must remain private; walking AccessibilityObject
         # recursively raises TYPE_E_CANTLOADLIBRARY on affected Windows systems.
-        # The source build keeps the simulator for UI/protocol development.
-        # The macOS field build temporarily keeps the same entry, while the
-        # Windows field build remains hardware-only.
+        # Source runs expose the simulator for UI/protocol development.  Both
+        # frozen releases remain hardware-only.
         simulation_available = _simulation_available()
         self._service = CanService(allow_simulation=simulation_available)
         # The engineering tools have their own transport lifetime.  This
@@ -958,10 +955,9 @@ def main() -> None:
         from serial.tools import list_ports
 
         list_ports.comports()
-        # The CAN debug simulation channel only ships in the transitional macOS
-        # package; can_host.spec excludes canhost.vehicle.simulator, so this
-        # import has to stay inside the platform branch.
-        simulation_channels = sys.platform == "darwin"
+        # A local source smoke run may load the debug CAN simulation.  Both
+        # frozen release packages must reject that mode.
+        simulation_channels = _simulation_available()
         if simulation_channels:
             from .vehicle.simulator import VehicleSimulator  # noqa: F401
         # The updater must prove the bundle really ships usable CA certs.
@@ -991,8 +987,11 @@ def main() -> None:
             simulator_frame = TelemetryFrameGenerator().generate_frame()
             if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
                 raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
+            if (getattr(sys, "frozen", False) and sys.platform == "darwin"
+                    and not bootstrap["updater_enabled"]):
+                raise SystemExit("打包自检失败：macOS 应用包未启用两步软件更新")
             if not simulation_channels:
-                # 硬件专用发布包不带调试模拟通道：既不开放标志，也要真的拒绝连接，
+                # 发布包及其他启动方式不带调试模拟通道：既不开放标志，也要真的拒绝连接，
                 # 界面上的“调试模拟”开关因此根本不会出现。
                 if bootstrap["simulation_enabled"] or bootstrap["vehicle_simulation_enabled"]:
                     raise SystemExit("打包自检失败：硬件专用发布包不应提供调试模拟通道")
@@ -1002,9 +1001,7 @@ def main() -> None:
                     raise SystemExit("打包自检失败：硬件专用发布包未拒绝调试模拟通道")
                 return
             if not bootstrap["simulation_enabled"] or not bootstrap["vehicle_simulation_enabled"]:
-                raise SystemExit("打包自检失败：macOS 过渡版本未包含临时模拟通道")
-            if getattr(sys, "frozen", False) and not bootstrap["updater_enabled"]:
-                raise SystemExit("打包自检失败：macOS 应用包未启用两步软件更新")
+                raise SystemExit("源码自检失败：源码运行未启用调试模拟通道")
             bms_result = api.connect_can({
                 "mode": "simulation", "bus_profile": "can1", "bitrate": 500000,
             })
@@ -1012,7 +1009,7 @@ def main() -> None:
                 "mode": "simulation", "bus_profile": "canb", "bitrate": 500000,
             })
             if not bms_result.get("ok") or not vehicle_result.get("ok"):
-                raise SystemExit("打包自检失败：macOS 模拟通道无法启动")
+                raise SystemExit("源码自检失败：调试模拟通道无法启动")
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
                 bms_ready = api.get_snapshot()["overview"].get("voltage_v") is not None
@@ -1021,7 +1018,7 @@ def main() -> None:
                     break
                 time.sleep(0.05)
             else:
-                raise SystemExit("打包自检失败：macOS 模拟通道未产出完整数据")
+                raise SystemExit("源码自检失败：调试模拟通道未产出完整数据")
         finally:
             api.close()
         return

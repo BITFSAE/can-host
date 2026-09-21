@@ -34,8 +34,8 @@ def _app_links(version: str) -> str:
         "（含 arm64），并先用 MacCAN Monitor 验证适配器收发。\n"
         "- macOS 包为团队内部 ad-hoc 签名，未做 Apple 公证；首次启动如被 Gatekeeper"
         "拦截，请在“系统设置 → 隐私与安全性”中确认打开。\n"
-        "- 源码运行或 macOS 过渡版本保留的调试模拟不经过驱动、适配器和实体总线，"
-        "不能作为车辆或台架验收结果。\n"
+        "- 调试模拟只在本地源码运行时提供；Windows 与 macOS 发布包均为实体 PCAN "
+        "专用，不显示该入口。\n"
     )
 
 

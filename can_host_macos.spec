@@ -24,15 +24,13 @@ a = Analysis(
         "serial.tools.list_ports_osx",
         # HTTPS 更新检查在 macOS 上依赖随包的 CA 证书，必须真正打进去。
         "certifi",
-        # This first macOS field release temporarily keeps both lazily imported
-        # simulators as a secondary development aid. Real PCAN remains the
-        # bundle's primary transport and is covered by the packaging smoke test.
+        # BMS frame generation is also used by the packaged telemetry publisher.
         "canhost.bms.simulator",
-        "canhost.vehicle.simulator",
     ],
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    # 调试模拟只允许本地源码运行；发布包不带整车模拟器。
+    excludes=["canhost.vehicle.simulator"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

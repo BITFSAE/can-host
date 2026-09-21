@@ -395,34 +395,49 @@ function updaterRenderUpdaterStatus() {
   const sizeNode = $("#updaterSize");
   if (sizeNode) sizeNode.textContent = size ? formatUpdaterSize(size) : "—";
 
+  const downloadStage = String(status.download_stage || "");
+  const progressTotal = Number(status.total_bytes) || 0;
+  const determinateProgress = stateName === "ready" || (downloadStage === "archive" && progressTotal > 0);
   const progress = $("#updaterProgress");
   if (progress) {
     const pct = Math.round((Number(status.progress) || 0) * 100);
-    progress.style.width = pct + "%";
+    progress.style.width = determinateProgress ? pct + "%" : "";
     $("#updaterProgressPanel")?.classList.toggle("hidden", !["downloading", "ready"].includes(stateName));
   }
   const progressText = $("#updaterProgressText");
   if (progressText) progressText.textContent = ["downloading", "ready"].includes(stateName)
-    ? Math.round((Number(status.progress) || 0) * 100) + "%" : "";
+    ? (determinateProgress ? Math.round((Number(status.progress) || 0) * 100) + "%" : "处理中") : "";
   const progressLabel = $("#updaterProgressLabel");
-  if (progressLabel) progressLabel.textContent = stateName === "ready"
-    ? "更新包已下载" : status.download_stage === "verifying" ? "正在校验更新包" : "下载进度";
+  if (progressLabel) progressLabel.textContent = stateName === "ready" ? "更新包已准备好" : ({
+    connecting: "正在连接下载源",
+    archive: "下载更新包",
+    checksum: "正在获取校验信息",
+    verifying: "正在校验更新包",
+    extracting: "正在解压更新包",
+  }[downloadStage] || "正在准备更新");
   const progressBytes = $("#updaterProgressBytes");
   if (progressBytes) {
     const downloaded = Number(status.downloaded_bytes) || 0;
-    const total = Number(status.total_bytes) || 0;
-    progressBytes.textContent = total
+    const total = progressTotal;
+    progressBytes.textContent = downloadStage === "connecting" ? "建立安全连接…"
+      : downloadStage === "checksum" ? "读取 SHA-256…"
+      : downloadStage === "verifying" ? "核对 SHA-256…"
+      : downloadStage === "extracting" ? "写入临时目录…"
+      : total
       ? formatUpdaterSize(downloaded) + " / " + formatUpdaterSize(total)
       : downloaded ? formatUpdaterSize(downloaded) + " 已下载" : "准备下载…";
   }
   const progressSpeed = $("#updaterProgressSpeed");
   if (progressSpeed) {
-    progressSpeed.textContent = stateName === "downloading" && Number(status.download_speed_bps) > 0
+    progressSpeed.textContent = stateName === "downloading" && downloadStage === "archive" && Number(status.download_speed_bps) > 0
       ? formatUpdaterSize(status.download_speed_bps) + "/s"
       : stateName === "ready" ? "已校验" : "—";
   }
   const progressPanel = $("#updaterProgressPanel");
-  if (progressPanel) progressPanel.classList.toggle("verifying", stateName === "downloading" && status.download_stage === "verifying");
+  if (progressPanel) {
+    progressPanel.classList.toggle("indeterminate", stateName === "downloading" && !determinateProgress);
+    progressPanel.classList.toggle("verifying", stateName === "downloading" && ["verifying", "extracting"].includes(downloadStage));
+  }
 
   const errorNode = $("#updaterError");
   if (errorNode) {
@@ -494,7 +509,8 @@ function updaterRenderUpdaterStatus() {
     if (stateName === "downloading") {
       indicator.classList.add("downloading");
       indicator.classList.remove("ready");
-      if (indicatorText) indicatorText.textContent = Math.round((Number(status.progress) || 0) * 100) + "%";
+      if (indicatorText) indicatorText.textContent = determinateProgress
+        ? Math.round((Number(status.progress) || 0) * 100) + "%" : "…";
       if (icon) icon.innerHTML = '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2"/>';
     } else if (stateName === "ready") {
       indicator.classList.add("ready");
@@ -569,8 +585,10 @@ function updaterStatusText(status) {
   if (stateName === "update_available") return "发现新版本 " + (status.latest?.tag_name || "") + suffix;
   if (stateName === "up_to_date") return "当前已是最新版本" + suffix;
   if (stateName === "check_failed") return "检查更新失败";
-  if (stateName === "downloading" && status.download_stage === "checksum") return "正在准备更新包…";
+  if (stateName === "downloading" && status.download_stage === "connecting") return "正在连接更新下载源…";
+  if (stateName === "downloading" && status.download_stage === "checksum") return "更新包已下载，正在获取校验信息…";
   if (stateName === "downloading" && status.download_stage === "verifying") return "下载完成，正在校验更新包…";
+  if (stateName === "downloading" && status.download_stage === "extracting") return "校验通过，正在解压更新包…";
   if (stateName === "downloading") return "正在下载 " + (status.latest?.tag_name || status.downloaded_zip || "") + "…";
   if (stateName === "download_failed") return "下载更新失败";
   if (stateName === "ready") return "已下载并校验，可以重启更新";

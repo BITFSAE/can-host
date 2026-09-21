@@ -608,7 +608,7 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            with patch("canhost.updater.cleanup_update_dirs", return_value=0), \
+            with patch("canhost.updater.cleanup_update_dirs", return_value=0) as cleanup, \
                  patch("canhost.updater.update_temp_dir", return_value=work / "canhost-update-test"), \
                  patch.object(updater, "_download_payload", side_effect=fake_download):
                 updater._download_worker(summary)
@@ -618,8 +618,10 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
         self.assertEqual(status["progress"], 1.0)
         self.assertEqual(status["download_stage"], "ready")
         self.assertEqual(status["downloaded_bytes"], status["total_bytes"])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [str(summary["assets"][0]["name"]),
+                                 str(summary["assets"][1]["name"])])
         self.assertEqual(len(expected_urls), 2)
+        cleanup.assert_not_called()
 
     def test_download_payload_reports_bytes_progress_and_speed(self) -> None:
         updater = HostUpdater()
@@ -646,6 +648,7 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
         self.assertEqual(status["downloaded_bytes"], 6)
         self.assertEqual(status["total_bytes"], 6)
         self.assertEqual(status["progress"], 1.0)
+        self.assertEqual(status["download_stage"], "archive")
         self.assertGreater(status["download_speed_bps"], 0)
 
     def test_http_error_message_mentions_private_token_only_on_access_denied(self) -> None:
@@ -915,7 +918,7 @@ class HostUpdaterTest(IsolatedSettingsTestCase):
                  patch.object(updater, "_download_payload", side_effect=fake_download):
                 updater._download_worker(latest)
 
-        self.assertEqual(downloaded, [f"{update_name}.sha256", update_name])
+        self.assertEqual(downloaded, [update_name, f"{update_name}.sha256"])
         self.assertEqual(updater.status()["state"], "ready")
         extract.assert_called_once_with(work / update_name, work, platform="macos")
 
