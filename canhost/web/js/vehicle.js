@@ -64,7 +64,8 @@ async function connectVehicle() {
     setBusConnecting("canb", false);
   }
   if (!result?.ok) return toast(result?.error || "CANB 连接失败", true);
-  toast(result.warning || `CANB 已连接 · ${bitrate / 1000} kbit/s`, !!result.warning);
+  toast(result.notice || `CANB 已连接 · ${bitrate / 1000} kbit/s`);
+  if (result.warning) toast(result.warning, true);
   if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
   // Select the new stream for a later monitor visit without navigating away
   // from the page where the connection was requested.

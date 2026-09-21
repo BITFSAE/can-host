@@ -812,7 +812,8 @@ class BmsProtocolTest(unittest.TestCase):
                     "channel": "PCAN_USBBUS2", "bitrate": 500000, "auto_record": False,
                 })
             self.assertTrue(result["ok"])
-            self.assertIn("已从 CANB 切换", result["warning"])
+            self.assertIn("已从 CANB 切换", result["notice"])
+            self.assertNotIn("warning", result)
             self.assertFalse(api._vehicle_service.connection["connected"])
             self.assertEqual(api._service.connection["channel"], "PCAN_USBBUS2")
         finally:
@@ -828,8 +829,28 @@ class BmsProtocolTest(unittest.TestCase):
                     "channel": "PCAN_USBBUS1", "bitrate": 500000, "auto_record": False,
                 })
             self.assertTrue(result["ok"])
-            self.assertIn("已从 CAN1 切换", result["warning"])
+            self.assertIn("已从 CAN1 切换", result["notice"])
+            self.assertNotIn("warning", result)
             self.assertFalse(api._service.connection["connected"])
+        finally:
+            api.close()
+
+    def test_shared_channel_handover_restores_previous_connection_on_failure(self) -> None:
+        """目标通道打开失败时，不得把原本工作的总线一起留在断线状态。"""
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+            with patch.object(api._service, "connect",
+                              return_value={"ok": False, "error": "synthetic open failure"}), \
+                    self._stub_connect_success(api._vehicle_service):
+                result = api.connect_can({
+                    "mode": "pcan", "bus_profile": "can1",
+                    "channel": "PCAN_USBBUS2", "bitrate": 500000, "auto_record": False,
+                })
+            self.assertFalse(result["ok"])
+            self.assertIn("原 CANB 连接已恢复", result["error"])
+            self.assertTrue(api._vehicle_service.connection["connected"])
+            self.assertEqual(api._vehicle_service.connection["channel"], "PCAN_USBBUS2")
         finally:
             api.close()
 
@@ -849,6 +870,85 @@ class BmsProtocolTest(unittest.TestCase):
             self.assertIn("标定", result["error"])
             self.assertTrue(api._vehicle_service.connection["connected"])
             self.assertFalse(api._service.connection.get("connected", False))
+        finally:
+            api.close()
+
+    def test_mismatch_swap_refused_during_fan_calibration(self) -> None:
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._service, "can1", "PCAN_USBBUS1")
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+            with patch.object(api, "_physical_bus_mismatch", return_value=True), \
+                    patch.object(api._vehicle_service.fan_calib_session, "is_running",
+                                 return_value=True):
+                result = api.swap_mismatched_bus_channels({"auto_record": False})
+            self.assertFalse(result["ok"])
+            self.assertIn("标定", result["error"])
+            self.assertTrue(api._service.connection["connected"])
+            self.assertTrue(api._vehicle_service.connection["connected"])
+            self.assertEqual(api._service.connection["channel"], "PCAN_USBBUS1")
+            self.assertEqual(api._vehicle_service.connection["channel"], "PCAN_USBBUS2")
+        finally:
+            api.close()
+
+    def test_mismatch_swap_is_atomic_and_returns_swapped_channels(self) -> None:
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._service, "can1", "PCAN_USBBUS1")
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+            with patch.object(api, "_physical_bus_mismatch", return_value=True), \
+                    self._stub_connect_success(api._service), \
+                    self._stub_connect_success(api._vehicle_service):
+                result = api.swap_mismatched_bus_channels({"auto_record": False})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["can1_channel"], "PCAN_USBBUS2")
+            self.assertEqual(result["canb_channel"], "PCAN_USBBUS1")
+            self.assertEqual(api._service.connection["channel"], "PCAN_USBBUS2")
+            self.assertEqual(api._vehicle_service.connection["channel"], "PCAN_USBBUS1")
+        finally:
+            api.close()
+
+    def test_mismatch_swap_rolls_back_both_connections_on_partial_failure(self) -> None:
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._service, "can1", "PCAN_USBBUS1")
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+
+            def main_connect(config):
+                api._service.connection.update({
+                    "connected": True, "mode": "pcan", "bus_profile": "can1",
+                    "channel": config["channel"], "bitrate": 500000,
+                    "status": "已连接", "error": None,
+                })
+                return {"ok": True, "connection": dict(api._service.connection)}
+
+            vehicle_attempts = 0
+
+            def vehicle_connect(config):
+                nonlocal vehicle_attempts
+                vehicle_attempts += 1
+                if vehicle_attempts == 1:
+                    api._vehicle_service.connection.update({
+                        "connected": False, "status": "连接失败", "error": "synthetic failure",
+                    })
+                    return {"ok": False, "error": "synthetic failure"}
+                api._vehicle_service.connection.update({
+                    "connected": True, "mode": "pcan", "bus_profile": "canb",
+                    "channel": config["channel"], "bitrate": 500000,
+                    "status": "已连接", "error": None,
+                })
+                return {"ok": True, "connection": dict(api._vehicle_service.connection)}
+
+            with patch.object(api, "_physical_bus_mismatch", return_value=True), \
+                    patch.object(api._service, "connect", side_effect=main_connect), \
+                    patch.object(api._vehicle_service, "connect", side_effect=vehicle_connect):
+                result = api.swap_mismatched_bus_channels({"auto_record": False})
+            self.assertFalse(result["ok"])
+            self.assertIn("原 CAN1/CANB 连接已恢复", result["error"])
+            self.assertEqual(api._service.connection["channel"], "PCAN_USBBUS1")
+            self.assertEqual(api._vehicle_service.connection["channel"], "PCAN_USBBUS2")
+            self.assertTrue(api._service.connection["connected"])
+            self.assertTrue(api._vehicle_service.connection["connected"])
         finally:
             api.close()
 
@@ -983,7 +1083,9 @@ class BmsProtocolTest(unittest.TestCase):
         for obsolete in ("chargeExpectedAt", "chargeAverageCurrent", "chargeEstimateNote"):
             self.assertNotIn(obsolete, html)
 
-        core_js = (Path(__file__).parents[1] / "canhost" / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        web_js = Path(__file__).parents[1] / "canhost" / "web" / "js"
+        core_js = (web_js / "core.js").read_text(encoding="utf-8")
+        vehicle_js = (web_js / "vehicle.js").read_text(encoding="utf-8")
         self.assertIn("toggleMainDockConnection", core_js)
         self.assertIn("toggleVehicleDockConnection", core_js)
         self.assertIn("toggleSimulationChannels", core_js)
@@ -992,6 +1094,9 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("CONNECTION_PREFS_KEY", core_js)
         self.assertIn("persistConnectionPreferences", core_js)
         self.assertIn("swapMismatchedBusChannels", core_js)
+        self.assertIn("state.api.swap_mismatched_bus_channels", core_js)
+        self.assertIn('toast(result.notice || "CAN1 已连接")', core_js)
+        self.assertIn('toast(result.notice || `CANB 已连接', vehicle_js)
         self.assertIn("bindBackdropDismissal", core_js)
         self.assertIn("event.target !== dialog", core_js)
         self.assertIn('dialog.close("cancel")', core_js)

@@ -392,15 +392,16 @@ class Api:
         if mode == "pcan" and profile != "can1":
             return {"ok": False, "error": "实体 CANB 已统一由 CANB 连接管理；此入口只连接 CAN1"}
         with getattr(self, "_can_connection_lock", nullcontext()):
-            handover_error, handover_note = self._physical_channel_handover(
-                config, self._vehicle_service, "CANB")
+            handover_error, handover_note, handover = self._physical_channel_handover(
+                config, self._vehicle_service, "CANB", "CONN2")
             if handover_error:
                 return {"ok": False, "error": handover_error}
             result = self._service.connect(config)
             result = self._start_auto_trace(self._service, config, result, "CONN1")
+            if handover and not result.get("ok"):
+                self._report_handover_rollback(result, handover)
             if handover_note and result.get("ok"):
-                result["warning"] = (f"{result['warning']}；{handover_note}"
-                                     if result.get("warning") else handover_note)
+                result["notice"] = handover_note
             return result
 
     def disconnect_can(self) -> dict[str, Any]:
@@ -441,8 +442,8 @@ class Api:
         if profile != "canb" or bitrate != 500000:
             return {"ok": False, "error": "统一 CANB 连接固定使用 CANB 500 kbit/s"}
         with getattr(self, "_can_connection_lock", nullcontext()):
-            handover_error, handover_note = self._physical_channel_handover(
-                config, self._service, "CAN1")
+            handover_error, handover_note, handover = self._physical_channel_handover(
+                config, self._service, "CAN1", "CONN1")
             if handover_error:
                 return {"ok": False, "error": handover_error}
             result = self._vehicle_service.connect({
@@ -450,9 +451,10 @@ class Api:
                 "channel": config.get("channel"), "bitrate": bitrate,
             })
             result = self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
+            if handover and not result.get("ok"):
+                self._report_handover_rollback(result, handover)
             if handover_note and result.get("ok"):
-                result["warning"] = (f"{result['warning']}；{handover_note}"
-                                     if result.get("warning") else handover_note)
+                result["notice"] = handover_note
             return result
 
     def disconnect_vehicle(self) -> dict[str, Any]:
@@ -469,8 +471,51 @@ class Api:
         return {"vehicle": self._vehicle_service.quick_snapshot()}
 
     @staticmethod
+    def _connection_restore_context(service: CanService, name: str,
+                                    prefix: str) -> dict[str, Any]:
+        connection = dict(service.connection)
+        return {
+            "service": service,
+            "name": name,
+            "prefix": prefix,
+            "config": {
+                "mode": connection.get("mode", "pcan"),
+                "bus_profile": connection.get("bus_profile"),
+                "channel": connection.get("channel"),
+                "bitrate": connection.get("bitrate", 500000),
+            },
+            "auto_record": bool(service.record_auto),
+            "manual_recording": bool(service.record_kind and not service.record_auto),
+        }
+
+    def _restore_physical_connection(self, context: dict[str, Any]) -> dict[str, Any]:
+        service = context["service"]
+        config = dict(context["config"])
+        result = service.connect(config)
+        if result.get("ok") and context.get("auto_record"):
+            config["auto_record"] = True
+            result = self._start_auto_trace(service, config, result, context["prefix"])
+        return result
+
+    def _report_handover_rollback(self, result: dict[str, Any],
+                                  context: dict[str, Any]) -> None:
+        original_error = str(result.get("error") or "新连接失败")
+        restored = self._restore_physical_connection(context)
+        if restored.get("ok"):
+            suffix = f"原 {context['name']} 连接已恢复"
+            if context.get("manual_recording"):
+                suffix += "，但原手动留档已结束"
+            if restored.get("warning"):
+                suffix += f"；{restored['warning']}"
+        else:
+            suffix = (f"原 {context['name']} 连接恢复失败："
+                      f"{restored.get('error', '未知错误')}")
+        result["error"] = f"{original_error}；{suffix}"
+
+    @staticmethod
     def _physical_channel_handover(config: dict[str, Any], other: CanService,
-                                   other_name: str) -> tuple[str | None, str | None]:
+                                   other_name: str, other_prefix: str
+                                   ) -> tuple[str | None, str | None, dict[str, Any] | None]:
         """Resolve two live PCAN sessions trying to own the same adapter handle.
 
         两条总线配置了同一条通道（单通道轮换）时，连接另一条总线只有一种含义：
@@ -478,19 +523,121 @@ class Api:
         对侧风扇标定进行中时拒绝切换，不让一次按钮点击隐式中止安全相关会话。
         """
         if str(config.get("mode") or "pcan") != "pcan":
-            return None, None
+            return None, None, None
         channel = str(config.get("channel") or "")
         connection = other.connection
         if not (channel and connection.get("connected") is True
                 and connection.get("mode") == "pcan"
                 and str(connection.get("channel") or "") == channel):
-            return None, None
+            return None, None, None
         for session in (other.fan_calib_session, other.battery_fan_calib_session):
             if session is not None and session.is_running():
                 return (f"{channel} 正由 {other_name} 使用且风扇标定进行中；"
-                        "请先停止标定再切换", None)
+                        "请先停止标定再切换", None, None)
+        restore_context = Api._connection_restore_context(
+            other, other_name, other_prefix)
         other.disconnect()
-        return None, f"{channel} 已从 {other_name} 切换给本次连接"
+        return (None, f"{channel} 已从 {other_name} 切换给本次连接",
+                restore_context)
+
+    @staticmethod
+    def _physical_bus_mismatch(service: CanService) -> bool:
+        return bool(service.snapshot().get("connection", {}).get("bus_mismatch"))
+
+    def _restore_connection_pair(self, contexts: list[dict[str, Any]]) -> str:
+        restored: list[str] = []
+        failed: list[str] = []
+        manual_recordings = [str(context["name"]) for context in contexts
+                             if context.get("manual_recording")]
+        for context in contexts:
+            result = self._restore_physical_connection(context)
+            if result.get("ok"):
+                restored.append(str(context["name"]))
+            else:
+                failed.append(f"{context['name']}：{result.get('error', '未知错误')}")
+        if failed:
+            prefix = f"已恢复 {'、'.join(restored)}；" if restored else ""
+            summary = f"{prefix}原连接恢复失败（{'；'.join(failed)}）"
+        else:
+            summary = "原 CAN1/CANB 连接已恢复"
+        if manual_recordings:
+            summary += f"；原 {'、'.join(manual_recordings)} 手动留档已结束"
+        return summary
+
+    def swap_mismatched_bus_channels(self,
+                                     options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Atomically exchange two live physical buses after reciprocal mismatch evidence."""
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "error": "交换参数必须是对象"}
+        auto_record = (options or {}).get("auto_record", True) is not False
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            main = dict(self._service.connection)
+            vehicle = dict(self._vehicle_service.connection)
+            main_channel = str(main.get("channel") or "")
+            vehicle_channel = str(vehicle.get("channel") or "")
+            live_physical = (
+                main.get("connected") is True and main.get("mode") == "pcan"
+                and vehicle.get("connected") is True and vehicle.get("mode") == "pcan"
+            )
+            if not live_physical or not main_channel or not vehicle_channel:
+                return {"ok": False, "error": "CAN1 与 CANB 必须同时保持实体连接"}
+            if main_channel == vehicle_channel:
+                return {"ok": False, "error": "两条总线当前占用同一通道，不能执行交换"}
+            if not (self._physical_bus_mismatch(self._service)
+                    and self._physical_bus_mismatch(self._vehicle_service)):
+                return {"ok": False, "error": "双向接反证据已消失，请重新核对接线"}
+            for session in (self._vehicle_service.fan_calib_session,
+                            self._vehicle_service.battery_fan_calib_session):
+                if session is not None and session.is_running():
+                    return {"ok": False, "error": "风扇标定进行中；请先停止标定再交换通道"}
+
+            originals = [
+                self._connection_restore_context(self._service, "CAN1", "CONN1"),
+                self._connection_restore_context(self._vehicle_service, "CANB", "CONN2"),
+            ]
+            self._service.disconnect()
+            self._vehicle_service.disconnect()
+
+            can1_config = {
+                "mode": "pcan", "bus_profile": "can1",
+                "channel": vehicle_channel, "bitrate": 500000,
+                "auto_record": auto_record,
+            }
+            canb_config = {
+                "mode": "pcan", "bus_profile": "canb",
+                "channel": main_channel, "bitrate": 500000,
+                "auto_record": auto_record,
+            }
+            can1_result = self._service.connect(can1_config)
+            can1_result = self._start_auto_trace(
+                self._service, can1_config, can1_result, "CONN1")
+            if not can1_result.get("ok"):
+                rollback = self._restore_connection_pair(originals)
+                return {"ok": False,
+                        "error": f"CAN1 重连失败：{can1_result.get('error', '未知错误')}；{rollback}"}
+
+            canb_result = self._vehicle_service.connect(canb_config)
+            canb_result = self._start_auto_trace(
+                self._vehicle_service, canb_config, canb_result, "CONN2")
+            if not canb_result.get("ok"):
+                self._service.disconnect()
+                self._vehicle_service.disconnect()
+                rollback = self._restore_connection_pair(originals)
+                return {"ok": False,
+                        "error": f"CANB 重连失败：{canb_result.get('error', '未知错误')}；{rollback}"}
+
+            warnings = [str(item["warning"]) for item in (can1_result, canb_result)
+                        if item.get("warning")]
+            result = {
+                "ok": True,
+                "can1_channel": vehicle_channel,
+                "canb_channel": main_channel,
+                "notice": (f"通道已交换并重连：CAN1 → {vehicle_channel}，"
+                           f"CANB → {main_channel}"),
+            }
+            if warnings:
+                result["warning"] = "；".join(warnings)
+            return result
 
     def connect_telemetry(self, config: dict[str, Any]) -> dict[str, Any]:
         return self._telemetry_service.connect(config)
@@ -535,8 +682,9 @@ class Api:
             return {"ok": False, "error": "标定通道、保持时间或电流保护参数无效"}
         steps = opts.get("steps")
         tier = str(opts.get("tier", "dcdc"))
-        return self._vehicle_service.start_fan_calibration(
-            channel, steps, hold_s, max_current_a, tier)
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            return self._vehicle_service.start_fan_calibration(
+                channel, steps, hold_s, max_current_a, tier)
 
     def confirm_dcdc_ready(self) -> dict[str, Any]:
         """操作者独立确认 DCDC 已实际供电。
@@ -615,8 +763,9 @@ class Api:
             max_current_a = float(opts.get("max_current_a", 18.0))
         except (TypeError, ValueError, OverflowError):
             return {"ok": False, "error": "保持时间或电流保护参数无效"}
-        return self._vehicle_service.start_battery_fan_calibration(
-            opts.get("steps"), hold_s, max_current_a)
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            return self._vehicle_service.start_battery_fan_calibration(
+                opts.get("steps"), hold_s, max_current_a)
 
     def stop_battery_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.stop_battery_fan_calibration()

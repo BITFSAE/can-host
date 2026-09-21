@@ -603,7 +603,8 @@ async function toggleMainDockConnection() {
     setBusConnecting("can1", false);
   }
   if (!result?.ok) return toast(result?.error || "CAN1 连接失败", true);
-  toast(result.warning || "CAN1 已连接", !!result.warning);
+  toast(result.notice || "CAN1 已连接");
+  if (result.warning) toast(result.warning, true);
   // The status-bar buttons only control connections. Keep the operator's
   // current workspace in place; the monitor remains available from the nav.
   state.frameSource = "main";
@@ -1019,39 +1020,28 @@ async function swapMismatchedBusChannels() {
   const can1Channel = String(vehicle.channel || "");
   const canbChannel = String(main.channel || "");
   if (!can1Channel || !canbChannel || can1Channel === canbChannel) return;
-  const applySelection = (selector, value) => {
-    const node = $(selector);
-    if (node && [...node.options].some(option => option.value === value)) node.value = value;
-  };
-  applySelection("#can1ConnectChannel", can1Channel);
-  applySelection("#canbConnectChannel", canbChannel);
-  persistConnectionPreferences();
-  $("#busMismatchDialog")?.close();
   if (button) {
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
   }
-  state.busMismatchPrompted.main = null;
-  state.busMismatchPrompted.vehicle = null;
-  resetChargeTiming();
   try {
-    await state.api.disconnect_can();
-    await state.api.disconnect_vehicle();
     const autoRecord = typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true;
-    const can1Result = await state.api.connect_can({
-      mode: "pcan", bus_profile: "can1", channel: can1Channel, bitrate: 500000,
-      auto_record: autoRecord,
-    });
-    if (!can1Result?.ok) toast(`CAN1 重连失败：${can1Result?.error || "未知错误"}`, true);
-    const vehicleResult = await state.api.connect_vehicle({
-      mode: "pcan", bus_profile: "canb", channel: canbChannel, bitrate: 500000,
-      auto_record: autoRecord,
-    });
-    if (!vehicleResult?.ok) toast(`CANB 重连失败：${vehicleResult?.error || "未知错误"}`, true);
-    if (can1Result?.ok && vehicleResult?.ok) {
-      state.frameSource = "main";
-      toast(`通道已交换并重连：CAN1 → ${can1Channel}，CANB → ${canbChannel}`);
-    }
+    const result = await state.api.swap_mismatched_bus_channels({ auto_record: autoRecord });
+    if (!result?.ok) return toast(result?.error || "交换通道失败", true);
+    const applySelection = (selector, value) => {
+      const node = $(selector);
+      if (node && [...node.options].some(option => option.value === value)) node.value = value;
+    };
+    applySelection("#can1ConnectChannel", result.can1_channel || can1Channel);
+    applySelection("#canbConnectChannel", result.canb_channel || canbChannel);
+    persistConnectionPreferences();
+    $("#busMismatchDialog")?.close();
+    state.busMismatchPrompted.main = null;
+    state.busMismatchPrompted.vehicle = null;
+    resetChargeTiming();
+    state.frameSource = "main";
+    toast(result.notice || "通道已交换并重新连接");
+    if (result.warning) toast(result.warning, true);
   } catch (error) {
     toast(`交换通道失败：${error}`, true);
   } finally {
