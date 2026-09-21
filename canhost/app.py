@@ -392,11 +392,16 @@ class Api:
         if mode == "pcan" and profile != "can1":
             return {"ok": False, "error": "实体 CANB 已统一由 CANB 连接管理；此入口只连接 CAN1"}
         with getattr(self, "_can_connection_lock", nullcontext()):
-            conflict = self._physical_channel_conflict(config, self._vehicle_service, "CANB")
-            if conflict:
-                return conflict
+            handover_error, handover_note = self._physical_channel_handover(
+                config, self._vehicle_service, "CANB")
+            if handover_error:
+                return {"ok": False, "error": handover_error}
             result = self._service.connect(config)
-            return self._start_auto_trace(self._service, config, result, "CONN1")
+            result = self._start_auto_trace(self._service, config, result, "CONN1")
+            if handover_note and result.get("ok"):
+                result["warning"] = (f"{result['warning']}；{handover_note}"
+                                     if result.get("warning") else handover_note)
+            return result
 
     def disconnect_can(self) -> dict[str, Any]:
         with getattr(self, "_can_connection_lock", nullcontext()):
@@ -436,14 +441,19 @@ class Api:
         if profile != "canb" or bitrate != 500000:
             return {"ok": False, "error": "统一 CANB 连接固定使用 CANB 500 kbit/s"}
         with getattr(self, "_can_connection_lock", nullcontext()):
-            conflict = self._physical_channel_conflict(config, self._service, "CAN1")
-            if conflict:
-                return conflict
+            handover_error, handover_note = self._physical_channel_handover(
+                config, self._service, "CAN1")
+            if handover_error:
+                return {"ok": False, "error": handover_error}
             result = self._vehicle_service.connect({
                 "mode": mode, "bus_profile": profile,
                 "channel": config.get("channel"), "bitrate": bitrate,
             })
-            return self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
+            result = self._start_auto_trace(self._vehicle_service, config, result, "CONN2")
+            if handover_note and result.get("ok"):
+                result["warning"] = (f"{result['warning']}；{handover_note}"
+                                     if result.get("warning") else handover_note)
+            return result
 
     def disconnect_vehicle(self) -> dict[str, Any]:
         with getattr(self, "_can_connection_lock", nullcontext()):
@@ -459,21 +469,28 @@ class Api:
         return {"vehicle": self._vehicle_service.quick_snapshot()}
 
     @staticmethod
-    def _physical_channel_conflict(config: dict[str, Any], other: CanService,
-                                   other_name: str) -> dict[str, Any] | None:
-        """Reject two live PCAN sessions trying to own the same adapter handle."""
+    def _physical_channel_handover(config: dict[str, Any], other: CanService,
+                                   other_name: str) -> tuple[str | None, str | None]:
+        """Resolve two live PCAN sessions trying to own the same adapter handle.
+
+        两条总线配置了同一条通道（单通道轮换）时，连接另一条总线只有一种含义：
+        把通道切换过去。在同一把连接锁内先断开对侧再继续，返回提示文案。
+        对侧风扇标定进行中时拒绝切换，不让一次按钮点击隐式中止安全相关会话。
+        """
         if str(config.get("mode") or "pcan") != "pcan":
-            return None
+            return None, None
         channel = str(config.get("channel") or "")
         connection = other.connection
-        if (channel and connection.get("connected") is True
+        if not (channel and connection.get("connected") is True
                 and connection.get("mode") == "pcan"
                 and str(connection.get("channel") or "") == channel):
-            return {
-                "ok": False,
-                "error": f"{channel} 正由 {other_name} 使用；CAN1 与 CANB 同时连接时必须选择两个 PCAN 通道",
-            }
-        return None
+            return None, None
+        for session in (other.fan_calib_session, other.battery_fan_calib_session):
+            if session is not None and session.is_running():
+                return (f"{channel} 正由 {other_name} 使用且风扇标定进行中；"
+                        "请先停止标定再切换", None)
+        other.disconnect()
+        return None, f"{channel} 已从 {other_name} 切换给本次连接"
 
     def connect_telemetry(self, config: dict[str, Any]) -> dict[str, Any]:
         return self._telemetry_service.connect(config)

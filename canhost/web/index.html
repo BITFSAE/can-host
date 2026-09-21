@@ -1114,6 +1114,9 @@
           <button class="bus-connect simulation-toggle" id="simulationBusButton" type="button" data-bus="simulation" aria-pressed="false" title="启动临时保留的开发模拟通道；实车与台架验证请连接实体 PCAN">
             <i class="bus-dot" aria-hidden="true"></i><b>调试模拟</b>
           </button>
+          <button class="connection-settings-button" id="connectionSettingsButton" type="button" aria-label="CAN 连接设置" title="CAN 连接设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M4 12h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="17" r="2"/></svg>
+          </button>
         </div>
         <div class="statusbar-meta" aria-label="CAN 运行信息">
           <span class="status-divider" aria-hidden="true"></span>
@@ -1125,9 +1128,6 @@
           <span class="status-group firmware-item">
             <span class="label">固件</span><b id="firmwareIdentity">等待数据</b>
           </span>
-          <button class="connection-settings-button" id="connectionSettingsButton" type="button" aria-label="CAN 连接设置" title="CAN 连接设置">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M4 12h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="17" r="2"/></svg>
-          </button>
         </div>
       </footer>
     </div>
@@ -1144,30 +1144,31 @@
         <div class="connection-map" aria-label="物理 CAN 通道分配">
           <section class="connection-map-card" aria-labelledby="can1MapTitle">
             <div class="connection-map-head">
-              <div><b id="can1MapTitle">CAN1</b><small>BMS 详细监视与参数命令</small></div>
+              <b id="can1MapTitle">CAN1</b>
               <span>500 kbit/s · 固定</span>
             </div>
+            <small class="connection-map-sub">BMS 详细监视与参数命令</small>
             <label class="field">
-              <span class="field-label">连接电池箱 CAN1 的 PCAN 通道</span>
+              <span class="field-label">PCAN 通道</span>
               <select id="can1ConnectChannel" aria-describedby="connectionSettingsMessage"></select>
             </label>
           </section>
+          <button type="button" class="connection-swap" id="swapConnectionChannels" aria-label="交换或自动分配通道" title="交换两条总线的通道；通道相同时为 CANB 自动分配其他通道">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h10l-3-3M16 17H6l3 3"/></svg>
+          </button>
           <section class="connection-map-card" aria-labelledby="canbMapTitle">
             <div class="connection-map-head">
-              <div><b id="canbMapTitle">CANB</b><small>BMS 镜像、整车节点与风扇</small></div>
+              <b id="canbMapTitle">CANB</b>
               <span>500 kbit/s · 固定</span>
             </div>
+            <small class="connection-map-sub">BMS 镜像与整车节点</small>
             <label class="field">
-              <span class="field-label">连接整车 CANB 的 PCAN 通道</span>
+              <span class="field-label">PCAN 通道</span>
               <select id="canbConnectChannel" aria-describedby="connectionSettingsMessage"></select>
             </label>
           </section>
         </div>
-        <div class="connection-map-tools">
-          <button type="button" class="outline-button" id="swapConnectionChannels">自动分配 / 交换通道</button>
-          <p class="connection-settings-message" id="connectionSettingsMessage" role="status" aria-live="polite"></p>
-        </div>
-        <p class="note tight">设置用于底部 CAN1、CANB 按钮的下次连接；已连接总线不会自动切换通道。</p>
+        <p class="connection-settings-message hidden" id="connectionSettingsMessage" role="status" aria-live="polite"></p>
       </div>
       <footer>
         <button value="cancel" class="outline-button" type="submit">取消</button>
@@ -1298,6 +1299,7 @@
         <p class="note">这只是接线提醒，不会锁定连接。请核对适配器接线，或断开后按实际总线重新连接。</p>
       </div>
       <footer>
+        <button type="button" class="outline-button hidden" id="busMismatchSwap">交换通道并重新连接</button>
         <button value="cancel" class="action-button" type="submit">知道了</button>
       </footer>
     </form>

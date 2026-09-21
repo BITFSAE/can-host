@@ -783,38 +783,84 @@ class BmsProtocolTest(unittest.TestCase):
             finally:
                 api.close()
 
-    def test_api_rejects_duplicate_physical_channel_and_old_bms_canb_entry(self) -> None:
+    def _fake_live_pcan_connection(self, service, profile: str, channel: str) -> None:
+        service.connection.update({
+            "connected": True, "mode": "pcan", "bus_profile": profile,
+            "channel": channel, "bitrate": 500000, "status": "已连接", "error": None,
+        })
+
+    @staticmethod
+    def _stub_connect_success(service):
+        def fake_connect(config):
+            service.connection.update({
+                "connected": True, "mode": config.get("mode", "pcan"),
+                "bus_profile": config.get("bus_profile"),
+                "channel": config.get("channel"), "bitrate": config.get("bitrate"),
+                "status": "已连接", "error": None,
+            })
+            return {"ok": True, "connection": dict(service.connection)}
+        return patch.object(service, "connect", side_effect=fake_connect)
+
+    def test_shared_channel_can1_connect_hands_over_from_canb(self) -> None:
+        """单通道轮换：连接另一条总线自动断开占用同一通道的当前连接。"""
         api = Api()
         try:
-            api._vehicle_service.connection.update({
-                "connected": True, "mode": "pcan", "bus_profile": "canb",
-                "channel": "PCAN_USBBUS2", "bitrate": 500000,
-            })
-            duplicate = api.connect_can({
-                "mode": "pcan", "bus_profile": "can1",
-                "channel": "PCAN_USBBUS2", "bitrate": 500000,
-            })
-            self.assertFalse(duplicate["ok"])
-            self.assertIn("必须选择两个 PCAN 通道", duplicate["error"])
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+            with self._stub_connect_success(api._service):
+                result = api.connect_can({
+                    "mode": "pcan", "bus_profile": "can1",
+                    "channel": "PCAN_USBBUS2", "bitrate": 500000, "auto_record": False,
+                })
+            self.assertTrue(result["ok"])
+            self.assertIn("已从 CANB 切换", result["warning"])
+            self.assertFalse(api._vehicle_service.connection["connected"])
+            self.assertEqual(api._service.connection["channel"], "PCAN_USBBUS2")
+        finally:
+            api.close()
 
+    def test_shared_channel_canb_connect_hands_over_from_can1(self) -> None:
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._service, "can1", "PCAN_USBBUS1")
+            with self._stub_connect_success(api._vehicle_service):
+                result = api.connect_vehicle({
+                    "mode": "pcan", "bus_profile": "canb",
+                    "channel": "PCAN_USBBUS1", "bitrate": 500000, "auto_record": False,
+                })
+            self.assertTrue(result["ok"])
+            self.assertIn("已从 CAN1 切换", result["warning"])
+            self.assertFalse(api._service.connection["connected"])
+        finally:
+            api.close()
+
+    def test_shared_channel_handover_refused_during_fan_calibration(self) -> None:
+        """一次按钮点击不得隐式中止正在运行的风扇标定。"""
+        api = Api()
+        try:
+            self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
+            with patch.object(api._vehicle_service.fan_calib_session, "is_running",
+                              return_value=True), \
+                    self._stub_connect_success(api._service):
+                result = api.connect_can({
+                    "mode": "pcan", "bus_profile": "can1",
+                    "channel": "PCAN_USBBUS2", "bitrate": 500000, "auto_record": False,
+                })
+            self.assertFalse(result["ok"])
+            self.assertIn("标定", result["error"])
+            self.assertTrue(api._vehicle_service.connection["connected"])
+            self.assertFalse(api._service.connection.get("connected", False))
+        finally:
+            api.close()
+
+    def test_api_rejects_old_bms_canb_entry_and_wrong_vehicle_params(self) -> None:
+        api = Api()
+        try:
             obsolete = api.connect_can({
                 "mode": "pcan", "bus_profile": "canb",
                 "channel": "PCAN_USBBUS1", "bitrate": 500000,
             })
             self.assertFalse(obsolete["ok"])
             self.assertIn("统一由 CANB 连接管理", obsolete["error"])
-
-            api._vehicle_service.connection.update({"connected": False, "status": "未连接"})
-            api._service.connection.update({
-                "connected": True, "mode": "pcan", "bus_profile": "can1",
-                "channel": "PCAN_USBBUS1", "bitrate": 500000,
-            })
-            reverse = api.connect_vehicle({
-                "mode": "pcan", "bus_profile": "canb",
-                "channel": "PCAN_USBBUS1", "bitrate": 500000,
-            })
-            self.assertFalse(reverse["ok"])
-            self.assertIn("正由 CAN1 使用", reverse["error"])
 
             wrong_vehicle_profile = api.connect_vehicle({
                 "mode": "pcan", "bus_profile": "can1",
@@ -907,7 +953,18 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('id="can1ConnectChannel"', html)
         self.assertIn('id="canbConnectChannel"', html)
         self.assertIn('id="swapConnectionChannels"', html)
+        # 交换按钮位于两张总线卡片之间；字段标签不重复卡片标题。
+        self.assertRegex(html, r'</section>\s*<button type="button" class="connection-swap" id="swapConnectionChannels"')
+        self.assertNotIn("自动分配 / 交换通道", html)
+        self.assertNotIn("连接电池箱 CAN1 的 PCAN 通道", html)
+        self.assertNotIn("连接整车 CANB 的 PCAN 通道", html)
+        # 设置按钮在底栏连接坞内（CAN1/CANB 旁），不在右侧运行信息区。
+        self.assertRegex(html, r'<div class="connection-dock"[^>]*>[\s\S]*?id="connectionSettingsButton"[\s\S]*?</div>')
+        meta_start = html.index('class="statusbar-meta"')
+        meta_end = html.index("</div>", meta_start)
+        self.assertNotIn("connectionSettingsButton", html[meta_start:meta_end])
         self.assertNotIn('id="canbConnectBitrate"', html)
+        self.assertIn('id="busMismatchSwap"', html)
         self.assertNotIn('id="switchIvt250"', html)
         self.assertNotIn('id="chargerType"', html)
         self.assertNotIn("250 kbit/s", html)
@@ -933,6 +990,8 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("effectiveBmsSnapshot", core_js)
         self.assertIn("get_canb_bms_snapshot", core_js)
         self.assertIn("CONNECTION_PREFS_KEY", core_js)
+        self.assertIn("persistConnectionPreferences", core_js)
+        self.assertIn("swapMismatchedBusChannels", core_js)
         self.assertIn("bindBackdropDismissal", core_js)
         self.assertIn("event.target !== dialog", core_js)
         self.assertIn('dialog.close("cancel")', core_js)

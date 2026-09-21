@@ -26,3 +26,6 @@ debug.log
 
 # Playwright CLI 的截图与快照
 .playwright-cli/
+
+# 浏览器自动化验证产物
+output/

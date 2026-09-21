@@ -346,6 +346,7 @@ function bindCoreControls() {
   $("#can1ConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
   $("#canbConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
   $("#swapConnectionChannels")?.addEventListener("click", swapConnectionChannels);
+  $("#busMismatchSwap")?.addEventListener("click", swapMismatchedBusChannels);
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#confirmDialog").addEventListener("close", () => {
@@ -508,17 +509,22 @@ function restoreConnectionPreferences() {
   renderConnectionSettingsMessage();
 }
 
-function saveConnectionPreferences() {
+function persistConnectionPreferences() {
   const prefs = {
     version: 3,
     can1Channel: $("#can1ConnectChannel")?.value || "",
     canbChannel: $("#canbConnectChannel")?.value || "",
   };
   try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
+  return prefs;
+}
+
+function saveConnectionPreferences() {
+  const prefs = persistConnectionPreferences();
   $("#connectDialog")?.close();
   const shared = prefs.can1Channel && prefs.can1Channel === prefs.canbChannel;
   toast(shared
-    ? "设置已保存；同一 PCAN 通道不能同时连接 CAN1 与 CANB"
+    ? "设置已保存；两条总线共用同一通道，连接其中一条会自动断开另一条"
     : "CAN1 / CANB 通道分配已保存");
 }
 
@@ -529,11 +535,13 @@ function renderConnectionSettingsMessage() {
   const canb = $("#canbConnectChannel")?.value || "";
   const shared = can1 && can1 === canb;
   message.classList.toggle("warn", !!shared);
-  message.textContent = shared
-    ? `${can1} 同时分配给两条总线；可单通道轮换，双通道设备请点击自动分配。`
+  const content = shared
+    ? "同一条 PCAN 通道不能同时连接两条总线；连接中点另一条总线按钮会自动切换，也可点中间的交换按钮自动错开。"
     : can1 && canb
-      ? `CAN1 使用 ${can1}，CANB 使用 ${canb}。`
-      : "请为 CAN1 和 CANB 选择 PCAN 通道。";
+      ? ""
+      : "请为两条总线选择 PCAN 通道。";
+  message.textContent = content;
+  message.classList.toggle("hidden", !content);
 }
 
 function swapConnectionChannels() {
@@ -990,7 +998,69 @@ function maybeNotifyBusMismatch(slot, scopeLabel, connection) {
   if ($("dialog[open]")) return;
   prompted.shown = true;
   text("#busMismatchMessage", busMismatchDetail(scopeLabel, mismatch));
+  // 只有两路实体连接同时报告接反（各自听到对侧独有帧）才提供一键交换；
+  // 单路接反可能是线插错总线，交换通道分配反而改错配置。
+  const main = mainConnectionState();
+  const vehicle = vehicleConnectionState();
+  const bothSwapped = !!(main.connected === true && main.mode === "pcan" && main.bus_mismatch
+    && vehicle.connected === true && vehicle.mode === "pcan" && vehicle.bus_mismatch
+    && String(main.channel || "") && String(vehicle.channel || "")
+    && String(main.channel) !== String(vehicle.channel));
+  $("#busMismatchSwap")?.classList.toggle("hidden", !bothSwapped);
   $("#busMismatchDialog")?.showModal();
+}
+
+/** 两路实体连接都报告接反时，按实际占用通道对调分配、保存并重连。 */
+async function swapMismatchedBusChannels() {
+  if (!state.api) return;
+  const button = $("#busMismatchSwap");
+  const main = mainConnectionState();
+  const vehicle = vehicleConnectionState();
+  const can1Channel = String(vehicle.channel || "");
+  const canbChannel = String(main.channel || "");
+  if (!can1Channel || !canbChannel || can1Channel === canbChannel) return;
+  const applySelection = (selector, value) => {
+    const node = $(selector);
+    if (node && [...node.options].some(option => option.value === value)) node.value = value;
+  };
+  applySelection("#can1ConnectChannel", can1Channel);
+  applySelection("#canbConnectChannel", canbChannel);
+  persistConnectionPreferences();
+  $("#busMismatchDialog")?.close();
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
+  state.busMismatchPrompted.main = null;
+  state.busMismatchPrompted.vehicle = null;
+  resetChargeTiming();
+  try {
+    await state.api.disconnect_can();
+    await state.api.disconnect_vehicle();
+    const autoRecord = typeof monitorAutoRecordEnabled === "function" ? monitorAutoRecordEnabled() : true;
+    const can1Result = await state.api.connect_can({
+      mode: "pcan", bus_profile: "can1", channel: can1Channel, bitrate: 500000,
+      auto_record: autoRecord,
+    });
+    if (!can1Result?.ok) toast(`CAN1 重连失败：${can1Result?.error || "未知错误"}`, true);
+    const vehicleResult = await state.api.connect_vehicle({
+      mode: "pcan", bus_profile: "canb", channel: canbChannel, bitrate: 500000,
+      auto_record: autoRecord,
+    });
+    if (!vehicleResult?.ok) toast(`CANB 重连失败：${vehicleResult?.error || "未知错误"}`, true);
+    if (can1Result?.ok && vehicleResult?.ok) {
+      state.frameSource = "main";
+      toast(`通道已交换并重连：CAN1 → ${can1Channel}，CANB → ${canbChannel}`);
+    }
+  } catch (error) {
+    toast(`交换通道失败：${error}`, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  }
+  await poll();
 }
 
 function renderConnection() {
