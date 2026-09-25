@@ -539,6 +539,19 @@ class CanService:
         if (not from_calibration and self.battery_fan_calib_session
                 and self.battery_fan_calib_session.is_running()):
             return {"ok": False, "error": "电池箱风扇自动标定正在运行；请使用安全中止，不能并发发送其他风扇命令"}
+        calib_action = None
+        if name == "battery_fan_calib" and isinstance(values, dict):
+            try:
+                calib_action = int(values.get("action", 1))
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if (calib_action in (1, 2) and not from_calibration
+                and self.battery_fan_calib_session):
+            snap = self.vehicle_snapshot()
+            if snap.get("pack", {}).get("state") == 3:
+                error = self.battery_fan_calib_session._safety_error(snap, 8.0)
+                if error:
+                    return {"ok": False, "error": error}
         with self.lock:
             if not self.connection.get("connected"):
                 return {"ok": False, "error": "CAN 尚未连接"}

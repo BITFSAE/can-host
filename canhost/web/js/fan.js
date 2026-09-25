@@ -1,5 +1,7 @@
 /* 整车风扇页面模块：FanController 遥测与配置，通过统一 CANB 连接收发。 */
 
+let lastBatteryCalibSource = null;
+
 function fanConnectionAvailable() {
   const connection = state.vehicleSnapshot?.connection;
   return connection?.connected === true && connection.mode === "pcan"
@@ -145,6 +147,8 @@ function bindFanControls() {
   };
   $("#batteryFanQueryButton")?.addEventListener("click", () => sendBatteryFan(
     "battery_fan_query", {}, "查询电池箱风扇", "开启 5 秒状态上报窗口。"));
+  $("#batteryFanCalibQueryButton")?.addEventListener("click", () => sendBatteryFan(
+    "battery_fan_query", {}, "查询电池箱风扇", "开启 5 秒状态上报窗口。"));
   $("#batteryFanControlButton")?.addEventListener("click", () => {
     const mode = +$("#batteryFanModeSelect").value;
     const duty = mode === 1 ? readFanNumber("#batteryFanDutyInput", "占空比") : 0;
@@ -159,7 +163,7 @@ function bindFanControls() {
     const max_current_a = readFanNumber("#batteryFanAutoCurrentInput", "总线电流保护");
     if (hold_s == null || max_current_a == null) return;
     confirmFanAction("确认电池箱风扇自动扫频", "将先查询状态，再采集0%基线并逐档计算增量功率，完成后给出35W/70W建议上限。",
-      "我已确认车辆静止、高压/DCDC稳定、风道无遮挡且人员远离旋转部件。", async () => {
+      "我已确认车辆静止、供电状态稳定、风道无遮挡且人员远离旋转部件。", async () => {
         const query = await pywebview.api.send_battery_fan_command("battery_fan_query", {}, true);
         if (!query?.ok) return toast(`查询失败：${query?.error || "未知原因"}`, true);
         await new Promise(resolve => setTimeout(resolve, 700));
@@ -191,7 +195,7 @@ function bindFanControls() {
     if (step == null || duty == null || lease == null) return;
     sendBatteryFan("battery_fan_calib", {
       action, step, duty_pct: duty, lease_s: lease,
-    }, "发送电池箱风扇标定步骤", "标定会话可越过当前运行上限；离开高压、超温、停转或租约到期会立即中止。", action === 3);
+    }, "发送电池箱风扇标定步骤", "标定会话可越过当前运行上限；供电切换、超温、停转或租约到期会立即中止。", action === 3);
   });
   $("#batteryFanCommitButton")?.addEventListener("click", () => {
     const chroma_cap_pct = readFanNumber("#batteryFanChromaCapInput", "35W Chroma上限");
@@ -677,6 +681,9 @@ function renderFan() {
     markFanCellStale(id, batteryKnown && !batteryFresh));
   const batteryCalibKnown = hasDataAge(batteryFan.calibration_age) && Object.keys(batteryCalib).length > 0;
   const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
+  text("#batteryFanCalibSourceTag", batteryFresh
+    ? `供电 · ${batteryStatus.power_source_name || "未知"}`
+    : batteryKnown ? "供电状态已过期" : "等待查询");
   if (batteryCalibKnown && !state.dirty.batteryFanCaps) {
     if (document.activeElement !== $("#batteryFanChromaCapInput")) {
       $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
@@ -716,39 +723,81 @@ function renderFan() {
     $("#batteryFanHvCapInput").value = suggested.hv_cap_pct;
   }
   const batteryAutoRunning = batterySession.status === "running";
+  const batterySource = batteryStatus.power_source;
+  if (isFresh(batteryFan.status_age, 1.0) && (batterySource === 0 || batterySource === 2)
+      && batterySource !== lastBatteryCalibSource && !batteryAutoRunning) {
+    $("#batteryFanAutoCurrentInput").value = batterySource === 0 ? "8" : "18";
+    lastBatteryCalibSource = batterySource;
+  }
   const batteryMaxCurrent = Number($("#batteryFanAutoCurrentInput")?.value);
   const batteryCurrentReady = Number.isFinite(batteryMaxCurrent)
-    && Number(pdmBus.current_a) <= batteryMaxCurrent;
+    && (batterySource !== 0 || batteryMaxCurrent <= 8)
+    && typeof pdmBus.current_a === "number" && Number.isFinite(pdmBus.current_a)
+    && pdmBus.current_a <= batteryMaxCurrent;
+  const batterySupplyReady = (pack.state === 3 && batterySource === 0)
+    || (pack.state === 5 && batterySource === 2);
+  const standbyCharging = pack.state === 3 && isFresh(snapshot.fault?.age, 1.5)
+    && snapshot.fault?.flags?.charge_mode === true;
   const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)
     && isFresh(batteryFan.calibration_age, 1.0)
     && pdmFresh && packFresh
-    && pack.state === 5 && pack.temperature_complete === true
-    && batteryStatus.power_source === 2 && batteryStatus.protocol_version === 1
+    && batterySupplyReady && !standbyCharging && pack.temperature_complete === true
+    && batteryStatus.protocol_version === 1
     && batteryCurrentReady && batteryStatus.flags?.hardware_ready === true
     && !batteryStatus.flags?.stall_confirmed
     && batteryCalib.chroma_budget_w === 35 && batteryCalib.hv_budget_w === 70;
   let batteryStartHint = "";
   if (!available) batteryStartHint = "请先连接真实 CANB 500 kbit/s";
-  else if (!packFresh || pack.state !== 5) batteryStartHint = "等待 BMS 高压接通";
+  else if (!packFresh || ![3, 5].includes(pack.state)) batteryStartHint = "等待 BMS 待机或高压接通状态";
+  else if (standbyCharging) batteryStartHint = "BMS 正在充电，待机低压不可标定";
   else if (pack.temperature_complete !== true) batteryStartHint = "BMS 温度采样不完整";
   else if (!pdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
   else if (!(isFresh(batteryFan.status_age, 1.0)
       && isFresh(batteryFan.calibration_age, 1.0))) {
     batteryStartHint = "请先查询电池箱风扇状态与标定上限";
-  } else if (batteryStatus.power_source !== 2) batteryStartHint = "当前不是高压/DCDC 供电";
+  } else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在 Chroma 充电";
   else if (batteryStatus.protocol_version !== 1
       || batteryCalib.chroma_budget_w !== 35 || batteryCalib.hv_budget_w !== 70) {
     batteryStartHint = "电池箱风扇协议或功率预算版本不匹配";
-  } else if (!batteryCurrentReady) batteryStartHint = "基础总线电流超过保护值或保护值无效";
+  } else if (!batteryCurrentReady) batteryStartHint = batterySource === 0 && batteryMaxCurrent > 8
+    ? "低压待机时总线电流保护最多 8 A" : "基础总线电流超过保护值或保护值无效";
   else if (batteryStatus.flags?.hardware_ready !== true) batteryStartHint = "PWM/TACH 硬件未就绪";
   else if (batteryStatus.flags?.stall_confirmed) batteryStartHint = "存在已确认停转";
   if (batterySession.status === "idle" && !batteryStartReady) {
     text("#batteryFanCalibProgress", `未就绪：${batteryStartHint}`);
   }
+  const batteryProgress = $("#batteryFanCalibProgressBar");
+  const batteryStep = Number(batterySession.current_step || 0);
+  const batteryTotal = Number(batterySession.total_steps || 0);
+  const batteryPct = batterySession.status === "completed" ? 100
+    : batteryTotal > 0 ? Math.max(0, Math.min(100, Math.round(batteryStep / batteryTotal * 100))) : 0;
+  batteryProgress?.setAttribute("aria-valuenow", String(batteryPct));
+  if (batteryProgress?.firstElementChild) batteryProgress.firstElementChild.style.width = batteryPct + "%";
+  batteryProgress?.classList.toggle("running", batteryAutoRunning);
+  text("#batteryFanCalibProgressLabel", batteryAutoRunning
+    ? `自动扫描中 · 步骤 ${batteryStep}/${batteryTotal} · ${batteryPct}%`
+    : batterySession.status === "completed" ? "扫描完成 · 核对下方建议上限后再保存"
+      : batterySession.status === "aborted" ? `已中止：${batterySession.abort_reason || "未知原因"}`
+        : batterySession.status === "stale" ? "旧连接记录仅可导出"
+          : batteryStartReady ? "尚未开始扫描" : `未就绪：${batteryStartHint}`);
+  const batteryTable = $("#batteryFanCalibTableBody");
+  if (batteryTable) {
+    batteryTable.innerHTML = batteryRecords.length ? batteryRecords.map(record => `
+      <tr>
+        <td title="${escapeHtml(record.quality_note || "")}"><strong>#${escapeHtml(record.step)}${record.quality_ok === false ? " · 待复核" : ""}</strong></td>
+        <td>${escapeHtml(record.duty_pct)}%</td><td>${escapeHtml(record.rpm)}</td>
+        <td>${escapeHtml(record.voltage_v)} V</td><td>${escapeHtml(record.current_a)} A</td>
+        <td>${escapeHtml(record.power_w)} W</td>
+        <td class="ok"><strong>+${escapeHtml(record.delta_current_a)} A</strong></td>
+        <td class="ok"><strong>+${escapeHtml(record.delta_power_w)} W</strong></td>
+      </tr>`).join("")
+      : `<tr><td colspan="8" class="empty-state">${batteryAutoRunning
+        ? "正在测量基线并准备扫频…" : "尚未运行标定。"}</td></tr>`;
+  }
   if ($("#commitFanCapsButton")) {
     $("#commitFanCapsButton").disabled = !available || calibRunning || batteryAutoRunning || !firmwareCalibCompleted;
   }
-  ["#batteryFanQueryButton", "#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanClearButton"]
+  ["#batteryFanQueryButton", "#batteryFanCalibQueryButton", "#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanClearButton"]
     .forEach(id => { if ($(id)) $(id).disabled = !available || batteryAutoRunning || calibRunning; });
   ["#sendFanControl", "#sendFanCurve", "#sendFanFailsafe", "#fanQueryButton", "#fanRestoreButton", "#clearFanCapsButton"]
     .forEach(id => { if ($(id)) $(id).disabled = !available || calibRunning || batteryAutoRunning; });

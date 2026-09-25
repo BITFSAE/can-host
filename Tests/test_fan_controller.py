@@ -84,8 +84,28 @@ class FanControllerToolTest(unittest.TestCase):
         session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
         self.assertIsNone(session._safety_error(snap, 18.0))
         snap["pack"]["state"] = 3
-        self.assertIn("高压接通", session._safety_error(snap, 18.0))
+        snap["battery_fan"]["status"]["power_source"] = 0
+        self.assertIsNone(session._safety_error(snap, 8.0))
+        snap["fault"] = {"age": 0.1, "flags": {"charge_mode": True}}
+        self.assertIn("正在充电", session._safety_error(snap, 8.0))
+        del snap["fault"]
+        self.assertIn("8A", session._safety_error(snap, 18.0))
+        snap["battery_fan"]["status"]["power_source"] = 1
+        self.assertIn("Chroma", session._safety_error(snap, 8.0))
+        snap["battery_fan"]["status"]["power_source"] = 0
+        session.status = "running"
+        session._expected_power_source = 2
+        session._expected_pack_state = 5
+        self.assertIn("供电或BMS状态已变化", session._safety_error(snap, 8.0))
+        session._expected_power_source = 0
         snap["pack"]["state"] = 5
+        snap["battery_fan"]["status"]["power_source"] = 2
+        self.assertIn("供电或BMS状态已变化", session._safety_error(snap, 8.0))
+        session.status = "idle"
+        snap["pack"]["state"] = 4
+        self.assertIn("待机或高压接通", session._safety_error(snap, 8.0))
+        snap["pack"]["state"] = 5
+        snap["battery_fan"]["status"]["power_source"] = 2
         snap["battery_fan"]["status"]["flags"]["stall_confirmed"] = True
         self.assertIn("停转", session._safety_error(snap, 18.0))
         snap["battery_fan"]["status"]["flags"]["stall_confirmed"] = False
@@ -95,6 +115,24 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual({key: summary[key] for key in ("v", "i", "p", "rpm")},
                          {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 2000.0})
         self.assertEqual(summary["std_i"], 0.0)
+
+        snap["pack"]["state"] = 3
+        snap["pack"]["temperature_complete"] = True
+        snap["battery_fan"]["status"]["power_source"] = 0
+        snap["pdm"]["bus"]["current_a"] = 9.0
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.vehicle_snapshot = MagicMock(return_value=snap)  # type: ignore[method-assign]
+            for action in (1, "1", None):
+                values = {"step": 0, "duty_pct": 30, "lease_s": 10}
+                if action is not None:
+                    values["action"] = action
+                result = service.send_battery_fan_command(
+                    "battery_fan_calib", values, True)
+                self.assertFalse(result["ok"])
+                self.assertIn("8.0A保护值", result["error"])
+        finally:
+            service.disconnect()
 
     def test_v3_cap_commands_and_battery_fan_commands(self) -> None:
         self.assertEqual(build_fan_command("fan_calib", {
@@ -892,6 +930,18 @@ class FanControllerToolTest(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             # 不等待后台线程完成，只验证调用没有持锁卡死。
             self.assertEqual(session.status, "running")
+        finally:
+            session._stop_event.set()
+
+    def test_dcdc_channel_two_uses_stability_interval(self) -> None:
+        snap = _calib_snap()
+        session = FanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        session.DCDC_STABLE_REQUIRED_S = 0.05
+        try:
+            result = session.start_sweep(channel=2, steps=[0], hold_s=3.0,
+                                         max_current_a=18.0, tier="dcdc")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(session.channel, 2)
         finally:
             session._stop_event.set()
 

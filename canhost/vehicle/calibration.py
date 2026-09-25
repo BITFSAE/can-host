@@ -79,6 +79,7 @@ class FanCalibrationSession:
     SETTLE_S = 3.0
     SAMPLE_S = 3.0
     BASELINE_INTERVAL = 4
+    DCDC_STABLE_REQUIRED_S = DCDC_STABLE_REQUIRED_S
 
     def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
                  snapshot_fn: Callable[[], dict[str, Any]],
@@ -1498,6 +1499,7 @@ class BatteryFanCalibrationSession:
     # 步骤采样不足或波动过大时固定延长一轮的窗口；hold_s=10 时全程仍为
     # 2+8+2=12s，加上命令确认也在 15s 租约之内。
     RETRY_SAMPLE_S = 2.0
+    LOW_VOLTAGE_MAX_CURRENT_A = 8.0
 
     def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
                  snapshot_fn: Callable[[], dict[str, Any]]) -> None:
@@ -1519,6 +1521,8 @@ class BatteryFanCalibrationSession:
             "chroma_cap_pct": None, "hv_cap_pct": None,
         }
         self.run_params: dict[str, Any] = {}
+        self._expected_power_source: int | None = None
+        self._expected_pack_state: int | None = None
         self._stop_event = threading.Event()
         self._stop_lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -1561,8 +1565,12 @@ class BatteryFanCalibrationSession:
             return "必须连接真实PCAN上的CANB"
         if conn.get("bus_profile") != "canb" or conn.get("bitrate") != 500000:
             return "电池箱风扇标定只允许使用整车CANB 500 kbit/s"
-        if not _fresh_age(pack.get("age"), 1.5) or pack.get("state") != 5:
-            return "BMS必须处于新鲜的高压接通状态"
+        if not _fresh_age(pack.get("age"), 1.5) or pack.get("state") not in (3, 5):
+            return "BMS必须处于新鲜的待机或高压接通状态"
+        fault = snap.get("fault", {})
+        if (pack.get("state") == 3 and _fresh_age(fault.get("age"), 1.5)
+                and fault.get("flags", {}).get("charge_mode")):
+            return "BMS正在充电，待机低压状态下禁止标定"
         if not pack.get("temperature_complete", False):
             return "BMS温度采样不完整，禁止在缺少完整温度保护时标定"
         if pdm.get("offline", True) or not _fresh_age(pdm.get("age"), 1.0):
@@ -1580,8 +1588,16 @@ class BatteryFanCalibrationSession:
             return "电池箱风扇协议版本不匹配（0x5AA必须为版本1）"
         if calibration.get("chroma_budget_w") != 35 or calibration.get("hv_budget_w") != 70:
             return "电池箱风扇功率预算版本不匹配（0x5AD必须为35W/70W）"
-        if status.get("power_source") != 2:
-            return f"电池箱风扇当前供电不是高压/DCDC（{status.get('power_source_name', '未知')}）"
+        source = status.get("power_source")
+        expected_source = 0 if pack.get("state") == 3 else 2
+        if source != expected_source:
+            return f"电池箱风扇供电与BMS状态不一致，或正在Chroma充电（{status.get('power_source_name', '未知')}）"
+        if (self.status == "running"
+                and (source != self._expected_power_source
+                     or pack.get("state") != self._expected_pack_state)):
+            return "电池箱风扇供电或BMS状态已变化，标定已中止"
+        if source == 0 and max_current_a > self.LOW_VOLTAGE_MAX_CURRENT_A:
+            return f"低压待机标定的总线电流保护不得超过{self.LOW_VOLTAGE_MAX_CURRENT_A:.0f}A"
         flags = status.get("flags", {})
         if not flags.get("hardware_ready", False):
             return "电池箱风扇PWM/TACH硬件尚未就绪"
@@ -1634,6 +1650,9 @@ class BatteryFanCalibrationSession:
         if error:
             return {"ok": False, "error": error}
         snap = self.snapshot_fn()
+        error = self._safety_error(snap, max_current_a)
+        if error:
+            return {"ok": False, "error": error}
         firmware_calib = snap.get("battery_fan", {}).get("calibration", {})
         firmware_calib_age = snap.get("battery_fan", {}).get("calibration_age")
         if (_fresh_age(firmware_calib_age, 1.0)
@@ -1652,7 +1671,11 @@ class BatteryFanCalibrationSession:
             self.records.clear()
             self.quality_warnings.clear()
             self.suggested_caps = {"chroma_cap_pct": None, "hv_cap_pct": None}
-            self.run_params = {"steps": steps, "hold_s": hold_s, "max_current_a": max_current_a}
+            self.run_params = {"steps": steps, "hold_s": hold_s,
+                               "max_current_a": max_current_a,
+                               "power_source": snap["battery_fan"]["status"]["power_source"]}
+            self._expected_power_source = snap["battery_fan"]["status"]["power_source"]
+            self._expected_pack_state = snap["pack"]["state"]
             self._thread = threading.Thread(target=self._run, args=(steps, hold_s, max_current_a),
                                             name="battery-fan-calib", daemon=True)
             self._thread.start()

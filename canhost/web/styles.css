@@ -3084,6 +3084,18 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .fan-calib-table th { background: var(--level-2); color: var(--text-3); font-weight: 500; }
 .fan-calib-table tr:last-child td { border-bottom: 0; }
 .fan-calib-table .empty-state { padding: var(--sp-4) var(--sp-2); }
+.fan-battery-calib-panel .fan-calib-table-wrap { max-height: 360px; overflow-y: auto; }
+.fan-battery-calib-panel .fan-calib-table th { position: sticky; top: 0; z-index: 1; }
+.fan-manual-step { margin-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
+.fan-manual-step > summary {
+  padding: var(--sp-3) 0;
+  color: var(--text-2);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  cursor: pointer;
+}
+.fan-manual-step > summary:hover { color: var(--text); }
+.fan-manual-step > summary:focus-visible { outline: 2px solid var(--action-border); outline-offset: 2px; }
 
 /* 应答记录：窄卡片里只有时间与一条结论，按两列紧凑排布。 */
 .fan-ack-list { max-height: 220px; overflow-y: auto; }
