@@ -85,10 +85,12 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertIsNone(session._safety_error(snap, 18.0))
         snap["pack"]["state"] = 3
         snap["battery_fan"]["status"]["power_source"] = 0
+        self.assertIn("充电状态", session._safety_error(snap, 8.0))
+        snap["fault"] = {"age": 0.1, "flags": {"charge_mode": False}}
         self.assertIsNone(session._safety_error(snap, 8.0))
-        snap["fault"] = {"age": 0.1, "flags": {"charge_mode": True}}
+        snap["fault"]["flags"]["charge_mode"] = True
         self.assertIn("正在充电", session._safety_error(snap, 8.0))
-        del snap["fault"]
+        snap["fault"]["flags"]["charge_mode"] = False
         self.assertIn("8A", session._safety_error(snap, 18.0))
         snap["battery_fan"]["status"]["power_source"] = 1
         self.assertIn("Chroma", session._safety_error(snap, 8.0))
@@ -142,7 +144,6 @@ class FanControllerToolTest(unittest.TestCase):
             "_sequence": 12, "action": 6,
         }).data, bytes.fromhex("08 0C 06 A5 5A 00 00 6D"))
         vectors = [
-            ("battery_fan_query", {"_sequence": 1}, "02 01 00 00 00 00 00 F6"),
             ("battery_fan_control", {"_sequence": 2, "mode": 1, "duty_pct": 40, "lease_s": 10},
              "01 02 01 28 0A 00 00 68"),
             ("battery_fan_calib", {"_sequence": 3, "action": 1, "step": 0, "duty_pct": 0, "lease_s": 10},
@@ -424,7 +425,8 @@ class FanControllerToolTest(unittest.TestCase):
 
             service.battery_fan_calib_session.status = "idle"
             service.fan_calib_session.status = "running"
-            blocked = service.send_battery_fan_command("battery_fan_query", {}, True)
+            blocked = service.send_battery_fan_command(
+                "battery_fan_control", {"mode": 0, "duty_pct": 0, "lease_s": 0}, True)
             self.assertFalse(blocked["ok"])
             self.assertIn("PDM", blocked["error"])
             blocked_start = service.start_battery_fan_calibration()

@@ -1568,9 +1568,11 @@ class BatteryFanCalibrationSession:
         if not _fresh_age(pack.get("age"), 1.5) or pack.get("state") not in (3, 5):
             return "BMS必须处于新鲜的待机或高压接通状态"
         fault = snap.get("fault", {})
-        if (pack.get("state") == 3 and _fresh_age(fault.get("age"), 1.5)
-                and fault.get("flags", {}).get("charge_mode")):
-            return "BMS正在充电，待机低压状态下禁止标定"
+        if pack.get("state") == 3:
+            if not _fresh_age(fault.get("age"), 1.5):
+                return "缺少新鲜 CANB BMS 充电状态；等待故障状态帧"
+            if fault.get("flags", {}).get("charge_mode"):
+                return "BMS正在充电，待机低压状态下禁止标定"
         if not pack.get("temperature_complete", False):
             return "BMS温度采样不完整，禁止在缺少完整温度保护时标定"
         if pdm.get("offline", True) or not _fresh_age(pdm.get("age"), 1.0):
@@ -1580,10 +1582,10 @@ class BatteryFanCalibrationSession:
                    for value in pdm_values):
             return "PDM总线电压、电流或功率无效"
         if not _fresh_age(battery.get("status_age"), 1.0):
-            return "电池箱风扇0x5AA状态超时；请先查询"
+            return "缺少新鲜 CANB 0x5AA 风扇状态；检查 F405 周期上报"
         calibration = battery.get("calibration", {})
         if not _fresh_age(battery.get("calibration_age"), 1.0):
-            return "电池箱风扇0x5AD标定状态超时；请先查询"
+            return "缺少新鲜 CANB 0x5AD 标定状态；检查 F405 周期上报"
         if status.get("protocol_version") != 1:
             return "电池箱风扇协议版本不匹配（0x5AA必须为版本1）"
         if calibration.get("chroma_budget_w") != 35 or calibration.get("hv_budget_w") != 70:

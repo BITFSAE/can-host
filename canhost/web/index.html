@@ -814,7 +814,7 @@
             <article class="panel fan-calib-panel fan-battery-calib-panel">
                 <header class="panel-head">
                   <h3>电池箱风扇标定</h3>
-                  <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非 Chroma 高压状态可扫频；供电变化时中止">等待查询</span>
+                  <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非 Chroma 高压状态可扫频；供电变化时中止">等待数据</span>
                 </header>
                 <div class="panel-body">
                   <div class="sub-head fan-step-head">
@@ -826,7 +826,6 @@
                     <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="batteryFanAutoCurrentInput" type="number" min="5" max="20" step="0.1" value="18"><em>A</em></span></label>
                   </div>
                   <div class="panel-foot">
-                    <button class="outline-button" type="button" id="batteryFanCalibQueryButton">查询状态</button>
                     <button class="action-button" type="button" id="batteryFanAutoStartButton" disabled>自动阶梯扫频</button>
                     <button class="danger-button" type="button" id="batteryFanAutoStopButton" disabled>安全中止</button>
                     <button class="outline-button" type="button" id="batteryFanExportButton" disabled>导出 CSV</button>
@@ -940,7 +939,7 @@
               <article class="panel fan-control-panel">
                 <header class="panel-head">
                   <h3>BMS 电池箱风扇</h3>
-                  <span id="batteryFanFreshTag" class="panel-context" title="来源 0x5AA · 查询后在限时窗口内回报">等待查询</span>
+                  <span id="batteryFanFreshTag" class="panel-context" title="CANB 0x5AA 周期状态">等待数据</span>
                 </header>
                 <div class="panel-body flush">
                   <div class="readout-grid cols-3 fan-battery-grid">
@@ -959,7 +958,6 @@
                     <label class="field"><span class="field-label">租约</span><span class="field-input"><input id="batteryFanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
                   </div>
                   <div class="panel-foot">
-                    <button class="outline-button" type="button" id="batteryFanQueryButton">查询状态</button>
                     <button class="action-button" type="button" id="batteryFanControlButton">下发控制</button>
                   </div>
                 </div>

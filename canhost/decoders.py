@@ -602,7 +602,7 @@ BMS_FAN_RESULT_NAMES = {
     4: "操作码不支持", 5: "租约到期", 6: "安全条件拒绝", 7: "Flash 不可用",
 }
 BMS_FAN_COMMAND_CODES = {
-    "battery_fan_control": 0x01, "battery_fan_query": 0x02,
+    "battery_fan_control": 0x01,
     "battery_fan_calib": 0x03, "battery_fan_commit": 0x04,
     "battery_fan_clear": 0x05,
 }

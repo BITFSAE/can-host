@@ -1,6 +1,7 @@
 /* 整车风扇页面模块：FanController 遥测与配置，通过统一 CANB 连接收发。 */
 
 let lastBatteryCalibSource = null;
+let pendingBatteryFanSave = null;
 
 function fanConnectionAvailable() {
   const connection = state.vehicleSnapshot?.connection;
@@ -140,15 +141,20 @@ function bindFanControls() {
     confirmFanAction(title, message, "我已核对电池箱风扇、供电状态和旋转部件安全。", async () => {
       const res = await pywebview.api.send_battery_fan_command(name, values, true);
       if (res?.ok && ["battery_fan_commit", "battery_fan_clear"].includes(name)) {
-        state.dirty.batteryFanCaps = false;
+        pendingBatteryFanSave = {
+          generation: Number(res.calibration_generation),
+          chroma: name === "battery_fan_commit" ? values.chroma_cap_pct : 55,
+          hv: name === "battery_fan_commit" ? values.hv_cap_pct : 55,
+          calibrated: name === "battery_fan_commit",
+        };
+        state.dirty.batteryFanCaps = true;
       }
-      toast(res?.ok ? (res.message || "电池箱风扇命令已执行") : `命令失败：${res?.error || "未知原因"}`, !res?.ok);
+      const acceptedSave = res?.ok && pendingBatteryFanSave
+        && ["battery_fan_commit", "battery_fan_clear"].includes(name);
+      toast(res?.ok ? (acceptedSave ? "命令已接受；等待新 0x5AD 核对上限及 Flash 保存位"
+        : res.message || "电池箱风扇命令已执行") : `命令失败：${res?.error || "未知原因"}`, !res?.ok);
     }, destructive);
   };
-  $("#batteryFanQueryButton")?.addEventListener("click", () => sendBatteryFan(
-    "battery_fan_query", {}, "查询电池箱风扇", "开启 5 秒状态上报窗口。"));
-  $("#batteryFanCalibQueryButton")?.addEventListener("click", () => sendBatteryFan(
-    "battery_fan_query", {}, "查询电池箱风扇", "开启 5 秒状态上报窗口。"));
   $("#batteryFanControlButton")?.addEventListener("click", () => {
     const mode = +$("#batteryFanModeSelect").value;
     const duty = mode === 1 ? readFanNumber("#batteryFanDutyInput", "占空比") : 0;
@@ -162,11 +168,8 @@ function bindFanControls() {
     const hold_s = readFanNumber("#batteryFanAutoHoldInput", "稳态保持时间");
     const max_current_a = readFanNumber("#batteryFanAutoCurrentInput", "总线电流保护");
     if (hold_s == null || max_current_a == null) return;
-    confirmFanAction("确认电池箱风扇自动扫频", "将先查询状态，再采集0%基线并逐档计算增量功率，完成后给出35W/70W建议上限。",
+    confirmFanAction("确认电池箱风扇自动扫频", "将使用 CANB 实时状态，采集0%基线并逐档计算增量功率，完成后给出35W/70W建议上限。",
       "我已确认车辆静止、供电状态稳定、风道无遮挡且人员远离旋转部件。", async () => {
-        const query = await pywebview.api.send_battery_fan_command("battery_fan_query", {}, true);
-        if (!query?.ok) return toast(`查询失败：${query?.error || "未知原因"}`, true);
-        await new Promise(resolve => setTimeout(resolve, 700));
         const res = await pywebview.api.start_battery_fan_calibration({
           hold_s, max_current_a,
         });
@@ -663,7 +666,7 @@ function renderFan() {
   const batteryKnown = hasDataAge(batteryFan.status_age) && Object.keys(batteryStatus).length > 0;
   const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
   text("#batteryFanFreshTag", batteryKnown
-    ? dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S) : "等待查询");
+    ? dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S) : "等待数据");
   markStaleData("#batteryFanFreshTag", batteryKnown && !batteryFresh);
   // 一个读数一个单元：原先挤在一行说明里的值各自落到自己的单元上。
   const batteryCells = [
@@ -681,9 +684,19 @@ function renderFan() {
     markFanCellStale(id, batteryKnown && !batteryFresh));
   const batteryCalibKnown = hasDataAge(batteryFan.calibration_age) && Object.keys(batteryCalib).length > 0;
   const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
+  if (!available) pendingBatteryFanSave = null;
+  if (pendingBatteryFanSave && batteryCalibFresh
+      && Number(batteryFan.calibration_generation) > pendingBatteryFanSave.generation
+      && Boolean(batteryCalib.calibrated) === pendingBatteryFanSave.calibrated
+      && Number(batteryCalib.chroma_cap_pct) === pendingBatteryFanSave.chroma
+      && Number(batteryCalib.hv_cap_pct) === pendingBatteryFanSave.hv
+      && !batteryCalib.save_pending) {
+    pendingBatteryFanSave = null;
+    state.dirty.batteryFanCaps = false;
+  }
   text("#batteryFanCalibSourceTag", batteryFresh
     ? `供电 · ${batteryStatus.power_source_name || "未知"}`
-    : batteryKnown ? "供电状态已过期" : "等待查询");
+    : batteryKnown ? "供电状态已过期" : "等待数据");
   if (batteryCalibKnown && !state.dirty.batteryFanCaps) {
     if (document.activeElement !== $("#batteryFanChromaCapInput")) {
       $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
@@ -694,11 +707,17 @@ function renderFan() {
   }
   const saveNode = $("#batteryFanSaveState");
   if (saveNode) {
-    saveNode.textContent = batteryCalibKnown
-      ? (batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存")
-      : "等待";
+    saveNode.textContent = pendingBatteryFanSave
+      ? (!batteryCalibKnown ? "等待数据"
+        : !batteryCalibFresh ? "已过期 · 等待 0x5AD"
+        : Number(batteryFan.calibration_generation) > pendingBatteryFanSave.generation
+          && batteryCalib.save_pending ? "等待 Flash 保存" : "等待新 0x5AD 核对")
+      : !batteryCalibKnown ? "等待数据"
+      : !batteryCalibFresh ? "已过期"
+      : batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存";
     // 过期一档交给单元底色表达，这里只区分新鲜数据的三种结论。
-    saveNode.className = !(batteryCalibKnown && batteryCalibFresh) ? ""
+    saveNode.className = pendingBatteryFanSave ? "warn"
+      : !(batteryCalibKnown && batteryCalibFresh) ? ""
       : batteryCalib.save_pending ? "warn" : batteryCalib.calibrated ? "ok" : "";
     // 保存状态来自标定帧，与状态帧的时效分开判定。
     markFanCellStale("#batteryFanSaveState", batteryCalibKnown && !batteryCalibFresh);
@@ -736,12 +755,13 @@ function renderFan() {
     && pdmBus.current_a <= batteryMaxCurrent;
   const batterySupplyReady = (pack.state === 3 && batterySource === 0)
     || (pack.state === 5 && batterySource === 2);
-  const standbyCharging = pack.state === 3 && isFresh(snapshot.fault?.age, 1.5)
+  const standbyChargeKnown = pack.state !== 3 || isFresh(snapshot.fault?.age, 1.5);
+  const standbyCharging = pack.state === 3 && standbyChargeKnown
     && snapshot.fault?.flags?.charge_mode === true;
   const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)
     && isFresh(batteryFan.calibration_age, 1.0)
     && pdmFresh && packFresh
-    && batterySupplyReady && !standbyCharging && pack.temperature_complete === true
+    && batterySupplyReady && standbyChargeKnown && !standbyCharging && pack.temperature_complete === true
     && batteryStatus.protocol_version === 1
     && batteryCurrentReady && batteryStatus.flags?.hardware_ready === true
     && !batteryStatus.flags?.stall_confirmed
@@ -749,13 +769,13 @@ function renderFan() {
   let batteryStartHint = "";
   if (!available) batteryStartHint = "请先连接真实 CANB 500 kbit/s";
   else if (!packFresh || ![3, 5].includes(pack.state)) batteryStartHint = "等待 BMS 待机或高压接通状态";
+  else if (!standbyChargeKnown) batteryStartHint = "等待 CANB BMS 充电状态";
   else if (standbyCharging) batteryStartHint = "BMS 正在充电，待机低压不可标定";
   else if (pack.temperature_complete !== true) batteryStartHint = "BMS 温度采样不完整";
   else if (!pdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
-  else if (!(isFresh(batteryFan.status_age, 1.0)
-      && isFresh(batteryFan.calibration_age, 1.0))) {
-    batteryStartHint = "请先查询电池箱风扇状态与标定上限";
-  } else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在 Chroma 充电";
+  else if (!isFresh(batteryFan.status_age, 1.0)) batteryStartHint = "等待 CANB 0x5AA 实时风扇状态";
+  else if (!isFresh(batteryFan.calibration_age, 1.0)) batteryStartHint = "等待 CANB 0x5AD 实时标定状态";
+  else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在 Chroma 充电";
   else if (batteryStatus.protocol_version !== 1
       || batteryCalib.chroma_budget_w !== 35 || batteryCalib.hv_budget_w !== 70) {
     batteryStartHint = "电池箱风扇协议或功率预算版本不匹配";
@@ -797,14 +817,12 @@ function renderFan() {
   if ($("#commitFanCapsButton")) {
     $("#commitFanCapsButton").disabled = !available || calibRunning || batteryAutoRunning || !firmwareCalibCompleted;
   }
-  ["#batteryFanQueryButton", "#batteryFanCalibQueryButton", "#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanClearButton"]
+  ["#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanClearButton"]
     .forEach(id => { if ($(id)) $(id).disabled = !available || batteryAutoRunning || calibRunning; });
   ["#sendFanControl", "#sendFanCurve", "#sendFanFailsafe", "#fanQueryButton", "#fanRestoreButton", "#clearFanCapsButton"]
     .forEach(id => { if ($(id)) $(id).disabled = !available || calibRunning || batteryAutoRunning; });
-  // F405 保持“已完成”直到提交/清除/复位，而 0x5AD 只在查询窗口内发送；
-  // 按最后已知状态判定，避免操作者复核建议值期间按钮因帧过期被禁用。
-  // 状态若已变化（如复位），提交仍会被固件应答拒绝并提示。
-  const batteryFirmwareCompleted = Number(batteryCalib.calib_state) === 3;
+  // 只根据新鲜 0x5AD 的完成状态放行提交；复位或断线后等待新状态。
+  const batteryFirmwareCompleted = batteryCalibFresh && Number(batteryCalib.calib_state) === 3;
   if ($("#batteryFanCommitButton")) {
     $("#batteryFanCommitButton").disabled = !available || batteryAutoRunning || calibRunning || !batteryFirmwareCompleted;
     $("#batteryFanCommitButton").title = batteryFirmwareCompleted ? "" : "需先完成并停止F405标定会话";

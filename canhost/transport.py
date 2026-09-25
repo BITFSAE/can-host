@@ -584,7 +584,10 @@ class CanService:
                         "error": "BMS 电池箱风扇在 1.0s 内没有应答；请确认 F405 已上电且 CANB 位率正确"}
             if not ack.get("accepted"):
                 return {"ok": False, "error": f"BMS 拒绝：{ack.get('result_name')}", "ack": ack}
-            return {"ok": True, "sequence": sequence, "message": ack.get("result_name"), "ack": ack}
+            with self.lock:
+                calibration_generation = self.protocol.battery_fan_calib_generation
+            return {"ok": True, "sequence": sequence, "message": ack.get("result_name"),
+                    "ack": ack, "calibration_generation": calibration_generation}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
