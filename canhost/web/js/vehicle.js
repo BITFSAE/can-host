@@ -65,6 +65,8 @@ async function connectVehicle() {
   }
   if (!result?.ok) return toast(result?.error || "CANB 连接失败", true);
   toast(result.notice || `CANB 已连接 · ${bitrate / 1000} kbit/s`);
+  try { await persistConnectionPreferences({ connectedRole: "canb" }); }
+  catch (error) { toast(`CANB 已连接，但通道分配保存失败：${error}`, true); }
   if (result.warning) toast(result.warning, true);
   if (state.api.get_vehicle_snapshot) state.vehicleSnapshot = await state.api.get_vehicle_snapshot();
   // Select the new stream for a later monitor visit without navigating away

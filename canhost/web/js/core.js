@@ -256,7 +256,7 @@ async function init() {
     populateConnectionOptions();
     populateToolChannelOptions();
     populateVehicleOptions();
-    restoreConnectionPreferences();
+    await restoreWorkbenchPreferences();
     buildSwitchList();
     buildSwitchStatusList();
     await poll();
@@ -343,8 +343,16 @@ function bindCoreControls() {
     refreshPcanChannels(false);
   });
   $("#refreshPcanChannelsButton")?.addEventListener("click", () => refreshPcanChannels(true));
-  $("#can1ConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
-  $("#canbConnectChannel")?.addEventListener("change", renderConnectionSettingsMessage);
+  $("#can1ConnectChannel")?.addEventListener("change", () => {
+    state.preferredCan1Channel = $("#can1ConnectChannel").value;
+    delete $("#can1ConnectChannel").dataset.preferredMissing;
+    renderConnectionSettingsMessage();
+  });
+  $("#canbConnectChannel")?.addEventListener("change", () => {
+    state.preferredCanbChannel = $("#canbConnectChannel").value;
+    delete $("#canbConnectChannel").dataset.preferredMissing;
+    renderConnectionSettingsMessage();
+  });
   $("#swapConnectionChannels")?.addEventListener("click", swapConnectionChannels);
   $("#busMismatchSwap")?.addEventListener("click", swapMismatchedBusChannels);
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
@@ -430,6 +438,12 @@ function populatePcanSelect(selector, data) {
   }).join("");
   node.disabled = node.closest(".disabled") !== null;
   if (channels.includes(previous)) node.value = previous;
+  const preferred = selector === "#can1ConnectChannel" ? state.preferredCan1Channel
+    : selector === "#canbConnectChannel" ? state.preferredCanbChannel : "";
+  if (node.dataset.preferredMissing === "true" && channels.includes(preferred)) {
+    node.value = preferred;
+    delete node.dataset.preferredMissing;
+  }
 }
 
 function renderPcanDiscoveryStatus(scan) {
@@ -484,13 +498,48 @@ async function refreshPcanChannels(announce = false) {
   return state.pcanScanInFlight;
 }
 
-function restoreConnectionPreferences() {
-  let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem(CONNECTION_PREFS_KEY) || "{}"); } catch { /* 使用默认项 */ }
+async function restoreWorkbenchPreferences() {
+  let saved;
+  try { saved = await state.api.workbench_preferences(); }
+  catch (error) { toast(`读取操作设置失败：${error}`, true); saved = {}; }
+  const connection = saved?.connection;
+  restoreConnectionPreferences(connection);
+  if (!connection) {
+    let legacy = null;
+    try { legacy = JSON.parse(localStorage.getItem(CONNECTION_PREFS_KEY) || "null"); } catch { /* 无旧设置 */ }
+    if (legacy && typeof legacy === "object") {
+      try {
+        const migrated = await state.api.set_connection_preferences({
+          can1Channel: state.preferredCan1Channel || "",
+          canbChannel: state.preferredCanbChannel || "",
+        });
+        if (!migrated?.ok) throw new Error(migrated?.error || "无法保存旧通道分配");
+      }
+      catch (error) { toast(`迁移通道分配失败：${error}`, true); }
+    }
+  }
+  restoreMonitorTxRows(saved?.monitor_tx_rows);
+  monitorUi.lastTxSignature = "";
+  renderMonitorTransmitRows();
+  if (!saved?.monitor_tx_rows) {
+    try { await persistMonitorTxRows(); }
+    catch { /* 错误已在发送项区域提示；主界面继续启动 */ }
+  }
+}
+
+function restoreConnectionPreferences(saved = null) {
+  let prefs = saved;
+  if (!prefs || typeof prefs !== "object") {
+    try { prefs = JSON.parse(localStorage.getItem(CONNECTION_PREFS_KEY) || "{}"); } catch { prefs = {}; }
+  }
   const options = selector => [...($(selector)?.options || [])].map(option => option.value).filter(Boolean);
   const apply = (selector, value) => {
     const node = $(selector);
-    if (node && [...node.options].some(option => option.value === String(value))) node.value = String(value);
+    if (!node) return;
+    if ([...node.options].some(option => option.value === String(value))) {
+      node.value = String(value);
+      delete node.dataset.preferredMissing;
+    } else if (value) node.dataset.preferredMissing = "true";
   };
   const channels = options("#can1ConnectChannel");
   const automatic = state.bootstrap?.pcan_scan?.automatic === true;
@@ -504,23 +553,43 @@ function restoreConnectionPreferences() {
   } else if (automatic && oldPrefs && canbSaved === can1Saved && channels.length > 1) {
     canbSaved = channels.find(channel => channel !== can1Saved) || channels[0] || "";
   }
+  state.preferredCan1Channel = can1Saved;
+  state.preferredCanbChannel = canbSaved;
   apply("#can1ConnectChannel", can1Saved);
   apply("#canbConnectChannel", canbSaved);
   renderConnectionSettingsMessage();
 }
 
-function persistConnectionPreferences() {
+async function persistConnectionPreferences({ connectedRole = null } = {}) {
+  const selectedChannel = (selector, preferred, role) => {
+    const node = $(selector);
+    if (node?.dataset.preferredMissing === "true" && connectedRole !== role) return preferred || "";
+    return node?.value || preferred || "";
+  };
   const prefs = {
     version: 3,
-    can1Channel: $("#can1ConnectChannel")?.value || "",
-    canbChannel: $("#canbConnectChannel")?.value || "",
+    can1Channel: selectedChannel("#can1ConnectChannel", state.preferredCan1Channel, "can1"),
+    canbChannel: selectedChannel("#canbConnectChannel", state.preferredCanbChannel, "canb"),
   };
-  try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 本次运行仍保留选择 */ }
+  const result = await state.api.set_connection_preferences(prefs);
+  if (!result?.ok) throw new Error(result?.error || "无法保存通道分配");
+  state.preferredCan1Channel = prefs.can1Channel;
+  state.preferredCanbChannel = prefs.canbChannel;
+  for (const [selector, preferred] of [
+    ["#can1ConnectChannel", prefs.can1Channel], ["#canbConnectChannel", prefs.canbChannel],
+  ]) {
+    const node = $(selector);
+    if (node.value === preferred) delete node.dataset.preferredMissing;
+    else if (preferred) node.dataset.preferredMissing = "true";
+  }
+  try { localStorage.setItem(CONNECTION_PREFS_KEY, JSON.stringify(prefs)); } catch { /* 后端设置已保存 */ }
   return prefs;
 }
 
-function saveConnectionPreferences() {
-  const prefs = persistConnectionPreferences();
+async function saveConnectionPreferences() {
+  let prefs;
+  try { prefs = await persistConnectionPreferences(); }
+  catch (error) { toast(`通道分配保存失败：${error}`, true); return; }
   $("#connectDialog")?.close();
   const shared = prefs.can1Channel && prefs.can1Channel === prefs.canbChannel;
   toast(shared
@@ -551,12 +620,18 @@ function swapConnectionChannels() {
   if (can1.value === canb.value) {
     const alternative = [...canb.options].find(option => option.value && option.value !== can1.value);
     if (alternative) canb.value = alternative.value;
+    state.preferredCanbChannel = canb.value;
+    delete canb.dataset.preferredMissing;
     renderConnectionSettingsMessage();
     return;
   }
   const previous = can1.value;
   can1.value = canb.value;
   canb.value = previous;
+  state.preferredCan1Channel = can1.value;
+  state.preferredCanbChannel = canb.value;
+  delete can1.dataset.preferredMissing;
+  delete canb.dataset.preferredMissing;
   renderConnectionSettingsMessage();
 }
 
@@ -604,6 +679,8 @@ async function toggleMainDockConnection() {
   }
   if (!result?.ok) return toast(result?.error || "CAN1 连接失败", true);
   toast(result.notice || "CAN1 已连接");
+  try { await persistConnectionPreferences({ connectedRole: "can1" }); }
+  catch (error) { toast(`CAN1 已连接，但通道分配保存失败：${error}`, true); }
   if (result.warning) toast(result.warning, true);
   // The status-bar buttons only control connections. Keep the operator's
   // current workspace in place; the monitor remains available from the nav.
@@ -1034,13 +1111,18 @@ async function swapMismatchedBusChannels() {
     };
     applySelection("#can1ConnectChannel", result.can1_channel || can1Channel);
     applySelection("#canbConnectChannel", result.canb_channel || canbChannel);
-    persistConnectionPreferences();
+    state.preferredCan1Channel = $("#can1ConnectChannel")?.value || "";
+    state.preferredCanbChannel = $("#canbConnectChannel")?.value || "";
+    let saveError = null;
+    try { await persistConnectionPreferences(); }
+    catch (error) { saveError = error; }
     $("#busMismatchDialog")?.close();
     state.busMismatchPrompted.main = null;
     state.busMismatchPrompted.vehicle = null;
     resetChargeTiming();
     state.frameSource = "main";
-    toast(result.notice || "通道已交换并重新连接");
+    toast(saveError ? `通道已交换并重新连接，但保存失败：${saveError}`
+      : result.notice || "通道已交换并重新连接", !!saveError);
     if (result.warning) toast(result.warning, true);
   } catch (error) {
     toast(`交换通道失败：${error}`, true);

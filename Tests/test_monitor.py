@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import tempfile
+import json
+import shutil
+import subprocess
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -140,6 +144,32 @@ class MonitorTransportTest(unittest.TestCase):
         finally:
             service.disconnect()
 
+    def test_pcan_echo_is_not_counted_again_as_rx(self) -> None:
+        service = self.make_writable_service()
+        try:
+            sent = service.send_monitor_frame(
+                {"id": "0x290", "data": "01 02", "cycle_ms": 200}, True)
+            self.assertTrue(sent["ok"])
+            echo = MagicMock(arbitration_id=0x290, data=b"\x01\x02",
+                             is_extended_id=False, is_rx=False)
+            received = MagicMock(arbitration_id=0x291, data=b"\x03",
+                                 is_extended_id=False, is_rx=True)
+            messages = iter((echo, received))
+
+            def recv(timeout):
+                message = next(messages)
+                if message is received:
+                    service.stop_event.set()
+                return message
+
+            service.bus.recv.side_effect = recv
+            service._receive_loop()
+            groups = {group["id"]: group for group in service.snapshot()["monitor"]["groups"]}
+            self.assertEqual((groups["0x290"]["tx_count"], groups["0x290"]["rx_count"]), (1, 0))
+            self.assertEqual((groups["0x291"]["tx_count"], groups["0x291"]["rx_count"]), (0, 1))
+        finally:
+            service.disconnect()
+
     def test_active_native_trace_exports_to_csv_without_stopping_capture(self) -> None:
         service = CanService()
         service.connection.update({"connected": True, "mode": "pcan", "bus_profile": "can1"})
@@ -158,6 +188,37 @@ class MonitorTransportTest(unittest.TestCase):
 
 
 class MonitorApiTest(unittest.TestCase):
+    def test_operator_preferences_survive_restart_and_keep_other_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Path(directory) / "settings.json"
+            settings.write_text(json.dumps({"github_token": "keep", "theme_mode": "light"}), encoding="utf-8")
+            with patch("canhost.updater.settings_path", return_value=settings):
+                api = Api.__new__(Api)
+                api._preference_lock = threading.Lock()
+                connection = {"version": 3, "can1Channel": "PCAN_USBBUS2",
+                              "canbChannel": "PCAN_USBBUS1"}
+                rows = [{"uid": "saved-row", "name": "测试", "id": "0x290",
+                         "extended": False, "data": "01 02", "cycle_ms": 200}]
+                self.assertTrue(api.set_connection_preferences(connection)["ok"])
+                self.assertTrue(api.set_monitor_tx_rows(rows)["ok"])
+                restarted = Api.__new__(Api)
+                self.assertEqual(restarted.workbench_preferences(), {
+                    "connection": connection, "monitor_tx_rows": rows,
+                })
+                saved = json.loads(settings.read_text(encoding="utf-8"))
+                self.assertEqual(saved["github_token"], "keep")
+                self.assertEqual(saved["theme_mode"], "light")
+
+    def test_invalid_operator_preferences_do_not_replace_saved_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Path(directory) / "settings.json"
+            with patch("canhost.updater.settings_path", return_value=settings):
+                api = Api.__new__(Api)
+                api._preference_lock = threading.Lock()
+                self.assertFalse(api.set_connection_preferences({"can1Channel": 12})["ok"])
+                self.assertFalse(api.set_monitor_tx_rows([{"uid": "bad"}])["ok"])
+                self.assertFalse(settings.exists())
+
     def test_successful_real_connection_starts_separate_native_auto_trace(self) -> None:
         api = Api.__new__(Api)
         service = MagicMock()
@@ -188,6 +249,13 @@ class MonitorApiTest(unittest.TestCase):
         self.assertIs(api._start_auto_trace(
             service, {"mode": "pcan", "auto_record": False}, result, "CONN1"), result)
         service.start_recording.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the frontend smoke test")
+    def test_workbench_preferences_restore_in_frontend(self) -> None:
+        script = Path(__file__).with_name("workbench_ui_smoke.js")
+        result = subprocess.run([shutil.which("node"), str(script)],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

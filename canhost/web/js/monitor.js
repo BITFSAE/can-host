@@ -2,6 +2,9 @@
 
 const MONITOR_TX_KEY = "canHostMonitorTransmitRowsV1";
 const MONITOR_AUTO_RECORD_KEY = "canHostMonitorAutoRecordV1";
+let monitorTxPersistQueue = Promise.resolve();
+let monitorTxPersistPending = null;
+let monitorTxPersistActive = false;
 const monitorUi = {
   expanded: new Set(),
   frozenGroups: [],
@@ -47,11 +50,11 @@ function defaultTxRow() {
   };
 }
 
-function restoreMonitorTxRows() {
+function restoreMonitorTxRows(saved = null) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(MONITOR_TX_KEY) || "[]");
+    const parsed = saved === null ? JSON.parse(localStorage.getItem(MONITOR_TX_KEY) || "[]") : saved;
     if (Array.isArray(parsed)) {
-      monitorUi.txRows = parsed.slice(0, 256).map(row => ({
+      monitorUi.txRows = parsed.filter(row => row && typeof row === "object").slice(0, 256).map(row => ({
         ...defaultTxRow(), ...row, uid: String(row.uid || monitorUid()), count: 0,
       }));
     }
@@ -60,11 +63,30 @@ function restoreMonitorTxRows() {
 }
 
 function persistMonitorTxRows() {
-  try {
-    const rows = monitorUi.txRows.map(({ uid, name, id, extended, data, cycle_ms }) =>
-      ({ uid, name, id, extended, data, cycle_ms }));
-    localStorage.setItem(MONITOR_TX_KEY, JSON.stringify(rows));
-  } catch { /* 本次会话仍可使用 */ }
+  const rows = monitorUi.txRows.map(({ uid, name, id, extended, data, cycle_ms }) =>
+    ({ uid, name, id, extended, data, cycle_ms }));
+  try { localStorage.setItem(MONITOR_TX_KEY, JSON.stringify(rows)); } catch { /* 后端设置仍会保存 */ }
+  if (!state.api?.set_monitor_tx_rows) return Promise.resolve();
+  monitorTxPersistPending = rows;
+  if (monitorTxPersistActive) return monitorTxPersistQueue;
+  monitorTxPersistActive = true;
+  monitorTxPersistQueue = (async () => {
+    let lastError = null;
+    try {
+      while (monitorTxPersistPending) {
+        const next = monitorTxPersistPending;
+        monitorTxPersistPending = null;
+        try {
+          const result = await state.api.set_monitor_tx_rows(next);
+          if (!result?.ok) throw new Error(result?.error || "无法保存发送项");
+          lastError = null;
+        } catch (error) { lastError = error; }
+      }
+    } finally { monitorTxPersistActive = false; }
+    if (lastError) throw lastError;
+  })();
+  monitorTxPersistQueue.catch(error => toast(`发送项保存失败：${error}`, true));
+  return monitorTxPersistQueue;
 }
 
 function bindMonitorControls() {
@@ -123,6 +145,7 @@ function bindMonitorControls() {
     renderFrames();
   });
   $("#addTxRow")?.addEventListener("click", () => {
+    if (monitorUi.txRows.length >= 256) return toast("发送项最多保留 256 条", true);
     monitorUi.txRows.push(defaultTxRow()); persistMonitorTxRows(); renderMonitorTransmitRows();
   });
   $("#monitorTxRows")?.addEventListener("input", updateMonitorTxInput);
@@ -344,11 +367,11 @@ function renderMonitorTransmitRows() {
     try { dlc = parseMonitorData(row.data).length; } catch { /* invalid shown after edit */ }
     return `<tr data-tx-id="${escapeHtml(row.uid)}" class="${active ? "sending" : ""} ${error ? "send-error" : ""}" title="${escapeHtml(error || "")}">`
       + `<td class="tx-enable"><input type="checkbox" data-action="periodic" ${active ? "checked" : ""} ${writable ? "" : "disabled"} aria-label="周期发送 ${escapeHtml(row.name)}"></td>`
-      + `<td><input data-field="name" value="${escapeHtml(row.name)}" ${active ? "disabled" : ""} aria-label="发送项名称"></td>`
-      + `<td><input data-field="id" value="${escapeHtml(row.id)}" ${active ? "disabled" : ""} aria-label="CAN ID"></td>`
+      + `<td><input data-field="name" maxlength="80" value="${escapeHtml(row.name)}" ${active ? "disabled" : ""} aria-label="发送项名称"></td>`
+      + `<td><input data-field="id" maxlength="32" value="${escapeHtml(row.id)}" ${active ? "disabled" : ""} aria-label="CAN ID"></td>`
       + `<td><select data-field="extended" ${active ? "disabled" : ""} aria-label="帧类型"><option value="false" ${row.extended ? "" : "selected"}>标准</option><option value="true" ${row.extended ? "selected" : ""}>扩展</option></select></td>`
       + `<td class="tx-dlc">${dlc}</td>`
-      + `<td><input data-field="data" value="${escapeHtml(row.data)}" ${active ? "disabled" : ""} placeholder="00 00 00 00" aria-label="十六进制数据"></td>`
+      + `<td><input data-field="data" maxlength="64" value="${escapeHtml(row.data)}" ${active ? "disabled" : ""} placeholder="00 00 00 00" aria-label="十六进制数据"></td>`
       + `<td><input data-field="cycle_ms" type="number" min="20" max="60000" value="${Number(row.cycle_ms || 200)}" ${active ? "disabled" : ""} aria-label="周期毫秒"></td>`
       + `<td class="tx-count">${Number(row.count || 0).toLocaleString()}</td>`
       + `<td><div class="tx-row-actions"><button type="button" data-action="send" ${writable || active ? "" : "disabled"}>发送一次</button><button type="button" class="remove" data-action="remove">移除</button></div></td></tr>`;

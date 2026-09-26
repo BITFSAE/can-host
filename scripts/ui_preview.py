@@ -49,6 +49,7 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
     event => window.__previewErrors.push("rejection: " + String(event.reason)));
   const variant = new URLSearchParams(location.search).get("mock") || "live";
   let data = null;
+  const workbench = { connection: null, monitor_tx_rows: null };
   const clone = value => JSON.parse(JSON.stringify(value));
   async function load() {
     if (!data) data = await (await fetch(`mock-${variant}.json`)).json();
@@ -57,6 +58,9 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
   const ok = async () => ({ ok: true });
   const base = {
     bootstrap: async () => clone((await load()).bootstrap),
+    workbench_preferences: async () => clone(workbench),
+    set_connection_preferences: async value => { workbench.connection = clone(value); return { ok: true }; },
+    set_monitor_tx_rows: async value => { workbench.monitor_tx_rows = clone(value); return { ok: true }; },
     refresh_pcan_channels: async () => clone((await load()).bootstrap.pcan_scan),
     get_snapshot: async () => clone((await load()).snapshot),
     get_canb_bms_snapshot: async () => clone((await load()).canb_bms),

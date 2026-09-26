@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -35,6 +36,8 @@ from .updater import _read_settings, _write_settings, settings_path
 
 WEB_DIR = Path(__file__).parent / "web"
 THEME_PREFERENCE_KEY = "theme_mode"
+CONNECTION_PREFERENCE_KEY = "connection_preferences"
+MONITOR_TX_ROWS_KEY = "monitor_tx_rows"
 THEME_MODES = {"light", "dark"}
 LIGHT_WINDOW_BACKGROUND = "#E9EDEF"
 DARK_WINDOW_BACKGROUND = "#0D0E0F"
@@ -156,6 +159,53 @@ class Api:
         except (OSError, ValueError, TypeError) as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "mode": value}
+
+    def workbench_preferences(self) -> dict[str, Any]:
+        """Read durable operator choices without exposing updater credentials."""
+        settings = _read_settings()
+        connection = settings.get(CONNECTION_PREFERENCE_KEY)
+        rows = settings.get(MONITOR_TX_ROWS_KEY)
+        return {
+            "connection": connection if isinstance(connection, dict) else None,
+            "monitor_tx_rows": rows if isinstance(rows, list) else None,
+        }
+
+    def set_connection_preferences(self, preferences: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(preferences, dict):
+            return {"ok": False, "error": "通道分配格式无效"}
+        channels = (preferences.get("can1Channel"), preferences.get("canbChannel"))
+        if any(not isinstance(channel, str) or len(channel) > 64 for channel in channels):
+            return {"ok": False, "error": "PCAN 通道名称无效"}
+        saved = {"version": 3, "can1Channel": channels[0], "canbChannel": channels[1]}
+        return self._save_workbench_preference(CONNECTION_PREFERENCE_KEY, saved)
+
+    def set_monitor_tx_rows(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if not isinstance(rows, list) or len(rows) > 256:
+            return {"ok": False, "error": "发送项列表无效或超过 256 项"}
+        fields = {"uid": 96, "name": 80, "id": 32, "data": 64}
+        saved = []
+        for row in rows:
+            if (not isinstance(row, dict)
+                    or any(not isinstance(row.get(key), str) or len(row[key]) > limit
+                           for key, limit in fields.items())
+                    or not isinstance(row.get("extended"), bool)
+                    or isinstance(row.get("cycle_ms"), bool)
+                    or not isinstance(row.get("cycle_ms"), (int, float))):
+                return {"ok": False, "error": "发送项格式无效"}
+            if not math.isfinite(row["cycle_ms"]):
+                return {"ok": False, "error": "发送项周期无效"}
+            saved.append({key: row[key] for key in (*fields, "extended", "cycle_ms")})
+        return self._save_workbench_preference(MONITOR_TX_ROWS_KEY, saved)
+
+    def _save_workbench_preference(self, key: str, value: Any) -> dict[str, Any]:
+        try:
+            with self._preference_lock:
+                payload = _read_settings()
+                payload[key] = value
+                _write_settings(payload)
+        except (OSError, ValueError, TypeError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
 
     def bootstrap(self) -> dict[str, Any]:
         pcan_scan = discover_pcan_channels()

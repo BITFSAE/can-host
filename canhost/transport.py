@@ -1345,7 +1345,7 @@ class CanService:
         # Stamp with host receive time so history, recordings, and replay all
         # use one wall clock instead of rendering uptime as 1970.
         return CanFrame(message.arbitration_id, bytes(message.data), message.is_extended_id,
-                        time.time(), "rx")
+                        time.time(), "rx" if getattr(message, "is_rx", True) else "tx")
 
     def _receive_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -1354,6 +1354,10 @@ class CanService:
                 if message is None:
                     continue
                 frame = self._frame_from_message(message)
+                if frame.direction == "tx":
+                    # PCAN may surface an echo even with receive_own_messages=False.
+                    # Every local send is already recorded at the send site.
+                    continue
                 self._ingest(frame)
                 if (not frame.is_extended_id and frame.data
                         and frame.data[0] in IVT_RESPONSE_MUXES):
