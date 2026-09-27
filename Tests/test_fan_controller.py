@@ -15,7 +15,7 @@ from canhost.app import Api
 from canhost.decoders import (CanFrame, build_fan_command, fan_ack_matches,
                               decode_fan_power_status, decode_fan_calib_status,
                               build_bms_fan_command, decode_bms_fan_detail)
-from canhost.transport import CanService
+from canhost.transport import BATTERY_FAN_ACK_TIMEOUT_S, CanService
 from canhost.vehicle.protocol import VehicleProtocol
 from canhost.vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSession
 
@@ -921,12 +921,13 @@ class FanControllerToolTest(unittest.TestCase):
         snap["battery_fan"]["status"]["lease_remaining_s"] = 4
         self.assertIn("续发失败", session._renew_if_due(1, 20))
 
-    def test_battery_fan_ack_after_one_second_is_accepted(self) -> None:
+    def test_battery_fan_ack_after_two_seconds_is_accepted(self) -> None:
+        self.assertGreaterEqual(BATTERY_FAN_ACK_TIMEOUT_S, 2.5)
         service = CanService(protocol_kind="vehicle")
         service.connection.update({"connected": True, "mode": "pcan",
                                    "bus_profile": "canb", "bitrate": 500000})
         service.bus = MagicMock()
-        timer = threading.Timer(1.15, lambda: service._ingest(
+        timer = threading.Timer(2.15, lambda: service._ingest(
             CanFrame(0x5AC, bytes([3, 1, 0, 0, 0, 55, 1, 2]), False)))
         timer.start()
         try:
@@ -936,7 +937,7 @@ class FanControllerToolTest(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["sequence"], 1)
         finally:
-            timer.join(timeout=2.5)
+            timer.join(timeout=3.5)
             service.disconnect()
 
     def test_battery_fan_json_keeps_partial_samples_after_abort(self) -> None:

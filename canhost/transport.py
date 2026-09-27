@@ -31,7 +31,8 @@ from .vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSes
 
 BUS_EVIDENCE_WINDOW_S = 2.0
 BUS_EVIDENCE_STALE_S = 3.0
-BATTERY_FAN_ACK_TIMEOUT_S = 2.0
+# F405 最多保留应答 2s，另留 1s 给 CAN 仲裁和上位机接收调度。
+BATTERY_FAN_ACK_TIMEOUT_S = 3.0
 
 
 class CanService:

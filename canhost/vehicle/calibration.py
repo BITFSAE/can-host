@@ -1494,7 +1494,7 @@ class FanCalibrationSession:
 class BatteryFanCalibrationSession:
     """F405 battery-box fan sweep using PDM power with a nearby 0% baseline."""
 
-    DEFAULT_STEPS = [0, 5, 10, 15, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100]
+    DEFAULT_STEPS = [0, 5, 10, 15, 20, 25, 30, 40, 50, 55, 60, 70, 80, 90, 100]
     BASELINE_INTERVAL = 4
     # 步骤采样不足或波动过大时固定延长一轮的窗口；采样期间续发当前
     # 目标，保留固件 15s 硬失联租约，避免较长保持时间耗尽租约。
