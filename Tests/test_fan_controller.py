@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -838,6 +839,105 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(exported["baseline_raw_samples"][0]["phase"], "baseline_settle")
         self.assertEqual(exported["raw_samples"][12]["phase"], "step_measure")
         self.assertEqual(exported["raw_samples"][12]["baseline_id"], 1)
+
+    def test_battery_fan_lost_ack_uses_new_firmware_state(self) -> None:
+        snap = {
+            "connection": {"connected": True, "mode": "pcan",
+                           "bus_profile": "canb", "bitrate": 500000},
+            "pack": {"age": 0.1, "state": 5, "temperature_complete": True},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "voltage_v": 24.0,
+                            "current_a": 3.0, "power_w": 72.0}},
+            "battery_fan": {"status_age": 0.1, "calibration_age": 0.1,
+                            "status_generation": 4, "calibration_generation": 7,
+                            "calibration": {"calib_state": 0, "step": 0,
+                                            "target_duty_pct": 0,
+                                            "chroma_budget_w": 35, "hv_budget_w": 70},
+                            "status": {"power_source": 2, "protocol_version": 1,
+                                       "lease_remaining_s": 0,
+                                       "flags": {"hardware_ready": True,
+                                                 "stall_confirmed": False,
+                                                 "calibration_active": False}}},
+        }
+
+        def send(_name, values, _acknowledged):
+            battery = snap["battery_fan"]
+            battery["status_generation"] += 1
+            battery["calibration_generation"] += 1
+            battery["status"]["lease_remaining_s"] = 15 if values["action"] != 3 else 0
+            battery["status"]["flags"]["calibration_active"] = values["action"] != 3
+            battery["calibration"]["calib_state"] = 3 if values["action"] == 3 else 1
+            battery["calibration"]["step"] = values["step"]
+            battery["calibration"]["target_duty_pct"] = values["duty_pct"]
+            return {"ok": False, "ack_timeout": True, "error": "0x5AC 未收到"}
+
+        session = BatteryFanCalibrationSession(send, lambda: snap)
+        session.status = "running"
+        session.run_params = {"max_current_a": 18.0}
+        session._expected_pack_state = 5
+        session._expected_power_source = 2
+        started = session._send(1, 0, 0)
+        self.assertTrue(started["ok"])
+        self.assertTrue(started["status_confirmed"])
+        self.assertTrue(started["ack_timeout"])
+
+        snap["battery_fan"]["status"]["lease_remaining_s"] = 10
+        renewed = session._send(2, 0, 0)
+        self.assertFalse(renewed["ok"])
+        self.assertTrue(renewed["ack_timeout"])
+        session._last_command_monotonic = time.monotonic() - 6.0
+        self.assertIsNone(session._renew_if_due(0, 0))
+        self.assertLess(session._last_command_monotonic, time.monotonic() - 3.0)
+
+        stopped = session._send(3, 0, 0)
+        self.assertTrue(stopped["ok"])
+        self.assertTrue(stopped["status_confirmed"])
+
+    def test_battery_fan_missing_ack_does_not_hide_rejection_or_old_lease(self) -> None:
+        session = BatteryFanCalibrationSession(
+            lambda *_: {"ok": False, "error": "BMS 拒绝：安全条件拒绝"}, lambda: {})
+        self.assertIn("安全条件拒绝", session._send(1, 0, 0)["error"])
+        session.send_fn = lambda *_: {"ok": False, "ack_timeout": True, "error": "0x5AC 未收到"}
+        with patch.object(session, "_wait_for_active", return_value="未收到新状态"):
+            self.assertIn("未收到新状态", session._send(1, 0, 0)["error"])
+
+        snap = {"battery_fan": {
+            "status_generation": 4, "calibration_generation": 7,
+            "status_age": 0.1, "calibration_age": 0.1,
+            "status": {"flags": {"calibration_active": True},
+                       "lease_remaining_s": 10},
+            "calibration": {"calib_state": 1, "step": 1,
+                            "target_duty_pct": 20},
+        }}
+        session = BatteryFanCalibrationSession(
+            lambda *_: {"ok": False, "ack_timeout": True, "error": "0x5AC 未收到"},
+            lambda: snap)
+        session._safety_error = lambda *_args, **_kwargs: None
+        with patch.object(session, "_wait_for_active") as verify:
+            result = session._send(2, 1, 20)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["ack_timeout"])
+        verify.assert_not_called()
+        session._last_command_monotonic = time.monotonic() - 6.0
+        snap["battery_fan"]["status"]["lease_remaining_s"] = 4
+        self.assertIn("续发失败", session._renew_if_due(1, 20))
+
+    def test_battery_fan_ack_after_one_second_is_accepted(self) -> None:
+        service = CanService(protocol_kind="vehicle")
+        service.connection.update({"connected": True, "mode": "pcan",
+                                   "bus_profile": "canb", "bitrate": 500000})
+        service.bus = MagicMock()
+        timer = threading.Timer(1.15, lambda: service._ingest(
+            CanFrame(0x5AC, bytes([3, 1, 0, 0, 0, 55, 1, 2]), False)))
+        timer.start()
+        try:
+            result = service.send_battery_fan_command(
+                "battery_fan_calib", {"action": 1, "step": 0,
+                                      "duty_pct": 0, "lease_s": 15}, True)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["sequence"], 1)
+        finally:
+            timer.join(timeout=2.5)
+            service.disconnect()
 
     def test_battery_fan_json_keeps_partial_samples_after_abort(self) -> None:
         session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})

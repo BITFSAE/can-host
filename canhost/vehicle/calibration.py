@@ -1775,10 +1775,40 @@ class BatteryFanCalibrationSession:
         return result
 
     def _send(self, action: int, step: int, duty: int, lease: int = 15) -> dict[str, Any]:
+        before = self.snapshot_fn().get("battery_fan", {})
+        try:
+            status_generation = int(before.get("status_generation", 0))
+            calibration_generation = int(before.get("calibration_generation", 0))
+        except (TypeError, ValueError, OverflowError):
+            status_generation, calibration_generation = 0, 0
+        previous_calibration = before.get("calibration", {})
+        same_target = (action == 2
+                       and previous_calibration.get("calib_state") == 1
+                       and previous_calibration.get("step") == step
+                       and previous_calibration.get("target_duty_pct") == duty)
         result = self.send_fn("battery_fan_calib", {
             "action": action, "step": step, "duty_pct": duty,
             "lease_s": 0 if action == 3 else lease,
         }, True)
+        if not result.get("ok") and result.get("ack_timeout"):
+            if action in (1, 2):
+                if same_target:
+                    # A periodic status frame cannot prove that an identical
+                    # heartbeat reached F405. Retry soon while its lease holds.
+                    return result
+                error = self._wait_for_active(
+                    step, duty, after_status_generation=status_generation,
+                    after_calibration_generation=calibration_generation)
+            else:
+                error = self._wait_for_completed(
+                    after_status_generation=status_generation,
+                    after_calibration_generation=calibration_generation,
+                    allow_safe_terminal=True)
+            if error is None:
+                result = {"ok": True, "ack_timeout": True, "status_confirmed": True,
+                          "message": "0x5AC 应答缺失，已由新 0x5AA/0x5AD 确认"}
+            else:
+                return {**result, "error": f"{result.get('error', '0x5AC 应答缺失')}；状态核对：{error}"}
         if result.get("ok") and action in (1, 2):
             self._last_command_monotonic = time.monotonic()
         return result
@@ -1788,6 +1818,19 @@ class BatteryFanCalibrationSession:
             return None
         result = self._send(2, step, duty)
         if not result.get("ok"):
+            if result.get("ack_timeout"):
+                snap = self.snapshot_fn()
+                battery = snap.get("battery_fan", {})
+                status = battery.get("status", {})
+                calibration = battery.get("calibration", {})
+                lease = status.get("lease_remaining_s")
+                if (self._safety_error(snap, float(self.run_params.get("max_current_a", 18.0)), True) is None
+                        and calibration.get("step") == step
+                        and calibration.get("target_duty_pct") == duty
+                        and isinstance(lease, (int, float)) and math.isfinite(lease)
+                        and lease > self.LEASE_HEARTBEAT_S):
+                    self._last_command_monotonic = time.monotonic() - self.LEASE_HEARTBEAT_S + 1.0
+                    return None
             return f"标定租约续发失败：{result.get('error', '未收到成功应答')}"
         return None
 

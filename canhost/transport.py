@@ -31,6 +31,7 @@ from .vehicle.calibration import FanCalibrationSession, BatteryFanCalibrationSes
 
 BUS_EVIDENCE_WINDOW_S = 2.0
 BUS_EVIDENCE_STALE_S = 3.0
+BATTERY_FAN_ACK_TIMEOUT_S = 2.0
 
 
 class CanService:
@@ -570,7 +571,7 @@ class CanService:
                                       is_extended_id=False, is_fd=False), timeout=0.2)
             with self.lock:
                 self._accept_frame_locked(frame)
-            deadline = time.monotonic() + 1.0
+            deadline = time.monotonic() + BATTERY_FAN_ACK_TIMEOUT_S
             ack = None
             while time.monotonic() < deadline:
                 with self.lock:
@@ -580,8 +581,9 @@ class CanService:
                     break
                 time.sleep(0.01)
             if ack is None:
-                return {"ok": False, "sequence": sequence,
-                        "error": "BMS 电池箱风扇在 1.0s 内没有应答；请确认 F405 已上电且 CANB 位率正确"}
+                return {"ok": False, "sequence": sequence, "ack_timeout": True,
+                        "error": (f"BMS 电池箱风扇在 {BATTERY_FAN_ACK_TIMEOUT_S:.1f}s 内未收到 0x5AC 应答；"
+                                  "检查 CANB 应答帧")}
             if not ack.get("accepted"):
                 return {"ok": False, "error": f"BMS 拒绝：{ack.get('result_name')}", "ack": ack}
             with self.lock:
