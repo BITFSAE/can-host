@@ -1496,9 +1496,10 @@ class BatteryFanCalibrationSession:
 
     DEFAULT_STEPS = [0, 5, 10, 15, 20, 30, 40, 50, 55, 60, 70, 80, 90, 100]
     BASELINE_INTERVAL = 4
-    # 步骤采样不足或波动过大时固定延长一轮的窗口；hold_s=10 时全程仍为
-    # 2+8+2=12s，加上命令确认也在 15s 租约之内。
+    # 步骤采样不足或波动过大时固定延长一轮的窗口；采样期间续发当前
+    # 目标，保留固件 15s 硬失联租约，避免较长保持时间耗尽租约。
     RETRY_SAMPLE_S = 2.0
+    LEASE_HEARTBEAT_S = 5.0
     LOW_VOLTAGE_MAX_CURRENT_A = 8.0
 
     def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
@@ -1526,6 +1527,7 @@ class BatteryFanCalibrationSession:
         self._stop_event = threading.Event()
         self._stop_lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        self._last_command_monotonic = 0.0
 
     @staticmethod
     def _max_safe_duty(records: list[dict[str, Any]], budget_w: float) -> int | None:
@@ -1701,6 +1703,9 @@ class BatteryFanCalibrationSession:
                                 f"（期望步骤{expected_step}/{expected_duty}%，"
                                 f"当前步骤{calibration.get('step')}/"
                                 f"{calibration.get('target_duty_pct')}%）")
+            error = self._renew_if_due(expected_step, expected_duty)
+            if error:
+                return result, error
             bus = snap["pdm"]["bus"]
             fan = snap["battery_fan"]["status"]
             result.append({"v": float(bus.get("voltage_v") or 0),
@@ -1720,10 +1725,21 @@ class BatteryFanCalibrationSession:
         return result
 
     def _send(self, action: int, step: int, duty: int, lease: int = 15) -> dict[str, Any]:
-        return self.send_fn("battery_fan_calib", {
+        result = self.send_fn("battery_fan_calib", {
             "action": action, "step": step, "duty_pct": duty,
             "lease_s": 0 if action == 3 else lease,
         }, True)
+        if result.get("ok") and action in (1, 2):
+            self._last_command_monotonic = time.monotonic()
+        return result
+
+    def _renew_if_due(self, step: int, duty: int) -> str | None:
+        if time.monotonic() - self._last_command_monotonic < self.LEASE_HEARTBEAT_S:
+            return None
+        result = self._send(2, step, duty)
+        if not result.get("ok"):
+            return f"标定租约续发失败：{result.get('error', '未收到成功应答')}"
+        return None
 
     def _generations(self) -> tuple[int, int]:
         battery = self.snapshot_fn().get("battery_fan", {})
@@ -1736,7 +1752,7 @@ class BatteryFanCalibrationSession:
 
     def _wait_for_active(self, step: int, duty: int, *, after_status_generation: int,
                          after_calibration_generation: int,
-                         timeout_s: float = 1.2) -> str | None:
+                         timeout_s: float = 2.0) -> str | None:
         """Confirm 0x5AA/0x5AD reflect the just-acknowledged calibration target."""
         deadline = time.monotonic() + timeout_s
         last_state = "等待0x5AA/0x5AD"
@@ -1783,7 +1799,7 @@ class BatteryFanCalibrationSession:
 
     def _wait_for_completed(self, *, after_status_generation: int,
                             after_calibration_generation: int,
-                            timeout_s: float = 1.2,
+                            timeout_s: float = 2.0,
                             allow_safe_terminal: bool = False) -> str | None:
         """Require new 0x5AA/0x5AD frames proving STOP reached a safe terminal state."""
         deadline = time.monotonic() + timeout_s
@@ -1820,9 +1836,10 @@ class BatteryFanCalibrationSession:
         return f"F405未在{timeout_s:.1f}s内用新状态帧确认停止完成（{last_state}）"
 
     def _measure_baseline(self, step: int, max_current_a: float, start: bool) -> tuple[dict[str, float] | None, str | None]:
-        if not self._send(1 if start else 2, step, 0).get("ok"):
-            return None, "0%基线命令失败"
         status_generation, calibration_generation = self._generations()
+        sent = self._send(1 if start else 2, step, 0)
+        if not sent.get("ok"):
+            return None, f"0%基线命令失败：{sent.get('error', '未收到成功应答')}"
         active_error = self._wait_for_active(
             step, 0, after_status_generation=status_generation,
             after_calibration_generation=calibration_generation)
@@ -1879,12 +1896,12 @@ class BatteryFanCalibrationSession:
                 and before_calibration.get("calib_state") == 2
                 and before_calibration.get("target_duty_pct") == 0
             )
+            status_generation, calibration_generation = self._generations()
             try:
                 stop_result = self._send(3, self.current_step, 0, 0)
             except Exception as exc:
                 stop_result = {"ok": False, "error": str(exc)}
             if stop_result.get("ok") and not already_aborted:
-                status_generation, calibration_generation = self._generations()
                 confirm_error = self._wait_for_completed(
                     after_status_generation=status_generation,
                     after_calibration_generation=calibration_generation,
@@ -1912,10 +1929,11 @@ class BatteryFanCalibrationSession:
                     if error or baseline is None:
                         self._finish_abort(error or f"步骤{index}前重新测量基线失败")
                         return
-                if not self._send(2, index, int(duty)).get("ok"):
-                    self._finish_abort(f"步骤{index}命令失败")
-                    return
                 status_generation, calibration_generation = self._generations()
+                sent = self._send(2, index, int(duty))
+                if not sent.get("ok"):
+                    self._finish_abort(f"步骤{index}命令失败：{sent.get('error', '未收到成功应答')}")
+                    return
                 active_error = self._wait_for_active(
                     index, int(duty), after_status_generation=status_generation,
                     after_calibration_generation=calibration_generation)
@@ -1926,8 +1944,11 @@ class BatteryFanCalibrationSession:
                 if error:
                     self._finish_abort(error)
                     return
+                # 满占空比若仍未起转，F405 最多用 5s 确认；最短保持时间
+                # 不能抢先 STOP 并把这个硬中止误记成扫描完成。
+                effective_hold_s = max(hold_s, 7.0) if duty == 100 else hold_s
                 samples, error = self._samples(
-                    max(1.0, hold_s - 2.0), max_current_a, index, int(duty))
+                    max(1.0, effective_hold_s - 2.0), max_current_a, index, int(duty))
                 summary = self._median(samples)
                 if not error and (summary is None
                                   or summary["std_i"] > CALIB_QUALITY_MAX_STD_CURRENT_A
@@ -1986,13 +2007,13 @@ class BatteryFanCalibrationSession:
                 with self.lock:
                     if self.status != "running" or self._stop_event.is_set():
                         return
+                status_generation, calibration_generation = self._generations()
                 stop = self._send(3, len(steps), 0, 0)
                 if not stop.get("ok"):
                     with self.lock:
                         self.status = "aborted"
                         self.abort_reason = "扫描完成但停止命令失败；记录仍可导出，确认停止后可手动填入上限提交"
                     return
-                status_generation, calibration_generation = self._generations()
                 confirm_error = self._wait_for_completed(
                     after_status_generation=status_generation,
                     after_calibration_generation=calibration_generation)

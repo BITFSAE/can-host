@@ -723,6 +723,104 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(always_short.status, "aborted")
         self.assertIn("样本不足", always_short.abort_reason)
 
+    def test_battery_fan_command_confirmation_uses_pre_send_generations(self) -> None:
+        """应答前已到达的状态帧也属于本次命令，不能再等不存在的下一代。"""
+        generations = {"status_generation": 4, "calibration_generation": 7}
+        sent = []
+
+        def snapshot():
+            return {"battery_fan": generations}
+
+        def send(name, values, acknowledged):
+            sent.append((name, values["action"]))
+            generations["status_generation"] += 1
+            generations["calibration_generation"] += 1
+            return {"ok": True}
+
+        session = BatteryFanCalibrationSession(send, snapshot)
+        session.status = "running"
+        observed = []
+        session._wait_for_active = lambda step, duty, **kwargs: observed.append(
+            ("active", step, duty, kwargs["after_status_generation"],
+             kwargs["after_calibration_generation"]))
+        session._wait_for_completed = lambda **kwargs: observed.append(
+            ("completed", kwargs["after_status_generation"],
+             kwargs["after_calibration_generation"]))
+        session._samples = lambda seconds, current, step, duty: (
+            [{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0 if duty == 0 else 1500.0}] * 12,
+            None)
+        session._run(steps=[20], hold_s=3.0, max_current_a=18.0)
+        self.assertEqual(session.status, "completed")
+        self.assertEqual(sent, [("battery_fan_calib", 1),
+                                ("battery_fan_calib", 2),
+                                ("battery_fan_calib", 3)])
+        self.assertEqual(observed, [("active", 0, 0, 4, 7),
+                                    ("active", 1, 20, 5, 8),
+                                    ("completed", 6, 9)])
+
+    def test_battery_fan_baseline_reports_firmware_rejection(self) -> None:
+        session = BatteryFanCalibrationSession(
+            lambda *_: {"ok": False, "error": "BMS 拒绝：安全条件拒绝"},
+            lambda: {"battery_fan": {"status_generation": 1,
+                                     "calibration_generation": 1}})
+        baseline, error = session._measure_baseline(0, 8.0, True)
+        self.assertIsNone(baseline)
+        self.assertIn("安全条件拒绝", error)
+
+    def test_battery_fan_sampling_renews_15_second_lease(self) -> None:
+        sent = []
+
+        def send(name, values, acknowledged):
+            sent.append(dict(values))
+            return {"ok": len(sent) < 3, "error": "BMS 拒绝：安全条件拒绝"}
+
+        session = BatteryFanCalibrationSession(send, lambda: {})
+        with patch("canhost.vehicle.calibration.time.monotonic", return_value=100.0):
+            self.assertTrue(session._send(1, 0, 0)["ok"])
+        with patch("canhost.vehicle.calibration.time.monotonic", return_value=104.9):
+            self.assertIsNone(session._renew_if_due(2, 20))
+        self.assertEqual(len(sent), 1)
+        with patch("canhost.vehicle.calibration.time.monotonic", return_value=105.0):
+            self.assertIsNone(session._renew_if_due(2, 20))
+        self.assertEqual(sent[1]["action"], 2)
+        self.assertEqual((sent[1]["step"], sent[1]["duty_pct"], sent[1]["lease_s"]),
+                         (2, 20, 15))
+        with patch("canhost.vehicle.calibration.time.monotonic", return_value=110.0):
+            error = session._renew_if_due(2, 20)
+        self.assertIn("安全条件拒绝", error)
+
+    def test_battery_fan_external_target_is_not_overwritten_by_renewal(self) -> None:
+        sent = []
+        session = BatteryFanCalibrationSession(
+            lambda name, values, acknowledged: sent.append(dict(values)) or {"ok": True},
+            lambda: {"battery_fan": {"calibration": {
+                "step": 9, "target_duty_pct": 90}}})
+        session._safety_error = lambda *args, **kwargs: None
+        session._last_command_monotonic = 0.0
+        samples, error = session._samples(0.1, 18.0, 2, 20)
+        self.assertEqual(samples, [])
+        self.assertIn("外部改写", error)
+        self.assertEqual(sent, [])
+
+    def test_battery_fan_full_duty_waits_for_startup_verdict(self) -> None:
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        session.status = "running"
+        session._measure_baseline = lambda *args: (
+            {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0,
+             "std_i": 0.0, "std_p": 0.0, "baseline_id": 1, "quality_ok": True}, None)
+        session._wait_for_active = lambda *args, **kwargs: None
+        session._wait_for_completed = lambda **kwargs: None
+        windows = []
+
+        def samples(seconds, current, step, duty):
+            windows.append(seconds)
+            return ([{"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 1500.0}] * 12, None)
+
+        session._samples = samples
+        session._run([100], hold_s=3.0, max_current_a=18.0)
+        self.assertEqual(session.status, "completed")
+        self.assertEqual(windows, [2.0, 5.0])
+
     def test_battery_fan_power_variation_is_warning_not_abort(self) -> None:
         session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
         baseline = {"v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0,
