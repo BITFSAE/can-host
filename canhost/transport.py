@@ -778,9 +778,14 @@ class CanService:
             return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
         return self.battery_fan_calib_session.abort()
 
-    def export_battery_fan_calibration(self) -> dict[str, Any]:
+    def export_battery_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
         if not self.battery_fan_calib_session:
             return {"ok": False, "error": "当前连接不支持电池箱风扇标定"}
+        if str(format_type).lower() == "json":
+            return {"ok": True, "data": self.battery_fan_calib_session.export_json(),
+                    "format": "json"}
+        if str(format_type).lower() != "csv":
+            return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 或 JSON 导出"}
         return {"ok": True, "data": self.battery_fan_calib_session.export_csv(), "format": "csv"}
 
     def quick_snapshot(self) -> dict[str, Any]:

@@ -1501,6 +1501,11 @@ class BatteryFanCalibrationSession:
     RETRY_SAMPLE_S = 2.0
     LEASE_HEARTBEAT_S = 5.0
     LOW_VOLTAGE_MAX_CURRENT_A = 8.0
+    PACK_MAX_AGE_S = 2.0
+    PDM_MAX_AGE_S = 1.5
+    STATUS_MAX_AGE_S = 1.5
+    CALIBRATION_MAX_AGE_S = 3.0
+    MAX_SAMPLE_PAUSE_S = 5.0
 
     def __init__(self, send_fn: Callable[[str, dict[str, Any], bool], dict[str, Any]],
                  snapshot_fn: Callable[[], dict[str, Any]]) -> None:
@@ -1515,6 +1520,8 @@ class BatteryFanCalibrationSession:
         self.baseline_history: list[dict[str, float]] = []
         self.baseline_id = 0
         self.records: list[dict[str, Any]] = []
+        self.raw_samples: list[dict[str, Any]] = []
+        self.baseline_raw_samples: list[dict[str, Any]] = []
         self.quality_warnings: list[dict[str, Any]] = []
         # None means that the sweep did not produce a safe, rotating point for
         # that budget.  Never turn absence of evidence into a 5% recommendation.
@@ -1567,27 +1574,33 @@ class BatteryFanCalibrationSession:
             return "必须连接真实PCAN上的CANB"
         if conn.get("bus_profile") != "canb" or conn.get("bitrate") != 500000:
             return "电池箱风扇标定只允许使用整车CANB 500 kbit/s"
-        if not _fresh_age(pack.get("age"), 1.5) or pack.get("state") not in (3, 5):
+        if not _fresh_age(pack.get("age"), self.PACK_MAX_AGE_S):
+            return "缺少新鲜 CANB 0x4B0 BMS 状态；检查总线上的周期帧"
+        if pack.get("state") not in (3, 5):
             return "BMS必须处于新鲜的待机或高压接通状态"
         fault = snap.get("fault", {})
         if pack.get("state") == 3:
-            if not _fresh_age(fault.get("age"), 1.5):
+            if not _fresh_age(fault.get("age"), self.PACK_MAX_AGE_S):
                 return "缺少新鲜 CANB BMS 充电状态；等待故障状态帧"
             if fault.get("flags", {}).get("charge_mode"):
                 return "BMS正在充电，待机低压状态下禁止标定"
         if not pack.get("temperature_complete", False):
             return "BMS温度采样不完整，禁止在缺少完整温度保护时标定"
-        if pdm.get("offline", True) or not _fresh_age(pdm.get("age"), 1.0):
+        if pdm.get("offline", True) or not _fresh_age(pdm.get("age"), self.PDM_MAX_AGE_S):
             return "PDM总线遥测离线或超时"
         pdm_values = (pdm.get("voltage_v"), pdm.get("current_a"), pdm.get("power_w"))
         if not all(isinstance(value, (int, float)) and math.isfinite(value)
                    for value in pdm_values):
             return "PDM总线电压、电流或功率无效"
-        if not _fresh_age(battery.get("status_age"), 1.0):
+        if not _fresh_age(battery.get("status_age"), self.STATUS_MAX_AGE_S):
             return "缺少新鲜 CANB 0x5AA 风扇状态；检查 F405 周期上报"
         calibration = battery.get("calibration", {})
-        if not _fresh_age(battery.get("calibration_age"), 1.0):
-            return "缺少新鲜 CANB 0x5AD 标定状态；检查 F405 周期上报"
+        calibration_age = battery.get("calibration_age")
+        if not _fresh_age(calibration_age, self.CALIBRATION_MAX_AGE_S):
+            if isinstance(calibration_age, (int, float)) and math.isfinite(calibration_age):
+                return (f"CANB 0x5AD 标定状态已断流 {calibration_age:.1f}s；"
+                        "检查 CAN 监视器中该帧的接收间隔")
+            return "尚未收到 CANB 0x5AD 标定状态；检查 F405 固件和 CANB 接线"
         if status.get("protocol_version") != 1:
             return "电池箱风扇协议版本不匹配（0x5AA必须为版本1）"
         if calibration.get("chroma_budget_w") != 35 or calibration.get("hv_budget_w") != 70:
@@ -1610,7 +1623,7 @@ class BatteryFanCalibrationSession:
         if require_calibration_active:
             calibration_age = battery.get("calibration_age")
             if (not flags.get("calibration_active")
-                    or not _fresh_age(calibration_age, 1.0)
+                    or not _fresh_age(calibration_age, self.CALIBRATION_MAX_AGE_S)
                     or calibration.get("calib_state") != 1
                     or not isinstance(status.get("lease_remaining_s"), (int, float))
                     or status.get("lease_remaining_s") <= 0):
@@ -1618,6 +1631,18 @@ class BatteryFanCalibrationSession:
         if float(pdm["current_a"]) > max_current_a:
             return f"总线电流超过{max_current_a:.1f}A保护值"
         return None
+
+    @staticmethod
+    def _sample_frames_fresh(snap: dict[str, Any]) -> bool:
+        """Pause measurements during short frame gaps instead of reusing old readings."""
+        pack = snap.get("pack", {})
+        battery = snap.get("battery_fan", {})
+        return (bool(_fresh_age(pack.get("age"), 1.5))
+                and (pack.get("state") != 3
+                     or _fresh_age(snap.get("fault", {}).get("age"), 1.5))
+                and _fresh_age(snap.get("pdm", {}).get("bus", {}).get("age"), 1.0)
+                and _fresh_age(battery.get("status_age"), 1.0)
+                and _fresh_age(battery.get("calibration_age"), 2.0))
 
     def start(self, steps: list[int] | None = None, hold_s: float = 5.0,
               max_current_a: float = 18.0) -> dict[str, Any]:
@@ -1659,7 +1684,7 @@ class BatteryFanCalibrationSession:
             return {"ok": False, "error": error}
         firmware_calib = snap.get("battery_fan", {}).get("calibration", {})
         firmware_calib_age = snap.get("battery_fan", {}).get("calibration_age")
-        if (_fresh_age(firmware_calib_age, 1.0)
+        if (_fresh_age(firmware_calib_age, self.CALIBRATION_MAX_AGE_S)
                 and firmware_calib.get("calib_state") == 1):
             return {"ok": False, "error": "F405 已有活动标定会话，请先安全中止后再开始"}
         with self.lock:
@@ -1673,6 +1698,8 @@ class BatteryFanCalibrationSession:
             self.baseline_history.clear()
             self.baseline_id = 0
             self.records.clear()
+            self.raw_samples.clear()
+            self.baseline_raw_samples.clear()
             self.quality_warnings.clear()
             self.suggested_caps = {"chroma_cap_pct": None, "hv_cap_pct": None}
             self.run_params = {"steps": steps, "hold_s": hold_s,
@@ -1689,6 +1716,7 @@ class BatteryFanCalibrationSession:
                  expected_step: int, expected_duty: int) -> tuple[list[dict[str, float]], str | None]:
         result: list[dict[str, float]] = []
         deadline = time.monotonic() + seconds
+        paused_s = 0.0
         while time.monotonic() < deadline:
             if self._stop_event.is_set():
                 return result, "用户停止"
@@ -1703,17 +1731,39 @@ class BatteryFanCalibrationSession:
                                 f"（期望步骤{expected_step}/{expected_duty}%，"
                                 f"当前步骤{calibration.get('step')}/"
                                 f"{calibration.get('target_duty_pct')}%）")
+            if not self._sample_frames_fresh(snap):
+                if paused_s >= self.MAX_SAMPLE_PAUSE_S:
+                    return result, "标定采样因周期帧间歇缺失暂停过久"
+                before_sleep = time.monotonic()
+                time.sleep(0.1)
+                pause = time.monotonic() - before_sleep
+                paused_s += pause
+                deadline += pause
+                continue
             error = self._renew_if_due(expected_step, expected_duty)
             if error:
                 return result, error
             bus = snap["pdm"]["bus"]
             fan = snap["battery_fan"]["status"]
-            result.append({"v": float(bus.get("voltage_v") or 0),
+            result.append({"t": round(time.time(), 3),
+                           "v": float(bus.get("voltage_v") or 0),
                            "i": float(bus.get("current_a") or 0),
                            "p": float(bus.get("power_w") or 0),
                            "rpm": float(fan.get("rpm") or 0)})
             time.sleep(0.1)
         return result, None
+
+    def _capture_samples(self, seconds: float, max_current_a: float,
+                         step: int, duty: int, baseline_id: int,
+                         phase: str, attempt: int) -> tuple[list[dict[str, float]], str | None]:
+        samples, error = self._samples(seconds, max_current_a, step, duty)
+        with self.lock:
+            target = self.baseline_raw_samples if phase.startswith("baseline") else self.raw_samples
+            target.extend({**sample, "step": step, "duty_pct": duty,
+                           "baseline_id": baseline_id, "phase": phase,
+                           "sample_attempt": attempt}
+                          for sample in samples)
+        return samples, error
 
     @staticmethod
     def _median(samples: list[dict[str, float]]) -> dict[str, float] | None:
@@ -1752,7 +1802,7 @@ class BatteryFanCalibrationSession:
 
     def _wait_for_active(self, step: int, duty: int, *, after_status_generation: int,
                          after_calibration_generation: int,
-                         timeout_s: float = 2.0) -> str | None:
+                         timeout_s: float = 3.0) -> str | None:
         """Confirm 0x5AA/0x5AD reflect the just-acknowledged calibration target."""
         deadline = time.monotonic() + timeout_s
         last_state = "等待0x5AA/0x5AD"
@@ -1775,8 +1825,8 @@ class BatteryFanCalibrationSession:
                 status_generation, calibration_generation = 0, 0
             if (status_generation > after_status_generation
                     and calibration_generation > after_calibration_generation
-                    and active and _fresh_age(battery.get("status_age"), 1.0)
-                    and _fresh_age(calib_age, 1.0)
+                    and active and _fresh_age(battery.get("status_age"), self.STATUS_MAX_AGE_S)
+                    and _fresh_age(calib_age, self.CALIBRATION_MAX_AGE_S)
                     and isinstance(status.get("lease_remaining_s"), (int, float))
                     and status.get("lease_remaining_s") > 0
                     and calibration.get("calib_state") == 1
@@ -1784,7 +1834,7 @@ class BatteryFanCalibrationSession:
                     and calibration.get("target_duty_pct") == duty):
                 return None
             if (calibration_generation > after_calibration_generation
-                    and _fresh_age(calib_age, 1.0)
+                    and _fresh_age(calib_age, self.CALIBRATION_MAX_AGE_S)
                     and calibration.get("calib_state") in {0, 2}):
                 return ("F405已拒绝或中止标定状态"
                         f"（{calibration.get('calib_state_name', calibration.get('calib_state'))}，"
@@ -1799,7 +1849,7 @@ class BatteryFanCalibrationSession:
 
     def _wait_for_completed(self, *, after_status_generation: int,
                             after_calibration_generation: int,
-                            timeout_s: float = 2.0,
+                            timeout_s: float = 3.0,
                             allow_safe_terminal: bool = False) -> str | None:
         """Require new 0x5AA/0x5AD frames proving STOP reached a safe terminal state."""
         deadline = time.monotonic() + timeout_s
@@ -1816,15 +1866,15 @@ class BatteryFanCalibrationSession:
             active = status.get("flags", {}).get("calibration_active", False)
             fresh_terminal = (status_generation > after_status_generation
                     and calibration_generation > after_calibration_generation
-                    and _fresh_age(battery.get("status_age"), 1.0)
-                    and _fresh_age(battery.get("calibration_age"), 1.0)
+                    and _fresh_age(battery.get("status_age"), self.STATUS_MAX_AGE_S)
+                    and _fresh_age(battery.get("calibration_age"), self.CALIBRATION_MAX_AGE_S)
                     and not active and calibration.get("target_duty_pct") == 0)
             calib_state = calibration.get("calib_state")
             if (fresh_terminal and (calib_state == 3
                                     or (allow_safe_terminal and calib_state in {0, 2}))):
                 return None
             if (calibration_generation > after_calibration_generation
-                    and _fresh_age(battery.get("calibration_age"), 1.0)
+                    and _fresh_age(battery.get("calibration_age"), self.CALIBRATION_MAX_AGE_S)
                     and calibration.get("calib_state") in {0, 2}):
                 return ("F405停止后未进入可提交的完成状态"
                         f"（{calibration.get('calib_state_name', calibration.get('calib_state'))}）")
@@ -1845,16 +1895,20 @@ class BatteryFanCalibrationSession:
             after_calibration_generation=calibration_generation)
         if active_error:
             return None, active_error
-        _, error = self._samples(2.0, max_current_a, step, 0)
+        next_baseline_id = self.baseline_id + 1
+        _, error = self._capture_samples(
+            2.0, max_current_a, step, 0, next_baseline_id, "baseline_settle", 0)
         if error:
             return None, error
-        samples, error = self._samples(2.0, max_current_a, step, 0)
+        samples, error = self._capture_samples(
+            2.0, max_current_a, step, 0, next_baseline_id, "baseline_measure", 1)
         summary = self._median(samples)
         if not error and (summary is None
                           or summary["std_i"] > CALIB_QUALITY_MAX_STD_CURRENT_A
                           or summary["std_p"] > CALIB_QUALITY_MAX_STD_POWER_W):
-            extra, extra_error = self._samples(
-                self.RETRY_SAMPLE_S, max_current_a, step, 0)
+            extra, extra_error = self._capture_samples(
+                self.RETRY_SAMPLE_S, max_current_a, step, 0,
+                next_baseline_id, "baseline_retry", 2)
             samples.extend(extra)
             summary = self._median(samples)
             error = error or extra_error
@@ -1892,7 +1946,7 @@ class BatteryFanCalibrationSession:
             before_stop = self.snapshot_fn().get("battery_fan", {})
             before_calibration = before_stop.get("calibration", {})
             already_aborted = (
-                _fresh_age(before_stop.get("calibration_age"), 1.0)
+                _fresh_age(before_stop.get("calibration_age"), self.CALIBRATION_MAX_AGE_S)
                 and before_calibration.get("calib_state") == 2
                 and before_calibration.get("target_duty_pct") == 0
             )
@@ -1940,23 +1994,27 @@ class BatteryFanCalibrationSession:
                 if active_error:
                     self._finish_abort(active_error)
                     return
-                settle, error = self._samples(2.0, max_current_a, index, int(duty))
+                settle, error = self._capture_samples(
+                    2.0, max_current_a, index, int(duty),
+                    int(baseline["baseline_id"]), "step_settle", 0)
                 if error:
                     self._finish_abort(error)
                     return
                 # 满占空比若仍未起转，F405 最多用 5s 确认；最短保持时间
                 # 不能抢先 STOP 并把这个硬中止误记成扫描完成。
                 effective_hold_s = max(hold_s, 7.0) if duty == 100 else hold_s
-                samples, error = self._samples(
-                    max(1.0, effective_hold_s - 2.0), max_current_a, index, int(duty))
+                samples, error = self._capture_samples(
+                    max(1.0, effective_hold_s - 2.0), max_current_a, index, int(duty),
+                    int(baseline["baseline_id"]), "step_measure", 1)
                 summary = self._median(samples)
                 if not error and (summary is None
                                   or summary["std_i"] > CALIB_QUALITY_MAX_STD_CURRENT_A
                                   or summary["std_p"] > CALIB_QUALITY_MAX_STD_POWER_W):
                     # 与整车风扇会话对齐：最小 hold 时采样窗口只有 1s，
                     # 样本数或波动卡在门槛上时延长一轮再判，不把瞬态当成稳态。
-                    extra, extra_error = self._samples(
-                        self.RETRY_SAMPLE_S, max_current_a, index, int(duty))
+                    extra, extra_error = self._capture_samples(
+                        self.RETRY_SAMPLE_S, max_current_a, index, int(duty),
+                        int(baseline["baseline_id"]), "step_retry", 2)
                     samples.extend(extra)
                     summary = self._median(samples)
                     error = error or extra_error
@@ -2080,7 +2138,9 @@ class BatteryFanCalibrationSession:
                     "baseline_history": list(self.baseline_history),
                     "quality_warnings": list(self.quality_warnings),
                     "export_available": bool(self.run_params) and self.status != "idle",
-                    "run_params": dict(self.run_params)}
+                    "run_params": dict(self.run_params),
+                    "raw_sample_count": len(self.raw_samples),
+                    "baseline_raw_sample_count": len(self.baseline_raw_samples)}
 
     def is_running(self) -> bool:
         with self.lock:
@@ -2103,3 +2163,22 @@ class BatteryFanCalibrationSession:
                                  "session_status": self.status,
                                  "abort_reason": self.abort_reason})
             return output.getvalue()
+
+    def export_json(self) -> str:
+        with self.lock:
+            data = {
+                "status": self.status,
+                "abort_reason": self.abort_reason,
+                "current_step": self.current_step,
+                "total_steps": self.total_steps,
+                "run_params": dict(self.run_params),
+                "baseline": dict(self.baseline),
+                "baseline_history": list(self.baseline_history),
+                "baseline_raw_samples": list(self.baseline_raw_samples),
+                "records": list(self.records),
+                "raw_samples": list(self.raw_samples),
+                "quality_warnings": list(self.quality_warnings),
+                "suggested_caps": dict(self.suggested_caps),
+                "exported_at": time.time(),
+            }
+            return json.dumps(data, ensure_ascii=False, indent=2)

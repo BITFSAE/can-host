@@ -760,8 +760,8 @@ class Api:
             return {"ok": False, "error": "窗口尚未就绪"}
         export_format = str(format_type).lower()
         if battery_fan:
-            if export_format != "csv":
-                return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 导出"}
+            if export_format not in {"csv", "json"}:
+                return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 或 JSON 导出"}
         elif export_format not in {"csv", "json"}:
             return {"ok": False, "error": "整车风扇标定仅支持 CSV 或 JSON 导出"}
 
@@ -783,7 +783,7 @@ class Api:
             if path.suffix.lower() != extension:
                 path = path.with_suffix(extension)
 
-            exported = (self._vehicle_service.export_battery_fan_calibration()
+            exported = (self._vehicle_service.export_battery_fan_calibration(export_format)
                         if battery_fan else
                         self._vehicle_service.export_fan_calibration(export_format))
             if not exported.get("ok"):
@@ -817,12 +817,12 @@ class Api:
     def stop_battery_fan_calibration(self) -> dict[str, Any]:
         return self._vehicle_service.stop_battery_fan_calibration()
 
-    def export_battery_fan_calibration(self) -> dict[str, Any]:
-        return self._vehicle_service.export_battery_fan_calibration()
+    def export_battery_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        return self._vehicle_service.export_battery_fan_calibration(format_type)
 
-    def choose_export_battery_fan_calibration(self) -> dict[str, Any]:
+    def choose_export_battery_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
         """Choose a destination and persist F405 fan calibration data."""
-        return self._choose_calibration_export("csv", battery_fan=True)
+        return self._choose_calibration_export(format_type, battery_fan=True)
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()

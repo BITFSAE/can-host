@@ -2,6 +2,10 @@
 
 let lastBatteryCalibSource = null;
 let pendingBatteryFanSave = null;
+const BATTERY_FAN_PACK_FRESH_S = 2.0;
+const BATTERY_FAN_PDM_FRESH_S = 1.5;
+const BATTERY_FAN_STATUS_FRESH_S = 1.5;
+const BATTERY_FAN_CALIB_FRESH_S = 3.0;
 
 function fanConnectionAvailable() {
   const connection = state.vehicleSnapshot?.connection;
@@ -181,15 +185,17 @@ function bindFanControls() {
     const res = await pywebview.api.stop_battery_fan_calibration();
     toast(res?.ok ? "已中止电池箱风扇标定" : `中止失败：${res?.error || "未知原因"}`, !res?.ok);
   });
-  $("#batteryFanExportButton")?.addEventListener("click", async () => {
+  const exportBatteryFan = async format => {
     try {
-      const res = await state.api.choose_export_battery_fan_calibration();
+      const res = await state.api.choose_export_battery_fan_calibration(format);
       if (res?.ok) toast(`标定记录已导出：${res.path}`);
       else if (!res?.cancelled) toast(res?.error || "标定记录导出失败", true);
     } catch (e) {
       toast(`导出失败：${e}`, true);
     }
-  });
+  };
+  $("#batteryFanExportButton")?.addEventListener("click", () => exportBatteryFan("csv"));
+  $("#batteryFanExportJsonButton")?.addEventListener("click", () => exportBatteryFan("json"));
   $("#batteryFanCalibButton")?.addEventListener("click", () => {
     const action = +$("#batteryFanCalibAction").value;
     const step = readFanNumber("#batteryFanStepInput", "步骤");
@@ -664,9 +670,9 @@ function renderFan() {
   const batteryStatus = batteryFan.status || {};
   const batteryCalib = batteryFan.calibration || {};
   const batteryKnown = hasDataAge(batteryFan.status_age) && Object.keys(batteryStatus).length > 0;
-  const batteryFresh = isFresh(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S);
+  const batteryFresh = isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S);
   text("#batteryFanFreshTag", batteryKnown
-    ? dataAgeText(batteryFan.status_age, SLOW_DATA_FRESH_MAX_S) : "等待数据");
+    ? dataAgeText(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S) : "等待 CANB 0x5AA");
   markStaleData("#batteryFanFreshTag", batteryKnown && !batteryFresh);
   // 一个读数一个单元：原先挤在一行说明里的值各自落到自己的单元上。
   const batteryCells = [
@@ -683,7 +689,7 @@ function renderFan() {
   ["#batteryFanModeValue", "#batteryFanSourceValue"].forEach(id =>
     markFanCellStale(id, batteryKnown && !batteryFresh));
   const batteryCalibKnown = hasDataAge(batteryFan.calibration_age) && Object.keys(batteryCalib).length > 0;
-  const batteryCalibFresh = isFresh(batteryFan.calibration_age, SLOW_DATA_FRESH_MAX_S);
+  const batteryCalibFresh = isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S);
   if (!available) pendingBatteryFanSave = null;
   if (pendingBatteryFanSave && batteryCalibFresh
       && Number(batteryFan.calibration_generation) > pendingBatteryFanSave.generation
@@ -696,7 +702,7 @@ function renderFan() {
   }
   text("#batteryFanCalibSourceTag", batteryFresh
     ? `供电 · ${batteryStatus.power_source_name || "未知"}`
-    : batteryKnown ? "供电状态已过期" : "等待数据");
+    : batteryKnown ? "供电状态已过期" : "等待 CANB 0x5AA");
   if (batteryCalibKnown && !state.dirty.batteryFanCaps) {
     if (document.activeElement !== $("#batteryFanChromaCapInput")) {
       $("#batteryFanChromaCapInput").value = batteryCalib.chroma_cap_pct;
@@ -708,11 +714,11 @@ function renderFan() {
   const saveNode = $("#batteryFanSaveState");
   if (saveNode) {
     saveNode.textContent = pendingBatteryFanSave
-      ? (!batteryCalibKnown ? "等待数据"
+      ? (!batteryCalibKnown ? "等待 CANB 0x5AD"
         : !batteryCalibFresh ? "已过期 · 等待 0x5AD"
         : Number(batteryFan.calibration_generation) > pendingBatteryFanSave.generation
           && batteryCalib.save_pending ? "等待 Flash 保存" : "等待新 0x5AD 核对")
-      : !batteryCalibKnown ? "等待数据"
+      : !batteryCalibKnown ? "等待 CANB 0x5AD"
       : !batteryCalibFresh ? "已过期"
       : batteryCalib.save_pending ? "等待 Flash 保存" : batteryCalib.calibrated ? "已保存" : "未保存";
     // 过期一档交给单元底色表达，这里只区分新鲜数据的三种结论。
@@ -743,24 +749,28 @@ function renderFan() {
   }
   const batteryAutoRunning = batterySession.status === "running";
   const batterySource = batteryStatus.power_source;
-  if (isFresh(batteryFan.status_age, 1.0) && (batterySource === 0 || batterySource === 2)
+  if (isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S) && (batterySource === 0 || batterySource === 2)
       && batterySource !== lastBatteryCalibSource && !batteryAutoRunning) {
     $("#batteryFanAutoCurrentInput").value = batterySource === 0 ? "8" : "18";
     lastBatteryCalibSource = batterySource;
   }
   const batteryMaxCurrent = Number($("#batteryFanAutoCurrentInput")?.value);
+  const batteryPdmFresh = !pdmBus.offline
+    && isFresh(pdmBus.age, BATTERY_FAN_PDM_FRESH_S) && pdmValuesValid;
+  const batteryPackFresh = isFresh(pack.age, BATTERY_FAN_PACK_FRESH_S);
   const batteryCurrentReady = Number.isFinite(batteryMaxCurrent)
     && (batterySource !== 0 || batteryMaxCurrent <= 8)
     && typeof pdmBus.current_a === "number" && Number.isFinite(pdmBus.current_a)
     && pdmBus.current_a <= batteryMaxCurrent;
   const batterySupplyReady = (pack.state === 3 && batterySource === 0)
     || (pack.state === 5 && batterySource === 2);
-  const standbyChargeKnown = pack.state !== 3 || isFresh(snapshot.fault?.age, 1.5);
+  const standbyChargeKnown = pack.state !== 3
+    || isFresh(snapshot.fault?.age, BATTERY_FAN_PACK_FRESH_S);
   const standbyCharging = pack.state === 3 && standbyChargeKnown
     && snapshot.fault?.flags?.charge_mode === true;
-  const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)
-    && isFresh(batteryFan.calibration_age, 1.0)
-    && pdmFresh && packFresh
+  const batteryStartReady = available && isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S)
+    && isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S)
+    && batteryPdmFresh && batteryPackFresh
     && batterySupplyReady && standbyChargeKnown && !standbyCharging && pack.temperature_complete === true
     && batteryStatus.protocol_version === 1
     && batteryCurrentReady && batteryStatus.flags?.hardware_ready === true
@@ -768,13 +778,14 @@ function renderFan() {
     && batteryCalib.chroma_budget_w === 35 && batteryCalib.hv_budget_w === 70;
   let batteryStartHint = "";
   if (!available) batteryStartHint = "请先连接真实 CANB 500 kbit/s";
-  else if (!packFresh || ![3, 5].includes(pack.state)) batteryStartHint = "等待 BMS 待机或高压接通状态";
+  else if (!batteryPackFresh) batteryStartHint = "等待 CANB 0x4B0 BMS 状态";
+  else if (![3, 5].includes(pack.state)) batteryStartHint = "BMS 需处于待机或高压接通状态";
   else if (!standbyChargeKnown) batteryStartHint = "等待 CANB BMS 充电状态";
   else if (standbyCharging) batteryStartHint = "BMS 正在充电，待机低压不可标定";
   else if (pack.temperature_complete !== true) batteryStartHint = "BMS 温度采样不完整";
-  else if (!pdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
-  else if (!isFresh(batteryFan.status_age, 1.0)) batteryStartHint = "等待 CANB 0x5AA 实时风扇状态";
-  else if (!isFresh(batteryFan.calibration_age, 1.0)) batteryStartHint = "等待 CANB 0x5AD 实时标定状态";
+  else if (!batteryPdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
+  else if (!isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S)) batteryStartHint = "等待 CANB 0x5AA 实时风扇状态";
+  else if (!isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S)) batteryStartHint = "等待 CANB 0x5AD 实时标定状态";
   else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在 Chroma 充电";
   else if (batteryStatus.protocol_version !== 1
       || batteryCalib.chroma_budget_w !== 35 || batteryCalib.hv_budget_w !== 70) {
@@ -833,9 +844,9 @@ function renderFan() {
     $("#batteryFanAutoStartButton").title = batteryStartReady ? "" : batteryStartHint;
   }
   if ($("#batteryFanAutoStopButton")) $("#batteryFanAutoStopButton").disabled = batterySession.status !== "running";
-  if ($("#batteryFanExportButton")) {
-    $("#batteryFanExportButton").disabled = !(batterySession.export_available === true || batteryRecords.length > 0);
-  }
+  ["#batteryFanExportButton", "#batteryFanExportJsonButton"].forEach(id => {
+    if ($(id)) $(id).disabled = !(batterySession.export_available === true || batteryRecords.length > 0);
+  });
 }
 
 function renderFanCalibProgress(session, running) {

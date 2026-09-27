@@ -3086,6 +3086,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .fan-calib-table .empty-state { padding: var(--sp-4) var(--sp-2); }
 .fan-battery-calib-panel .fan-calib-table-wrap { max-height: 360px; overflow-y: auto; }
 .fan-battery-calib-panel .fan-calib-table th { position: sticky; top: 0; z-index: 1; }
+.fan-battery-calib-actions { flex-wrap: wrap; }
 .fan-manual-step { margin-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
 .fan-manual-step > summary {
   padding: var(--sp-3) 0;

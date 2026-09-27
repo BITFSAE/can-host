@@ -159,13 +159,16 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertIn("text(`#${prefix}V`, known ? fmt(entry.voltage_v, 1) : \"等待数据\")", vehicle_js)
         self.assertIn("const statusKnown = hasDataAge(fan.status_age)", fan_js)
         self.assertIn("const fanStartReady = available && fanFramesFresh && pdmFresh", fan_js)
-        self.assertIn("const batteryStartReady = available && isFresh(batteryFan.status_age, 1.0)", fan_js)
+        self.assertIn("const BATTERY_FAN_CALIB_FRESH_S = 3.0", fan_js)
+        self.assertIn("const batteryStartReady = available && isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S)", fan_js)
+        self.assertIn("&& isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S)", fan_js)
         self.assertIn("const calibPaused = calibRunning && Boolean(calib.pause_reason)", fan_js)
         self.assertIn("数据稳定后重做当前测点", fan_js)
         self.assertIn("calib.export_available === true || records.length > 0", fan_js)
         self.assertIn("batterySession.export_available === true || batteryRecords.length > 0", fan_js)
         self.assertIn('state.api.choose_export_fan_calibration("csv")', fan_js)
-        self.assertIn("state.api.choose_export_battery_fan_calibration()", fan_js)
+        self.assertIn('state.api.choose_export_battery_fan_calibration(format)', fan_js)
+        self.assertIn('exportBatteryFan("json")', fan_js)
         self.assertNotIn("URL.createObjectURL", fan_js)
 
 

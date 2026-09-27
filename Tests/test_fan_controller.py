@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,8 +31,13 @@ class FanControllerToolTest(unittest.TestCase):
                      json.dumps({"status": "aborted", "abort_reason": "用户手动停止"},
                                 ensure_ascii=False)),
         }
-        api._vehicle_service.export_battery_fan_calibration.return_value = {
-            "ok": True, "data": "session_status,abort_reason\r\naborted,保护中止\r\n",
+        api._vehicle_service.export_battery_fan_calibration.side_effect = lambda format_type: {
+            "ok": True,
+            "data": (json.dumps({"status": "aborted", "abort_reason": "保护中止",
+                                 "baseline_raw_samples": [{"t": 123.0, "p": 48.0}]},
+                                ensure_ascii=False)
+                     if format_type == "json" else
+                     "session_status,abort_reason\r\naborted,保护中止\r\n"),
         }
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -40,10 +46,12 @@ class FanControllerToolTest(unittest.TestCase):
             fan_csv = root / "fan-aborted.csv"
             fan_json = root / "fan-aborted.json"
             battery_csv = root / "battery-aborted.csv"
+            battery_json = root / "battery-aborted.json"
             for path, action in (
                     (fan_csv, lambda: api.choose_export_fan_calibration("csv")),
                     (fan_json, lambda: api.choose_export_fan_calibration("json")),
-                    (battery_csv, api.choose_export_battery_fan_calibration)):
+                    (battery_csv, api.choose_export_battery_fan_calibration),
+                    (battery_json, lambda: api.choose_export_battery_fan_calibration("json"))):
                 api._window.create_file_dialog.return_value = str(path)
                 result = action()
                 self.assertTrue(result["ok"])
@@ -53,6 +61,13 @@ class FanControllerToolTest(unittest.TestCase):
             self.assertIn("用户手动停止", fan_csv.read_text(encoding="utf-8-sig"))
             self.assertEqual(json.loads(fan_json.read_text(encoding="utf-8"))["status"], "aborted")
             self.assertIn("保护中止", battery_csv.read_text(encoding="utf-8-sig"))
+            battery_data = json.loads(battery_json.read_text(encoding="utf-8"))
+            self.assertEqual(battery_data["abort_reason"], "保护中止")
+            self.assertEqual(battery_data["baseline_raw_samples"][0]["p"], 48.0)
+            self.assertEqual(api._vehicle_service.export_battery_fan_calibration.call_args_list[-2:][0].args,
+                             ("csv",))
+            self.assertEqual(api._vehicle_service.export_battery_fan_calibration.call_args.args,
+                             ("json",))
 
     def test_calibration_export_cancel_does_not_generate_data(self) -> None:
         api = Api.__new__(Api)
@@ -687,6 +702,66 @@ class FanControllerToolTest(unittest.TestCase):
         snap["pdm"]["bus"]["power_w"] = float("nan")
         self.assertIn("无效", session._safety_error(snap, 18.0))
 
+    def test_battery_fan_frame_gaps_pause_sampling_then_stop_on_loss(self) -> None:
+        snap = {
+            "connection": {"connected": True, "mode": "pcan",
+                           "bus_profile": "canb", "bitrate": 500000},
+            "pack": {"age": 0.1, "state": 5, "temperature_complete": True},
+            "pdm": {"bus": {"offline": False, "age": 0.1, "voltage_v": 24.0,
+                            "current_a": 3.0, "power_w": 72.0}},
+            "battery_fan": {"status_age": 0.1, "calibration_age": 1.5,
+                            "calibration": {"calib_state": 1, "step": 1,
+                                            "target_duty_pct": 20, "chroma_budget_w": 35,
+                                            "hv_budget_w": 70},
+                            "status": {"power_source": 2, "protocol_version": 1,
+                                       "lease_remaining_s": 10,
+                                       "flags": {"hardware_ready": True,
+                                                 "stall_confirmed": False,
+                                                 "calibration_active": True}}},
+        }
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: snap)
+        self.assertIsNone(session._safety_error(snap, 18.0, True))
+        self.assertTrue(session._sample_frames_fresh(snap))
+        for frame, age_key, temporary_age, expired_age in (
+                ("pack", "age", 1.7, 2.1),
+                ("pdm", "age", 1.2, 1.6),
+                ("battery_status", "status_age", 1.2, 1.6),
+                ("battery_calibration", "calibration_age", 2.1, 3.1)):
+            with self.subTest(frame=frame):
+                target = (snap["pack"] if frame == "pack" else
+                          snap["pdm"]["bus"] if frame == "pdm" else
+                          snap["battery_fan"])
+                original_age = target[age_key]
+                target[age_key] = temporary_age
+                self.assertIsNone(session._safety_error(snap, 18.0, True))
+                self.assertFalse(session._sample_frames_fresh(snap))
+                target[age_key] = expired_age
+                self.assertIsNotNone(session._safety_error(snap, 18.0, True))
+                target[age_key] = original_age
+        calls = 0
+
+        def recovering_snapshot():
+            nonlocal calls
+            calls += 1
+            snap["pdm"]["bus"]["age"] = 1.2 if calls <= 2 else 0.1
+            snap["pdm"]["bus"]["current_a"] = 6.0 if calls <= 2 else 3.0
+            return snap
+
+        session.snapshot_fn = recovering_snapshot
+        session._last_command_monotonic = time.monotonic()
+        samples, error = session._samples(0.12, 18.0, 1, 20)
+        self.assertIsNone(error)
+        self.assertGreaterEqual(calls, 3)
+        self.assertTrue(samples)
+        self.assertTrue(all(sample["i"] == 3.0 for sample in samples))
+        snap["battery_fan"]["status"]["flags"]["calibration_active"] = False
+        self.assertIn("未处于活动", session._safety_error(snap, 18.0, True))
+        snap["battery_fan"]["status"]["flags"]["calibration_active"] = True
+        snap["battery_fan"]["calibration_age"] = 3.1
+        self.assertIn("0x5AD 标定状态已断流 3.1s", session._safety_error(snap, 18.0, True))
+        snap["battery_fan"]["calibration_age"] = None
+        self.assertIn("尚未收到 CANB 0x5AD", session._safety_error(snap, 18.0, True))
+
     def test_battery_fan_step_sampling_retries_once_before_aborting(self) -> None:
         """最小 hold 的 1s 采样窗样本不足时延长一轮，而不是直接中止整次扫频。"""
         session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
@@ -757,6 +832,39 @@ class FanControllerToolTest(unittest.TestCase):
         self.assertEqual(observed, [("active", 0, 0, 4, 7),
                                     ("active", 1, 20, 5, 8),
                                     ("completed", 6, 9)])
+        exported = json.loads(session.export_json())
+        self.assertEqual(len(exported["baseline_raw_samples"]), 24)
+        self.assertEqual(len(exported["raw_samples"]), 24)
+        self.assertEqual(exported["baseline_raw_samples"][0]["phase"], "baseline_settle")
+        self.assertEqual(exported["raw_samples"][12]["phase"], "step_measure")
+        self.assertEqual(exported["raw_samples"][12]["baseline_id"], 1)
+
+    def test_battery_fan_json_keeps_partial_samples_after_abort(self) -> None:
+        session = BatteryFanCalibrationSession(lambda *_: {"ok": True}, lambda: {})
+        session.status = "aborted"
+        session.abort_reason = "PDM 遥测超时"
+        session.run_params = {"steps": [5, 10], "hold_s": 5.0}
+        session._samples = lambda *args: (
+            [{"t": 123.0, "v": 24.0, "i": 2.0, "p": 48.0, "rpm": 0.0}],
+            "PDM 遥测超时")
+        _, error = session._capture_samples(2.0, 8.0, 0, 0, 1, "baseline_settle", 0)
+        self.assertIn("PDM", error)
+        data = json.loads(session.export_json())
+        self.assertEqual(data["status"], "aborted")
+        self.assertEqual(data["abort_reason"], "PDM 遥测超时")
+        self.assertEqual(data["records"], [])
+        self.assertEqual(data["baseline_raw_samples"][0]["phase"], "baseline_settle")
+        self.assertEqual(data["baseline_raw_samples"][0]["t"], 123.0)
+
+        service = CanService(protocol_kind="vehicle")
+        try:
+            service.battery_fan_calib_session = session
+            result = service.export_battery_fan_calibration("json")
+            self.assertTrue(result["ok"])
+            self.assertEqual(json.loads(result["data"])["abort_reason"], "PDM 遥测超时")
+            self.assertFalse(service.export_battery_fan_calibration("xml")["ok"])
+        finally:
+            service.disconnect()
 
     def test_battery_fan_baseline_reports_firmware_rejection(self) -> None:
         session = BatteryFanCalibrationSession(
