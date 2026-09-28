@@ -17,7 +17,7 @@
       document.documentElement.style.colorScheme = theme;
     })();
   </script>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=fan-v4">
 </head>
 <body>
   <div class="app">
@@ -755,6 +755,19 @@
             </article>
 
             <!-- 第二带：标定（本页主任务，整行、首屏可见）。 -->
+                          <article class="panel fan-policy-panel" id="fanProfilePanel">
+                <header class="panel-head"><h3>散热档位</h3><span id="fanProfileReport" class="panel-context">等待策略状态</span></header>
+                <div class="panel-body">
+                  <div class="field-grid cols-3">
+                    <label class="field"><span class="field-label">请求档位</span><span class="field-input"><select id="fanProfileSelect"><option value="0">保守</option><option value="1" selected>默认</option><option value="2">激进</option></select></span></label>
+                    <label class="field"><span class="field-label">有效时间</span><span class="field-input"><input id="fanProfileLease" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                  </div>
+                  <p id="fanEffectiveReport">PWM1 / PWM2：等待数据</p>
+                  <p id="fanDerateReport" role="status"></p>
+                  <div class="panel-foot"><button class="action-button" id="sendFanProfile" type="button" disabled>下发档位</button><button class="outline-button" id="clearFanFaults" type="button" disabled>清除停转锁存</button></div>
+                </div>
+              </article>
+
             <article class="panel fan-calib-panel">
               <header class="panel-head">
                 <h3>整车风扇两档功率标定</h3>
@@ -885,7 +898,9 @@
                 </div>
               </article>
 
-              <article class="panel fan-policy-panel">
+
+
+              <article class="panel fan-policy-panel" data-fan-legacy>
                 <header class="panel-head">
                   <h3>自动温控曲线</h3>
                   <span id="fanCurveReport" class="panel-context" title="来源 0x5A6 · 写入后回报当前值">当前值未读取</span>
@@ -905,7 +920,7 @@
 
               <article class="panel fan-policy-panel">
                 <header class="panel-head">
-                  <h3>温度失联策略</h3>
+                  <h3 data-fan-legacy-title>温度失联策略</h3>
                   <span id="fanFailsafeReport" class="panel-context" title="来源 0x5A7 · 写入后回报当前值">当前值未读取</span>
                 </header>
                 <div class="panel-body">

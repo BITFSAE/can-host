@@ -22,7 +22,7 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
                         decode_fan_ack, decode_fan_curve, decode_fan_diagnostic,
                         decode_fan_failsafe, decode_fan_status, decode_fan_power_status,
                         decode_fan_calib_status, decode_fault_fields,
-                        decode_fan_calib_limits, decode_bms_fan_status,
+                        decode_fan_calib_limits, decode_fan_profile, decode_bms_fan_status,
                         decode_bms_fan_ack, decode_bms_fan_calib,
                         decode_meter_result, decode_pack_status,
                         decode_pdm_side, decode_sop_limits, decode_sop_status,
@@ -30,7 +30,7 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
                         FAN_COMMAND_ACK_ID, FAN_CURVE_STATUS_ID, FAN_DIAGNOSTIC_ID,
                         FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID, FAN_POWER_STATUS_ID,
                         FAN_CALIB_STATUS_ID, PDM_BATTERY_ID, PDM_BUS_ID,
-                        FAN_CALIB_LIMITS_ID, BMS_FAN_STATUS_ID, BMS_FAN_ACK_ID,
+                        FAN_CALIB_LIMITS_ID, FAN_PROFILE_STATUS_ID, BMS_FAN_STATUS_ID, BMS_FAN_ACK_ID,
                         BMS_FAN_CALIB_ID,
                         ALARM_LEVEL_NAMES, STATE_NAMES, TIRE_TEMP_IDS)
 
@@ -80,6 +80,7 @@ class VehicleProtocol:
         self.last_fan_power_monotonic: float | None = None
         self.last_fan_calib_monotonic: float | None = None
         self.last_fan_limits_monotonic: float | None = None
+        self.last_fan_profile_monotonic: float | None = None
         self.last_battery_fan_status_monotonic: float | None = None
         self.last_battery_fan_calib_monotonic: float | None = None
         # Calibration workers use these receive generations to distinguish a
@@ -181,6 +182,9 @@ class VehicleProtocol:
             self.fan["calib_status"] = decode_fan_calib_status(data)
             self.last_fan_calib_monotonic = now_mono
             self.fan_calib_generation += 1
+        elif can_id == FAN_PROFILE_STATUS_ID and len(data) == 8:
+            self.fan["profile_status"] = decode_fan_profile(data)
+            self.last_fan_profile_monotonic = now_mono
         elif can_id == FAN_CALIB_LIMITS_ID and len(data) >= 8:
             self.fan["calib_limits"] = decode_fan_calib_limits(data)
             self.last_fan_limits_monotonic = now_mono
@@ -261,6 +265,7 @@ class VehicleProtocol:
         fan["failsafe_age"] = age(now, self.last_fan_failsafe_monotonic)
         fan["power_status_age"] = age(now, self.last_fan_power_monotonic)
         fan["calib_status_age"] = age(now, self.last_fan_calib_monotonic)
+        fan["profile_status_age"] = age(now, self.last_fan_profile_monotonic)
         fan["calib_limits_age"] = age(now, self.last_fan_limits_monotonic)
         fan["calib_status_generation"] = self.fan_calib_generation
         battery_fan = {key: dict(value) for key, value in self.battery_fan.items()}

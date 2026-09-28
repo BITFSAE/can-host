@@ -93,7 +93,7 @@ CANB_OCCUPIED_WITHOUT_CHROMA = {
     0x300, 0x301, 0x305, 0x310, 0x430,
     0x4A0, 0x4A3, 0x4A4, 0x4B0, 0x4B1, 0x4B2,
     *range(0x502, 0x50A),
-    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5AF), 0x700, 0x784,
+    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5B0), 0x700, 0x784,
 }
 if CHROMA_ACK_STD_ID > 0x7FF or len(CHROMA_DERIVED_STD_IDS) != 6:
     raise RuntimeError("Chroma 节点基准派生出的 ID 超出 11 位范围或发生内部重复")
@@ -161,6 +161,7 @@ CANB_IDS = {
     0x5AC: "BMS 电池箱风扇应答",
     0x5AD: "BMS 电池箱风扇标定状态",
     0x5AE: "风扇两档标定限值",
+    0x5AF: "风扇策略状态",
 }
 
 def canb_frame_name(can_id: int) -> str:
@@ -331,6 +332,7 @@ FAN_FAILSAFE_STATUS_ID = 0x5A7
 FAN_POWER_STATUS_ID = 0x5A8
 FAN_CALIB_STATUS_ID = 0x5A9
 FAN_CALIB_LIMITS_ID = 0x5AE
+FAN_PROFILE_STATUS_ID = 0x5AF
 
 FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
 FAN_FAILSAFE_NAMES = {0: "保持最后目标", 1: "固定保底", 2: "全速"}
@@ -349,7 +351,7 @@ FAN_POWER_SUPPLY_NAMES = {
 }
 FAN_POWER_LIMIT_NAMES = {
     0: "无限制", 1: "总线电流限制", 2: "电池电流限制", 3: "PDM超时",
-    4: "DCDC切换保持", 5: "停转保护", 6: "超温保护", 7: "安全中止",
+    4: "DCDC切换保持", 5: "停转保护", 6: "超温保护", 7: "安全中止", 8: "电池低压",
 }
 FAN_CALIB_STATE_NAMES = {
     0: "未激活", 1: "标定中", 2: "已中止", 3: "已完成",
@@ -366,6 +368,8 @@ FAN_COMMAND_CODES = {
     "fan_query": 0x05,
     "fan_curve_ch2": 0x06,
     "fan_calib": 0x08,
+    "fan_profile": 0x09,
+    "fan_clear_faults": 0x0A,
 }
 
 
@@ -497,6 +501,28 @@ def decode_fan_calib_limits(data: bytes) -> dict[str, Any]:
     }
 
 
+FAN_PROFILE_NAMES = {0: "保守", 1: "默认", 2: "激进"}
+FAN_EFFECTIVE_NAMES = {**FAN_PROFILE_NAMES, 3: "电池固定", 4: "失联保持", 5: "失联保底",
+                       6: "停机", 7: "临界高温", 8: "手动"}
+
+
+def decode_fan_profile(data: bytes) -> dict[str, Any]:
+    if len(data) != 8:
+        raise ValueError("风扇策略状态必须为 8 字节")
+    if data[0] != 4:
+        return {"protocol_version": data[0], "supported": False}
+    effective = [data[2] & 15, data[2] >> 4]
+    return {"protocol_version": 4, "supported": True, "profile": data[1],
+            "profile_name": FAN_PROFILE_NAMES.get(data[1], "未知"),
+            "effective": effective,
+            "effective_names": [FAN_EFFECTIVE_NAMES.get(x, "未知") for x in effective],
+            "cap_pct": [data[3], data[4]], "lease_remaining_s": data[5],
+            "derate_requested": bool(data[6] & 1), "locked": [bool(data[6] & 2), bool(data[6] & 4)],
+            "low_voltage": bool(data[6] & 8), "lease_active": bool(data[6] & 16),
+            "invalid_temperature": bool(data[6] & 32),
+            "supply_state": data[7] & 15, "limit_reason": data[7] >> 4}
+
+
 def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     """Build a validated FanController command frame (CANB 0x5A4, DLC 8).
 
@@ -511,6 +537,13 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         body.append(crc8_sae_j1850(body))
         return CanFrame(FAN_COMMAND_ID, bytes(body), False, time.time(), "tx")
 
+    if name == "fan_profile":
+        profile, lease = int(values.get("profile", -1)), int(values.get("lease_s", 10))
+        if profile not in (0, 1, 2) or not 1 <= lease <= 60:
+            raise ValueError("档位应为 0/1/2，租约应为 1～60 秒")
+        return command_frame(0x09, bytes([profile, lease, 0, 0, 0]))
+    if name == "fan_clear_faults":
+        return command_frame(0x0A, bytes([0xA5, 0, 0, 0, 0]))
     if name == "fan_control":
         mode = int(values.get("mode", -1))
         duty1 = int(values.get("duty1_pct", 0))

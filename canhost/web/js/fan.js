@@ -30,6 +30,16 @@ function readFanNumber(id, label) {
 }
 
 function bindFanControls() {
+  $("#sendFanProfile")?.addEventListener("click", () => {
+    const lease = readFanNumber("#fanProfileLease", "有效时间");
+    if (lease == null) return;
+    const profile = Number($("#fanProfileSelect").value);
+    confirmFanCommand("fan_profile", { profile, lease_s: lease }, "下发散热档位",
+      `档位 ${["保守", "默认", "激进"][profile]} · 有效 ${lease} s；到期回默认档。`);
+  });
+  $("#clearFanFaults")?.addEventListener("click", () => {
+    confirmFanCommand("fan_clear_faults", {}, "清除停转锁存", "允许故障回路重新启动，仍遵守供电和电流限制。", true);
+  });
   $("#fanModeSelect")?.addEventListener("change", renderFanControlFields);
   $("#sendFanControl")?.addEventListener("click", () => {
     const mode = $("#fanModeSelect").value;
@@ -86,7 +96,7 @@ function bindFanControls() {
   });
   $("#fanRestoreButton")?.addEventListener("click", () => {
     confirmFanCommand("fan_restore_defaults", {}, "恢复风扇默认策略",
-      "恢复默认温控曲线（35/40/60℃ · 30% · 20%/s）和失联策略（固定保底 50%/50% · 保持 5s），并回到自动温控模式。", true);
+      "恢复固件默认策略并回到自动模式。V4 回到默认档，不解除停转锁存。", true);
   });
 
   // Calibration controls
@@ -344,6 +354,19 @@ function renderFan() {
   const calibStatus = calibSession.status || "idle";
 
   const fan = snapshot.fan || {};
+  const profile = fan.profile_status || {};
+  const profileFresh = isFresh(fan.profile_status_age, 1.5) && profile.supported === true;
+  const v4 = profile.protocol_version === 4;
+  $("#sendFanProfile").disabled = !available || !profileFresh || calibStatus === "running";
+  $("#clearFanFaults").disabled = !available || !profileFresh || calibStatus === "running";
+  text("#fanProfileReport", profileFresh ? `请求 ${profile.profile_name} · 剩余 ${profile.lease_remaining_s} s` : "等待 V4 策略状态");
+  text("#fanEffectiveReport", profileFresh ? `PWM1：${profile.effective_names[0]}，上限 ${profile.cap_pct[0]}% · PWM2：${profile.effective_names[1]}，上限 ${profile.cap_pct[1]}%` : "PWM1 / PWM2：等待数据");
+  text("#fanDerateReport", profileFresh ? (profile.derate_requested ? "已请求整车降功率" : "无降功率请求") : "");
+  $("#fanDerateReport")?.classList.toggle("bad", profileFresh && profile.derate_requested);
+  $$("[data-fan-legacy]").forEach(el => { el.hidden = v4; });
+  $("[data-fan-legacy-title]")?.closest("article")?.toggleAttribute("hidden", v4);
+  $("#fanCalibStateTag")?.closest("article")?.toggleAttribute("hidden", v4);
+
   const status = fan.status || {};
   const diag = fan.diagnostic || {};
   const power = fan.power_status || {};

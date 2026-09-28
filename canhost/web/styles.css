@@ -3622,3 +3622,6 @@ select {
   #page-simulator .simulator-counter-panel { grid-column: 1; }
   #page-bench .bench-slave-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* V4按协议隐藏历史面板，避免panel的flex覆盖原生hidden。 */
+#page-fan article[hidden] { display: none; }

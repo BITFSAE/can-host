@@ -491,6 +491,15 @@ class CanService:
             if (self.connection.get("bus_profile") != "canb"
                     or self.connection.get("bitrate") != 500000):
                 return {"ok": False, "error": "风扇命令只允许从整车 CANB 500 kbit/s 发送"}
+            # V4 命令必须得到新鲜的版本确认；旧配置只对旧固件开放。
+            profile = self.protocol.fan.get("profile_status", {})
+            seen = self.protocol.last_fan_profile_monotonic
+            fresh_v4 = (profile.get("supported") is True and seen is not None
+                        and self.protocol.clock() - seen <= 1.5)
+            if name in ("fan_profile", "fan_clear_faults") and not fresh_v4:
+                return {"ok": False, "error": "等待风扇 V4 策略状态"}
+            if profile.get("protocol_version") == 4 and name in ("fan_curve", "fan_curve_ch2", "fan_failsafe", "fan_calib"):
+                return {"ok": False, "error": "V4 使用固定三档，已停用旧配置和标定命令"}
             self.fan_command_sequence = (self.fan_command_sequence + 1) & 0xFF
             sequence = self.fan_command_sequence
             # A late lease-expiry ACK (result 5) may reuse an old sequence;
