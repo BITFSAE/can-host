@@ -2963,7 +2963,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 
 /* ---------- 整车风扇页 ----------
 
-   三带结构：现状（只读横条）→ 标定（整行，本页主任务）→ 按对象分两列
+   现状（只读横条）→ 按对象分两列 → 电池箱标定（整行）
    （左列整车 FanController，右列 F405 电池箱风扇）。
    读数用 .readout-grid（单元网格），输入用 .field-grid（字段网格）；
    卡片内不再出现第二个带边框的盒子，分组只用 .sub-head 的 1px 线。 */
@@ -3622,6 +3622,3 @@ select {
   #page-simulator .simulator-counter-panel { grid-column: 1; }
   #page-bench .bench-slave-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-
-/* V4按协议隐藏历史面板，避免panel的flex覆盖原生hidden。 */
-#page-fan article[hidden] { display: none; }

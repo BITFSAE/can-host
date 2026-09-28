@@ -14,7 +14,7 @@
     live   CAN1 与 CANB 同时连接的赛场状态（默认，数据新鲜）
     canb   仅连接实体 CANB，核对 BMS 镜像回退
     stale  风扇/PDM 数据超出新鲜窗口，用于核对过期配色
-    calib  整车标定进行中、电池箱风扇标定已完成
+    calib  电池箱风扇标定进行中，整车写入锁定
     sim    内置模拟通道（只能读、不能下发），用于核对写入锁定与横幅
 
 只用于界面审阅：数据是模拟值，不代表任何真实测量。
@@ -95,7 +95,7 @@ def collect(api: Api) -> dict:
         vehicle = api.get_vehicle_snapshot()
         if (api.get_snapshot()["overview"].get("voltage_v") is not None
                 and vehicle["pack"].get("voltage_v") is not None
-                and vehicle["fan"].get("status") and vehicle["fan"].get("calib_limits")):
+                and vehicle["fan"].get("status") and vehicle["fan"].get("profile_status")):
             break
         time.sleep(0.05)
     else:
@@ -127,7 +127,7 @@ def freeze_ages(data: dict) -> None:
     for key in vehicle["ecu"].get("age", {}):
         vehicle["ecu"]["age"][key] = 0.2
     for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age",
-                "power_status_age", "calib_status_age", "calib_limits_age"):
+                "power_status_age", "profile_status_age"):
         vehicle["fan"][key] = 0.3
     vehicle["battery_fan"]["status_age"] = 0.4
     vehicle["battery_fan"]["calibration_age"] = 0.4
@@ -158,41 +158,17 @@ def add_ack_history(data: dict) -> None:
         {"time": "11:42:07.318", "opcode_name": "模式命令", "sequence": 12, "result": 0,
          "result_name": "已接受", "mode_name": "手动", "failsafe_name": "固定保底",
          "accepted": True, "duty_pct": [42, 38], "target_pct": [42, 38]},
-        {"time": "11:41:36.902", "opcode_name": "温控曲线", "sequence": 9, "result": 3,
-         "result_name": "标定进行中", "mode_name": "自动", "failsafe_name": "保持最后",
+        {"time": "11:41:36.902", "opcode_name": "散热档位", "sequence": 9, "result": 3,
+         "result_name": "参数无效", "mode_name": "自动", "failsafe_name": "保持最后",
          "accepted": False, "duty_pct": [30, 30], "target_pct": [30, 30]},
     ]
 
 
 def apply_calib(data: dict) -> None:
-    """整车标定进行中：页面进入记录最多、按钮状态最复杂的分支。"""
-    fan = data["vehicle"]["fan"]
-    fan["calib_session"] = {
-        "status": "running", "abort_reason": "", "channel": 1, "tier": "dcdc",
-        "current_step": 7, "total_steps": 12, "current_duty": [62, 0],
-        "suggested_caps": {"battery_cap_pct": None, "dcdc_cap_pct": 62},
-        "channel_caps": {"battery": {"1": 58, "2": 61}, "dcdc": {"1": 62, "2": None}},
-        "baseline": {"voltage_v": 23.9, "current_a": 8.4, "power_w": 201},
-        "baseline_id": "dcdc-3", "run_params": {"hold_s": 6.0, "max_current_a": 18.0},
-        "records": [
-            {"step": 1, "channel": 1, "tier": "dcdc", "duty1_pct": 20, "duty2_pct": 0,
-             "rpm1": 1620, "rpm2": 1688, "rpm3": 0, "voltage_v": 23.9, "current_a": 9.1,
-             "power_w": 218, "delta_current_a": 0.7, "delta_power_w": 17},
-            {"step": 2, "channel": 1, "tier": "dcdc", "duty1_pct": 32, "duty2_pct": 0,
-             "rpm1": 2180, "rpm2": 2244, "rpm3": 0, "voltage_v": 23.8, "current_a": 10.4,
-             "power_w": 248, "delta_current_a": 2.0, "delta_power_w": 47},
-            {"step": 3, "channel": 1, "tier": "dcdc", "duty1_pct": 44, "duty2_pct": 0,
-             "rpm1": 2610, "rpm2": 2688, "rpm3": 0, "voltage_v": 23.8, "current_a": 11.8,
-             "power_w": 281, "delta_current_a": 3.4, "delta_power_w": 80},
-        ],
-    }
-    fan["calib_status"] = {"calib_state": 1, "calib_state_name": "运行中",
-                           "calib_abort_reason": 0, "calib_abort_name": "无", "step": 7,
-                           "calib_target_pct": [62, 0], "lease_remaining_s": 4,
-                           "param_version": 3, "flags": 0}
+    """电池箱标定活动时，整车风扇命令保持锁定。"""
     battery = data["vehicle"]["battery_fan"]
     battery["calib_session"] = {
-        "status": "completed", "current_step": 12, "total_steps": 12,
+        "status": "running", "current_step": 12, "total_steps": 12,
         "records": [{"step": step} for step in range(1, 13)],
         "suggested_caps": {"chroma_cap_pct": 48, "hv_cap_pct": 52},
     }
@@ -201,10 +177,8 @@ def apply_calib(data: dict) -> None:
 def apply_stale(data: dict) -> None:
     """风扇与 PDM 数据超出新鲜窗口：核对过期配色与“上次值”表述。"""
     fan = data["vehicle"]["fan"]
-    for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age", "power_status_age"):
+    for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age", "power_status_age", "profile_status_age"):
         fan[key] = 6.0
-    fan["calib_limits_age"] = 9.0
-    fan["calib_status_age"] = 9.0
     data["vehicle"]["battery_fan"]["status_age"] = 6.0
     data["vehicle"]["battery_fan"]["calibration_age"] = 6.0
 

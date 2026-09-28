@@ -560,59 +560,6 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         if mode == 0:
             duty1 = duty2 = lease_s = 0
         return command_frame(0x01, bytes([mode, duty1, duty2, lease_s, 0]))
-    if name in ("fan_curve", "fan_curve_ch2"):
-        opcode = 0x02 if name == "fan_curve" else 0x06
-        temp_off, temp_on, temp_full = int(values["temp_off_c"]), int(values["temp_on_c"]), int(values["temp_full_c"])
-        min_duty = int(values["min_duty_pct"])
-        ramp_up = int(values["ramp_up_pct_per_s"])
-        if not (0 <= temp_off <= 150 and 0 <= temp_on <= 150 and 0 <= temp_full <= 150
-                and temp_off < temp_on < temp_full):
-            raise ValueError("温控曲线必须满足 关闭 < 启动 < 全速，且都不超过 150 ℃")
-        if not 10 <= min_duty <= 100:
-            raise ValueError("最低运行占空比必须在 10..100 %")
-        if not 10 <= ramp_up <= 100:
-            raise ValueError("占空比上升速度必须在 10..100 %/s")
-        return command_frame(opcode, bytes([temp_off, temp_on, temp_full, min_duty, ramp_up]))
-    if name == "fan_failsafe":
-        strategy = int(values["strategy"])
-        fallback1 = int(values["fallback1_duty_pct"])
-        fallback2 = int(values["fallback2_duty_pct"])
-        hold_s = int(values["stale_hold_s"])
-        ramp_down = int(values["ramp_down_pct_per_s"])
-        if strategy not in (0, 1, 2):
-            raise ValueError("失联策略必须是 0=保持最后目标、1=固定保底 或 2=全速")
-        if not (0 <= fallback1 <= 100 and 0 <= fallback2 <= 100):
-            raise ValueError("保底占空比必须在 0..100 %")
-        if not 0 <= hold_s <= 30:
-            raise ValueError("保持最后目标的时间必须在 0..30 秒")
-        if not 10 <= ramp_down <= 100:
-            raise ValueError("占空比下降速度必须在 10..100 %/s")
-        return command_frame(0x03, bytes([strategy, fallback1, fallback2, hold_s, ramp_down]))
-    if name == "fan_calib":
-        action = int(values.get("action", 1))
-        step = int(values.get("step", 0)) & 0xFF
-        duty1 = int(values.get("duty1_pct", 0))
-        duty2 = int(values.get("duty2_pct", 0))
-        lease_s = int(values.get("lease_s", 10))
-        if action not in (1, 2, 3, 4, 5, 6):
-            raise ValueError("标定动作必须在 1..6")
-        if not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
-            raise ValueError("占空比必须在 0..100 %")
-        if action in (1, 2, 4) and not 1 <= lease_s <= 60:
-            raise ValueError("标定租约必须在 1..60 秒")
-        if action == 3:
-            duty1 = duty2 = lease_s = 0
-        if action == 4:
-            step = duty1 = duty2 = 0
-        if action == 5:
-            battery_cap = int(values.get("battery_cap_pct", 0))
-            dcdc_cap = int(values.get("dcdc_cap_pct", 0))
-            if not (5 <= battery_cap <= dcdc_cap <= 100):
-                raise ValueError("电池档/DCDC 档标定上限必须满足 5 <= 电池档 <= DCDC档 <= 100 %")
-            return command_frame(0x08, bytes([5, battery_cap, dcdc_cap, 0xA5, 0]))
-        if action == 6:
-            return command_frame(0x08, bytes([6, 0xA5, 0x5A, 0, 0]))
-        return command_frame(0x08, bytes([action, step, duty1, duty2, lease_s]))
     if name == "fan_restore_defaults":
         return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
     if name == "fan_query":

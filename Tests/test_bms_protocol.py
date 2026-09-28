@@ -869,7 +869,7 @@ class BmsProtocolTest(unittest.TestCase):
         api = Api()
         try:
             self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
-            with patch.object(api._vehicle_service.fan_calib_session, "is_running",
+            with patch.object(api._vehicle_service.battery_fan_calib_session, "is_running",
                               return_value=True), \
                     self._stub_connect_success(api._service):
                 result = api.connect_can({
@@ -889,7 +889,7 @@ class BmsProtocolTest(unittest.TestCase):
             self._fake_live_pcan_connection(api._service, "can1", "PCAN_USBBUS1")
             self._fake_live_pcan_connection(api._vehicle_service, "canb", "PCAN_USBBUS2")
             with patch.object(api, "_physical_bus_mismatch", return_value=True), \
-                    patch.object(api._vehicle_service.fan_calib_session, "is_running",
+                    patch.object(api._vehicle_service.battery_fan_calib_session, "is_running",
                                  return_value=True):
                 result = api.swap_mismatched_bus_channels({"auto_record": False})
             self.assertFalse(result["ok"])
@@ -1017,7 +1017,8 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn('class="data-section thermal-section"', html)
         self.assertIn('class="data-section imd-section"', html)
         self.assertIn('id="batteryFanAutoStartButton"', html)
-        self.assertIn('id="fanCalibTierSelect"', html)
+        self.assertNotIn('id="fanCalibTierSelect"', html)
+        self.assertIn('id="fanProfileSelect"', html)
         self.assertIn('>OK_HS<', html)
         self.assertIn('id="imdFrequency"', html)
         self.assertNotIn('imd-flag-grid', html)

@@ -109,8 +109,8 @@ class VehicleSimulator:
                     + power_w.to_bytes(2, "big")
                     + (17 + self.tick % 5).to_bytes(2, "big"))
 
-        self._send(0x5A0, side(23.8 + 0.2 * math.sin(self.tick / 9.0), 9.5 + 3 * math.sin(self.tick / 3.0)))
-        self._send(0x5A1, side(25.9 + 0.1 * math.sin(self.tick / 15.0), -2.0 + 0.8 * math.sin(self.tick / 6.0)))
+        self._send(0x5A0, side(24.4 + 0.2 * math.sin(self.tick / 9.0), 9.5 + 3 * math.sin(self.tick / 3.0)))
+        self._send(0x5A1, side(23.5 + 0.1 * math.sin(self.tick / 15.0), -2.0 + 0.8 * math.sin(self.tick / 6.0)))
 
     def _emit_fan(self) -> None:
         rpm1 = 2400 + round(600 * math.sin(self.tick / 5.0))
@@ -120,13 +120,12 @@ class VehicleSimulator:
                    + rpm3.to_bytes(2, "big") + bytes([42, 38]))
         motor_temp = round((52 + 8 * math.sin(self.tick / 11.0)) * 10)
         controller_temp = round((41 + 4 * math.sin(self.tick / 13.0)) * 10)
-        self._send(0x5A3, bytes([0x00, 0x2F]) + motor_temp.to_bytes(2, "big", signed=True)
+        self._send(0x5A3, bytes([0x00, 0x0F]) + motor_temp.to_bytes(2, "big", signed=True)
                    + controller_temp.to_bytes(2, "big", signed=True) + bytes([42, 38]))
-        self._send(0x5A6, bytes([35, 40, 60, 30, 20, 0, 0, 0]))
-        self._send(0x5A7, bytes([1, 50, 50, 5, 50, 0, 0, 0]))
+        self._send(0x5A6, bytes([35, 40, 60, 30, 20, 75, 30, 1]))
+        self._send(0x5A7, bytes([1, 0, 0, 2, 10, 0, 0, 4]))
         self._send(0x5A8, bytes([0x03, 42, 38, 42, 38, 180, 95, 0]))
-        self._send(0x5A9, bytes([0, 0, 0, 0, 0, 2, 0, 0]))
-        self._send(0x5AE, bytes([1, 15, 55, 1, 55, 3, 0, 0]))
+        self._send(0x5AF, bytes([4, 1, 0x11, 100, 100, 0, 0, 3]))
         battery_rpm = 2100 + round(300 * math.sin(self.tick / 6.0))
         self._send(0x5AA, battery_rpm.to_bytes(2, "big") + bytes([40, 55, 0x08, 0x27, 0, 1]))
         self._send(0x5AD, bytes([1, 35, 70, 35, 70, 0, 0, 0]))

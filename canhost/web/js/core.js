@@ -30,7 +30,7 @@ var state = {
   pendingMonitorAction: null,
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false,
-           fan: false, fanCaps: false, batteryFanCaps: false },
+           batteryFanCaps: false },
   onlyActiveAlarms: false,
   theme: document.documentElement.dataset.theme || "dark",
   uiScale: 1,
@@ -1310,12 +1310,6 @@ async function sendPendingCommand() {
     if (result.ok) {
       $("#confirmDialog").close();
       state.pendingFanCommand = null;
-      if (["fan_curve", "fan_failsafe", "fan_restore_defaults"].includes(pending.name)) {
-        state.dirty.fan = false;
-      }
-      if (pending.name === "fan_calib" && [5, 6].includes(Number(pending.values?.action))) {
-        state.dirty.fanCaps = false;
-      }
       toast(result.message || "风扇命令已执行");
       await poll();
     } else {

@@ -43,3 +43,69 @@ class FanV4Test(unittest.TestCase):
         self.assertEqual(protocol.fan['profile_status']['profile'],2)
         now[0]=3.0
         self.assertEqual(protocol.snapshot({})['fan']['profile_status_age'],2.0)
+
+class FanV4CommandGateTest(unittest.TestCase):
+    def setUp(self):
+        from canhost.transport import CanService
+        from unittest.mock import MagicMock
+        self.service = CanService(protocol_kind='vehicle')
+        self.now = [10.0]
+        self.service.protocol = VehicleProtocol(clock=lambda: self.now[0])
+        self.service.connection.update(connected=True, mode='pcan', bus_profile='canb', bitrate=500000)
+        self.service.bus = MagicMock()
+
+    def tearDown(self):
+        self.service.disconnect()
+
+    def receive_profile(self, version=4):
+        self.service.protocol.ingest(CanFrame(0x5AF, bytes([version,1,0x11,100,100,0,0,3]), False))
+
+    def test_unknown_stale_and_future_versions_block_writes(self):
+        for version in (None, 5, 4):
+            if version is not None:
+                self.receive_profile(version)
+            if version == 4:
+                self.now[0] += 1.6
+            for name, values in [('fan_profile', {'profile':1}), ('fan_clear_faults', {}),
+                                 ('fan_control', {'mode':1,'lease_s':10}), ('fan_restore_defaults', {})]:
+                with self.subTest(version=version, name=name):
+                    self.assertFalse(self.service.send_fan_command(name, values, True)['ok'])
+        self.service.bus.send.assert_not_called()
+
+    def test_legacy_writes_removed_and_no_calibration_api(self):
+        from canhost.app import Api
+        self.receive_profile()
+        for name in ('fan_curve','fan_curve_ch2','fan_failsafe','fan_calib'):
+            with self.assertRaises(ValueError):
+                build_fan_command(name, {})
+            self.assertFalse(self.service.send_fan_command(name, {}, True)['ok'])
+        for name in ('start_fan_calibration','stop_fan_calibration','confirm_dcdc_ready',
+                     'export_fan_calibration','choose_export_fan_calibration'):
+            self.assertFalse(hasattr(Api, name))
+        self.service.bus.send.assert_not_called()
+
+    def test_fresh_profile_write_matches_ack_and_wire(self):
+        self.receive_profile()
+        def ack(message, timeout):
+            data = message.data
+            self.service.protocol.ingest(CanFrame(0x5A5, bytes([data[0],data[1],0,0,0,0,0,0]), False))
+        self.service.bus.send.side_effect = ack
+        result = self.service.send_fan_command('fan_profile', {'profile':2,'lease_s':10}, True)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(bytes(self.service.bus.send.call_args.args[0].data[:7]), bytes([9,1,2,10,0,0,0]))
+
+    def test_query_can_discover_version_without_profile(self):
+        def ack(message, timeout):
+            self.service.protocol.ingest(CanFrame(0x5A5, bytes([5,message.data[1],0,0,0,0,0,0]), False))
+        self.service.bus.send.side_effect = ack
+        self.assertTrue(self.service.send_fan_command('fan_query', {}, True)['ok'])
+
+    def test_battery_calibration_blocks_new_v4_actions(self):
+        self.receive_profile()
+        self.service.battery_fan_calib_session.status = 'running'
+        try:
+            for name in ('fan_profile','fan_clear_faults'):
+                self.assertFalse(self.service.send_fan_command(name, {'profile':1}, True)['ok'])
+            self.service.bus.send.assert_not_called()
+        finally:
+            self.service.battery_fan_calib_session.status = 'idle'

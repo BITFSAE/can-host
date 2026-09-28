@@ -158,15 +158,11 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertIn("const known = hasDataAge(entry.age);", vehicle_js)
         self.assertIn("text(`#${prefix}V`, known ? fmt(entry.voltage_v, 1) : \"等待数据\")", vehicle_js)
         self.assertIn("const statusKnown = hasDataAge(fan.status_age)", fan_js)
-        self.assertIn("const fanStartReady = available && fanFramesFresh && pdmFresh", fan_js)
+        self.assertIn("!available || !profileFresh || batteryAutoRunning", fan_js)
         self.assertIn("const BATTERY_FAN_CALIB_FRESH_S = 3.0", fan_js)
         self.assertIn("const batteryStartReady = available && isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S)", fan_js)
         self.assertIn("&& isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S)", fan_js)
-        self.assertIn("const calibPaused = calibRunning && Boolean(calib.pause_reason)", fan_js)
-        self.assertIn("数据稳定后重做当前测点", fan_js)
-        self.assertIn("calib.export_available === true || records.length > 0", fan_js)
         self.assertIn("batterySession.export_available === true || batteryRecords.length > 0", fan_js)
-        self.assertIn('state.api.choose_export_fan_calibration("csv")', fan_js)
         self.assertIn('state.api.choose_export_battery_fan_calibration(format)', fan_js)
         self.assertIn('exportBatteryFan("json")', fan_js)
         self.assertNotIn("URL.createObjectURL", fan_js)
@@ -185,13 +181,15 @@ class VehicleSimulatorTest(unittest.TestCase):
         simulator._emit_tires()
         ids = {frame.arbitration_id for frame in frames}
         for expected in (0x4B0, 0x4B1, 0x4A0, 0x4A3, 0x521, 0x522,
-                         0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7, 0x5A8, 0x5A9,
-                         0x5AA, 0x5AD, 0x5AE,
+                         0x5A0, 0x5A1, 0x5A2, 0x5A3, 0x5A6, 0x5A7, 0x5A8, 0x5AF,
+                         0x5AA, 0x5AD,
                          0x502, 0x505, 0x506, 0x507, 0x508, 0x509,
                          0x071, 0x072, 0x073, 0x074):
             self.assertIn(expected, ids)
         # The power/energy meter frames are intentionally absent, mirroring
         # the real competition meter that may not send them.
+        self.assertNotIn(0x5A9, ids)
+        self.assertNotIn(0x5AE, ids)
         self.assertNotIn(0x526, ids)
         self.assertNotIn(0x528, ids)
 
@@ -203,7 +201,7 @@ class VehicleSimulatorTest(unittest.TestCase):
         self.assertTrue(snapshot["pdm"]["bus"]["voltage_v"] > 20)
         self.assertIsNotNone(snapshot["pack"]["voltage_v"])
         self.assertTrue(snapshot["fan"]["status"]["rpm"][0] > 0)
-        self.assertEqual(snapshot["fan"]["calib_limits"]["protocol_version"], 3)
+        self.assertEqual(snapshot["fan"]["profile_status"]["protocol_version"], 4)
         self.assertTrue(snapshot["battery_fan"]["status"])
 
     def test_simulation_transport_produces_vehicle_snapshot(self) -> None:
