@@ -127,7 +127,7 @@ def freeze_ages(data: dict) -> None:
     for key in vehicle["ecu"].get("age", {}):
         vehicle["ecu"]["age"][key] = 0.2
     for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age",
-                "power_status_age", "profile_status_age"):
+                "power_status_age", "profile_status_age", "calib_status_age"):
         vehicle["fan"][key] = 0.3
     vehicle["battery_fan"]["status_age"] = 0.4
     vehicle["battery_fan"]["calibration_age"] = 0.4
@@ -177,7 +177,7 @@ def apply_calib(data: dict) -> None:
 def apply_stale(data: dict) -> None:
     """风扇与 PDM 数据超出新鲜窗口：核对过期配色与“上次值”表述。"""
     fan = data["vehicle"]["fan"]
-    for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age", "power_status_age", "profile_status_age"):
+    for key in ("status_age", "diagnostic_age", "curve_age", "failsafe_age", "power_status_age", "profile_status_age", "calib_status_age"):
         fan[key] = 6.0
     data["vehicle"]["battery_fan"]["status_age"] = 6.0
     data["vehicle"]["battery_fan"]["calibration_age"] = 6.0
@@ -194,6 +194,11 @@ def write_variants(out_dir: Path) -> None:
 
     freeze_ages(data)
     add_ack_history(data)
+    data["vehicle"]["fan"]["calib_status"] = {
+        "calib_state": 0, "param_version": 4, "calib_target_pct": [0, 0],
+        "step": 0, "lease_remaining_s": 0,
+    }
+    data["vehicle"]["fan"]["calib_status_age"] = 0.2
     # 先落 sim：保留内置模拟连接，页面进入“只能读、不能下发”的锁定分支。
     (out_dir / "mock-sim.json").write_text(json.dumps(data, ensure_ascii=False))
 

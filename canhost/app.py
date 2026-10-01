@@ -103,7 +103,9 @@ class Api:
         # vehicle protocol and a BMS mirror projection while the independent
         # CAN1 connection remains available for detailed data and commands.
         self._vehicle_service = CanService(protocol_kind="vehicle",
-                                           allow_simulation=simulation_available)
+                                           allow_simulation=simulation_available,
+                                           calibration_diagnostic_dir=(
+                                               settings_path().parent / "calibration-diagnostics"))
         # MQTT telemetry is a fifth independent receive-only connection.  It
         # never changes a CAN mode and has no publish/command API.
         self._telemetry_service = TelemetryService()
@@ -575,7 +577,7 @@ class Api:
                 and connection.get("mode") == "pcan"
                 and str(connection.get("channel") or "") == channel):
             return None, None, None
-        for session in (other.battery_fan_calib_session,):
+        for session in (other.fan_calib_session, other.battery_fan_calib_session):
             if session is not None and session.is_running():
                 return (f"{channel} 正由 {other_name} 使用且风扇标定进行中；"
                         "请先停止标定再切换", None, None)
@@ -631,7 +633,8 @@ class Api:
             if not (self._physical_bus_mismatch(self._service)
                     and self._physical_bus_mismatch(self._vehicle_service)):
                 return {"ok": False, "error": "双向接反证据已消失，请重新核对接线"}
-            for session in (self._vehicle_service.battery_fan_calib_session,):
+            for session in (self._vehicle_service.fan_calib_session,
+                            self._vehicle_service.battery_fan_calib_session):
                 if session is not None and session.is_running():
                     return {"ok": False, "error": "风扇标定进行中；请先停止标定再交换通道"}
 
@@ -714,19 +717,43 @@ class Api:
     def send_battery_fan_command(self, name: str, values: dict[str, Any], acknowledged: bool = False) -> dict[str, Any]:
         return self._vehicle_service.send_battery_fan_command(name, values, acknowledged)
 
+    def start_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "error": "标定参数必须是对象"}
+        opts = options or {}
+        try:
+            channel = int(opts.get("channel", 1))
+            hold_s = float(opts.get("hold_s", 6.0))
+            max_current_a = float(opts.get("max_current_a", 18.0))
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "标定通道、保持时间或电流保护参数无效"}
+        steps = opts.get("steps")
+        tier = str(opts.get("tier", "dcdc"))
+        with getattr(self, "_can_connection_lock", nullcontext()):
+            return self._vehicle_service.start_fan_calibration(
+                channel, steps, hold_s, max_current_a, tier)
 
-    def _choose_calibration_export(self, format_type: str) -> dict[str, Any]:
+    def stop_fan_calibration(self) -> dict[str, Any]:
+        return self._vehicle_service.stop_fan_calibration()
+
+    def export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        return self._vehicle_service.export_fan_calibration(format_type)
+
+    def _choose_calibration_export(self, format_type: str, *, battery_fan: bool) -> dict[str, Any]:
         """Save calibration records through the native file dialog."""
         if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         export_format = str(format_type).lower()
-        if export_format not in {"csv", "json"}:
-            return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 或 JSON 导出"}
+        if battery_fan:
+            if export_format not in {"csv", "json"}:
+                return {"ok": False, "error": "电池箱风扇标定仅支持 CSV 或 JSON 导出"}
+        elif export_format not in {"csv", "json"}:
+            return {"ok": False, "error": "整车风扇标定仅支持 CSV 或 JSON 导出"}
 
         try:
             import webview
             extension = ".json" if export_format == "json" else ".csv"
-            prefix = "battery_fan_calibration"
+            prefix = "battery_fan_calibration" if battery_fan else "fan_calibration"
             file_types = (("JSON 文件 (*.json)",) if export_format == "json"
                           else ("CSV 文件 (*.csv)",))
             selected = self._window.create_file_dialog(
@@ -741,7 +768,9 @@ class Api:
             if path.suffix.lower() != extension:
                 path = path.with_suffix(extension)
 
-            exported = self._vehicle_service.export_battery_fan_calibration(export_format)
+            exported = (self._vehicle_service.export_battery_fan_calibration(export_format)
+                        if battery_fan else
+                        self._vehicle_service.export_fan_calibration(export_format))
             if not exported.get("ok"):
                 return exported
             data = exported.get("data")
@@ -753,6 +782,9 @@ class Api:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def choose_export_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
+        """Choose a destination and persist FanController calibration data."""
+        return self._choose_calibration_export(format_type, battery_fan=False)
 
     def start_battery_fan_calibration(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         if options is not None and not isinstance(options, dict):
@@ -775,7 +807,7 @@ class Api:
 
     def choose_export_battery_fan_calibration(self, format_type: str = "csv") -> dict[str, Any]:
         """Choose a destination and persist F405 fan calibration data."""
-        return self._choose_calibration_export(format_type)
+        return self._choose_calibration_export(format_type, battery_fan=True)
 
     def get_snapshot(self) -> dict[str, Any]:
         return self._service.snapshot()

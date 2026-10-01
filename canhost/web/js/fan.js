@@ -29,7 +29,42 @@ function readFanNumber(id, label) {
   return value;
 }
 
+let vehicleCalibStarting = false;
 function bindFanControls() {
+  $("#vehicleCalibTier")?.addEventListener("change", () => {
+    const battery = $("#vehicleCalibTier").value === "battery";
+    $("#vehicleCalibCurrent").value = battery ? "8" : "18";
+    $("#vehicleCalibCurrent").max = battery ? "8" : "20";
+  });
+  $("#vehicleCalibStart")?.addEventListener("click", () => {
+    const hold_s = readFanNumber("#vehicleCalibHold", "测点保持时间");
+    const max_current_a = readFanNumber("#vehicleCalibCurrent", "总线电流保护");
+    if (hold_s == null || max_current_a == null) return;
+    const channel = Number($("#vehicleCalibChannel").value);
+    const tier = $("#vehicleCalibTier").value;
+    confirmFanAction("开始整车风扇标定", "将单独扫描所选回路的 0%～100% 上升和下降测点，并记录电流、功率和转速。",
+      "我已确认车辆静止、供电稳定、风道无遮挡且人员远离旋转部件。", async () => {
+        vehicleCalibStarting = true;
+        try {
+          const res = await state.api.start_fan_calibration({channel, tier, hold_s, max_current_a});
+          toast(res?.ok ? "整车风扇扫频已启动" : `启动失败：${res?.error || "未知原因"}`, !res?.ok);
+        } finally { vehicleCalibStarting = false; }
+      });
+  });
+  $("#vehicleCalibStop")?.addEventListener("click", async () => {
+    const res = await state.api.stop_fan_calibration();
+    toast(res?.ok ? "整车风扇标定已停止" : `停止失败：${res?.error || "未知原因"}`, !res?.ok);
+  });
+  for (const [id, format] of [["#vehicleCalibCsv", "csv"], ["#vehicleCalibJson", "json"]]) {
+    $(id)?.addEventListener("click", async () => {
+      try {
+        const res = await state.api.choose_export_fan_calibration(format);
+        if (res?.ok) toast(`标定记录已导出：${res.path}`);
+        else if (!res?.cancelled) toast(res?.error || "导出失败", true);
+      } catch (error) { toast(`导出失败：${error}`, true); }
+    });
+  }
+
   $("#sendFanProfile")?.addEventListener("click", () => {
     const lease = readFanNumber("#fanProfileLease", "有效时间");
     if (lease == null) return;
@@ -566,4 +601,41 @@ function renderFan() {
   ["#batteryFanExportButton", "#batteryFanExportJsonButton"].forEach(id => {
     if ($(id)) $(id).disabled = !(batterySession.export_available === true || batteryRecords.length > 0);
   });
+  renderVehicleCalibration(fan, available && profileFresh, batteryAutoRunning);
+
+}
+
+function renderVehicleCalibration(fan, available, batteryRunning) {
+  const session = fan.calib_session || {};
+  const running = session.status === "running";
+  const records = session.records || [];
+  const ready = available && isFresh(fan.calib_status_age, 1.5)
+    && fan.calib_status?.param_version === 4;
+  const progress = vehicleCalibStarting ? "正在核对供电与状态…"
+    : running ? (session.pause_reason ? `已暂停：${session.pause_reason}`
+      : `扫描 ${session.current_step || 0}/${session.total_steps || 0} · 已记录 ${records.length} 点`)
+    : session.status === "completed" ? `扫描完成 · ${records.length} 点 · 请导出结果复核功率表和起转占空比`
+    : session.status === "aborted" ? `已中止：${session.abort_reason || "未知原因"}；已有数据可导出`
+    : session.status === "stale" ? "连接已更换，旧记录可导出"
+    : !ready ? "等待支持标定的 V4 固件状态"
+    : batteryRunning ? "电池箱标定进行中" : "已就绪 · 扫频结果不自动改写运行策略";
+  text("#vehicleCalibProgress", progress);
+  $("#vehicleCalibStart").disabled = !ready || running || batteryRunning || vehicleCalibStarting;
+  $("#vehicleCalibStop").disabled = !running;
+  for (const id of ["#vehicleCalibChannel", "#vehicleCalibTier", "#vehicleCalibHold", "#vehicleCalibCurrent"])
+    $(id).disabled = running || vehicleCalibStarting;
+  for (const id of ["#vehicleCalibCsv", "#vehicleCalibJson"])
+    $(id).disabled = !(session.export_available || records.length);
+  $("#vehicleCalibRecords").innerHTML = records.length ? records.map(rec => `<tr>
+    <td>${escapeHtml(rec.step)}</td><td>${rec.direction === "up" ? "上升" : "下降"}</td>
+    <td>${escapeHtml(rec.duty1_pct)}% / ${escapeHtml(rec.duty2_pct)}%</td>
+    <td>${[rec.rpm1, rec.rpm2, rec.rpm3].map(escapeHtml).join(" / ")}</td>
+    <td>${escapeHtml(rec.current_a)} A</td><td>${escapeHtml(rec.delta_power_w)} W</td>
+    <td title="${escapeHtml(rec.quality_note || "")}">${rec.quality_ok === false ? "待复核" : "有效"}</td>
+  </tr>`).join("") : '<tr><td colspan="7" class="empty-state">尚无完整测点。</td></tr>';
+  if (running || vehicleCalibStarting) {
+    for (const id of ["#sendFanControl", "#fanRestoreButton", "#sendFanProfile", "#clearFanFaults",
+      "#batteryFanControlButton", "#batteryFanCalibButton", "#batteryFanClearButton", "#batteryFanCommitButton", "#batteryFanAutoStartButton"])
+      if ($(id)) $(id).disabled = true;
+  }
 }

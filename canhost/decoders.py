@@ -503,7 +503,7 @@ def decode_fan_calib_limits(data: bytes) -> dict[str, Any]:
 
 FAN_PROFILE_NAMES = {0: "保守", 1: "默认", 2: "激进"}
 FAN_EFFECTIVE_NAMES = {**FAN_PROFILE_NAMES, 3: "电池固定", 4: "失联保持", 5: "失联保底",
-                       6: "停机", 7: "临界高温", 8: "手动"}
+                       6: "停机", 7: "临界高温", 8: "手动", 9: "标定"}
 
 
 def decode_fan_profile(data: bytes) -> dict[str, Any]:
@@ -560,6 +560,21 @@ def build_fan_command(name: str, values: dict[str, Any] | None = None) -> CanFra
         if mode == 0:
             duty1 = duty2 = lease_s = 0
         return command_frame(0x01, bytes([mode, duty1, duty2, lease_s, 0]))
+    if name == "fan_calib":
+        action = int(values.get("action", 1))
+        step = int(values.get("step", 0))
+        duty1 = int(values.get("duty1_pct", 0))
+        duty2 = int(values.get("duty2_pct", 0))
+        lease = int(values.get("lease_s", 60))
+        if action not in (1, 2, 3):
+            raise ValueError("整车标定仅支持开始、更新和停止")
+        if not 0 <= step <= 255 or not (0 <= duty1 <= 100 and 0 <= duty2 <= 100):
+            raise ValueError("步骤须在 0..255，占空比须在 0..100 %")
+        if action == 3:
+            duty1 = duty2 = lease = 0
+        elif not 1 <= lease <= 60:
+            raise ValueError("标定租约必须在 1..60 秒")
+        return command_frame(0x08, bytes([action, step, duty1, duty2, lease]))
     if name == "fan_restore_defaults":
         return command_frame(0x04, bytes([0xA5, 0, 0, 0, 0]))
     if name == "fan_query":
