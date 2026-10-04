@@ -177,6 +177,10 @@ class Api:
         if any(not isinstance(channel, str) or len(channel) > 64 for channel in channels):
             return {"ok": False, "error": "PCAN 通道名称无效"}
         saved = {"version": 3, "can1Channel": channels[0], "canbChannel": channels[1]}
+        if "canbBitrate" in preferences:
+            if preferences["canbBitrate"] not in (250000, 500000):
+                return {"ok": False, "error": "CANB 位率只支持 500 或 250 kbit/s"}
+            saved["canbBitrate"] = preferences["canbBitrate"]
         return self._save_workbench_preference(CONNECTION_PREFERENCE_KEY, saved)
 
     def set_monitor_tx_rows(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -486,8 +490,10 @@ class Api:
         mode = "simulation" if config.get("mode") == "simulation" else "pcan"
         profile = str(config.get("bus_profile") or "canb")
         bitrate = int(config.get("bitrate") or 500000)
-        if profile != "canb" or bitrate != 500000:
-            return {"ok": False, "error": "统一 CANB 连接固定使用 CANB 500 kbit/s"}
+        if profile != "canb" or bitrate not in {250000, 500000}:
+            return {"ok": False, "error": "CANB 连接只支持 500 或 Legacy 250 kbit/s"}
+        if mode == "simulation" and bitrate != 500000:
+            return {"ok": False, "error": "内置模拟只支持 500 kbit/s"}
         with getattr(self, "_can_connection_lock", nullcontext()):
             handover_error, handover_note, handover = self._physical_channel_handover(
                 config, self._service, "CAN1", "CONN1")
@@ -652,7 +658,7 @@ class Api:
             }
             canb_config = {
                 "mode": "pcan", "bus_profile": "canb",
-                "channel": main_channel, "bitrate": 500000,
+                "channel": main_channel, "bitrate": vehicle.get("bitrate", 500000),
                 "auto_record": auto_record,
             }
             can1_result = self._service.connect(can1_config)

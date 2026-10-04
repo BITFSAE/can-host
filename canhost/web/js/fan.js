@@ -170,12 +170,12 @@ function bindFanControls() {
     }, "发送电池箱风扇标定步骤", "标定会话可越过当前运行上限；供电切换、超温、停转或租约到期会立即中止。", action === 3);
   });
   $("#batteryFanCommitButton")?.addEventListener("click", () => {
-    const chroma_cap_pct = readFanNumber("#batteryFanChromaCapInput", "35W Chroma上限");
+    const chroma_cap_pct = readFanNumber("#batteryFanChromaCapInput", "35W 充电车上限");
     const hv_cap_pct = readFanNumber("#batteryFanHvCapInput", "70W 高压上限");
     if (chroma_cap_pct == null || hv_cap_pct == null) return;
-    if (chroma_cap_pct > hv_cap_pct) return toast("上限必须满足 35W Chroma ≤ 70W 高压", true);
+    if (chroma_cap_pct > hv_cap_pct) return toast("上限必须满足 35W 充电车 ≤ 70W 高压", true);
     sendBatteryFan("battery_fan_commit", { chroma_cap_pct, hv_cap_pct },
-      "提交电池箱风扇功率上限", `35W Chroma ${chroma_cap_pct}% · 70W 高压 ${hv_cap_pct}%\n停止有效标定会话后才能提交。`);
+      "提交电池箱风扇功率上限", `35W 充电车 ${chroma_cap_pct}% · 70W 高压 ${hv_cap_pct}%\n停止有效标定会话后才能提交。`);
   });
   $("#batteryFanClearButton")?.addEventListener("click", () => sendBatteryFan(
     "battery_fan_clear", {}, "清除电池箱风扇标定", "清除保存值并恢复两档 55% 上限；只允许未上高压且非充电时执行。", true));
@@ -543,7 +543,7 @@ function renderFan() {
   else if (!batteryPdmFresh) batteryStartHint = "等待 PDM 低压功率数据";
   else if (!isFresh(batteryFan.status_age, BATTERY_FAN_STATUS_FRESH_S)) batteryStartHint = "等待 CANB 0x5AA 实时风扇状态";
   else if (!isFresh(batteryFan.calibration_age, BATTERY_FAN_CALIB_FRESH_S)) batteryStartHint = "等待 CANB 0x5AD 实时标定状态";
-  else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在 Chroma 充电";
+  else if (!batterySupplyReady) batteryStartHint = "供电与 BMS 状态不一致，或正在充电";
   else if (batteryStatus.protocol_version !== 1
       || batteryCalib.chroma_budget_w !== 35 || batteryCalib.hv_budget_w !== 70) {
     batteryStartHint = "电池箱风扇协议或功率预算版本不匹配";

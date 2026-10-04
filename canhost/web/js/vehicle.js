@@ -32,12 +32,12 @@ function bindVehicleControls() {
 }
 
 function populateVehicleOptions() {
-  // CANB is fixed at 500 kbit/s.
+  // CANB bitrate is selected in connection settings.
 }
 
 async function connectVehicle() {
   if (!state.api) return toast("应用后端未就绪", true);
-  const bitrate = 500000;
+  const bitrate = Number($("#canbConnectBitrate")?.value || 500000);
   const channelSelect = $("#canbConnectChannel");
   if (!channelSelect?.value) {
     return toast("未检测到可选择的 PCAN 通道；请连接设备后刷新", true);

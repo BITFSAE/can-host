@@ -140,7 +140,7 @@
               </div>
               <div class="state-table hv-safety-table">
                 <div><span>上高压请求（HV_ACC）</span><em id="hvAcc">—</em></div>
-                <div><span>充电按钮（CHG_GUN）</span><em id="chargeButton">—</em></div>
+                <div><span>充电连接信号（CHG_SIG）</span><em id="chargeButton">—</em></div>
                 <div><span>外部安回中断事件</span><em id="safetyEvent">—</em></div>
                 <div><span>BMS 故障信号（Q3）</span><em id="bmsFaultSignal">—</em></div>
               </div>
@@ -338,9 +338,13 @@
                     <dt>请求值</dt>
                     <dd id="chargeRequestEcho">— V / — A</dd>
                   </div>
-                  <div title="Chroma 充电机返回的实际电压和电流">
-                    <dt>Chroma 反馈</dt>
+                  <div title="充电机返回的实际电压和电流">
+                    <dt>充电机反馈</dt>
                     <dd id="chargeFeedbackEcho">等待反馈</dd>
+                  </div>
+                  <div class="charge-end-fact">
+                    <dt>正常充电结束</dt>
+                    <dd id="legacyChargeEnd" role="status" aria-atomic="true">等待数据</dd>
                   </div>
                 </dl>
               </div>
@@ -861,7 +865,7 @@
             <article class="panel fan-calib-panel fan-battery-calib-panel">
                 <header class="panel-head">
                   <h3>电池箱风扇标定</h3>
-                  <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非 Chroma 高压状态可扫频；供电变化时中止">等待数据</span>
+                  <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非充电高压状态可扫频；供电变化时中止">等待数据</span>
                 </header>
                 <div class="panel-body">
                   <div class="sub-head fan-step-head">
@@ -887,7 +891,7 @@
                     <b title="由 PDM 功率读数扣除 0% 基线后给出；停止扫频会话后再提交"><span class="step-badge">2</span>保存上限</b>
                   </div>
                   <div class="field-grid cols-2 fan-mode-fields">
-                    <label class="field"><span class="field-label">35W Chroma 上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
+                    <label class="field"><span class="field-label">35W 充电车 上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
                     <label class="field"><span class="field-label">70W 高压上限</span><span class="field-input"><input id="batteryFanHvCapInput" type="number" min="5" max="100" value="55" title="待机低压扫频得到的建议值需在高压供电下复核"><em>%</em></span></label>
                   </div>
                   <div class="panel-foot">
@@ -1120,12 +1124,15 @@
           <section class="connection-map-card" aria-labelledby="canbMapTitle">
             <div class="connection-map-head">
               <b id="canbMapTitle">CANB</b>
-              <span>500 kbit/s · 固定</span>
+              <span>500 / 250 kbit/s</span>
             </div>
-            <small class="connection-map-sub">BMS 镜像与整车节点</small>
+            <small class="connection-map-sub">整车节点 / Legacy 充电机</small>
             <label class="field">
               <span class="field-label">PCAN 通道</span>
               <select id="canbConnectChannel" aria-describedby="connectionSettingsMessage"></select>
+            </label>
+            <label class="field"><span class="field-label">CANB 位率</span>
+              <select id="canbConnectBitrate"><option value="500000">整车 / Chroma · 500 kbit/s</option><option value="250000">Legacy 充电机 · 250 kbit/s</option></select>
             </label>
           </section>
         </div>

@@ -22,7 +22,7 @@ from .bms.protocol import (CAN1_CELL_TEMP_BASE, CAN1_CELL_VOLT_BASE, CAN1_IDS, C
                            frame_name, is_can1_bus_signature)
 from .decoders import (CanFrame, build_fan_command, fan_ack_matches,
                        build_bms_fan_command, bms_fan_ack_matches, canb_frame_name,
-                       CANB_ONLY_NODE_STD_IDS,
+                       CANB_ONLY_NODE_STD_IDS, LEGACY_CHARGER_NAMES, LEGACY_CHARGER_REQUEST_ID,
                        FAN_COMMAND_ID, BMS_FAN_COMMAND_ID)
 from .monitor import CanMonitor, normalize_message_spec
 from .vehicle.protocol import VehicleProtocol
@@ -120,7 +120,7 @@ class CanService:
 
     def _monitor_frame_name(self, arbitration_id: int, extended: bool) -> str:
         if self.protocol_kind == "vehicle":
-            return "扩展帧（未登记）" if extended else canb_frame_name(arbitration_id)
+            return LEGACY_CHARGER_NAMES.get(arbitration_id, "扩展帧（未登记）") if extended else canb_frame_name(arbitration_id)
         return frame_name(arbitration_id, extended)
 
     def connect(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -136,8 +136,10 @@ class CanService:
             return {"ok": False, "error": "主上位机台架只发送 CAN1 从控帧；真实 IVT 也应接 CAN1"}
         if mode == "bench" and self.protocol_kind != "bms":
             return {"ok": False, "error": "台架注入只支持 BMS 协议连接"}
-        if self.protocol_kind == "vehicle" and (profile != "canb" or bitrate != 500000):
-            return {"ok": False, "error": "整车连接固定使用 CANB 500 kbit/s"}
+        if self.protocol_kind == "vehicle" and (profile != "canb" or bitrate not in {250000, 500000}):
+            return {"ok": False, "error": "CANB 连接只支持 500 或 Legacy 250 kbit/s"}
+        if mode == "simulation" and bitrate != 500000:
+            return {"ok": False, "error": "内置模拟只支持 500 kbit/s"}
         with self.lock:
             self.protocol = self._new_protocol()
             if self.protocol_kind == "vehicle":
@@ -327,7 +329,7 @@ class CanService:
     @staticmethod
     def _monitor_id_is_protected(arbitration_id: int, extended: bool) -> bool:
         if extended:
-            return arbitration_id in CAN1_TOOL_IDS
+            return arbitration_id in CAN1_TOOL_IDS or arbitration_id == LEGACY_CHARGER_REQUEST_ID
         return arbitration_id in {
             BMS_CAN1_CMD_ID, DEFAULT_CMD_ID, FAN_COMMAND_ID, BMS_FAN_COMMAND_ID,
         }
@@ -716,7 +718,8 @@ class CanService:
         now = time.monotonic()
         if is_can1_bus_signature(frame.arbitration_id, frame.is_extended_id):
             kind = "can1"
-        elif not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS:
+        elif ((not frame.is_extended_id and frame.arbitration_id in CANB_ONLY_NODE_STD_IDS)
+              or (frame.is_extended_id and frame.arbitration_id in LEGACY_CHARGER_NAMES)):
             kind = "canb"
         else:
             return
@@ -1171,7 +1174,7 @@ class CanService:
 
             profile = metadata.get("bus_profile") or inferred_profile
             bitrate = int(metadata.get("bitrate") or 500000)
-            if profile not in {"can1", "canb"} or bitrate != 500000:
+            if profile not in {"can1", "canb"} or (bitrate != 500000 and not (profile == "canb" and bitrate == 250000)):
                 raise ValueError("记录使用当前版本不支持的总线档案；请使用对应归档分支版本回放")
             self.disconnect()
             with self.lock:

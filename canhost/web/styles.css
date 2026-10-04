@@ -2363,6 +2363,19 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   border-left: 1px solid var(--line-soft);
 }
 #page-control .charge-feedback-facts dt { font-size: var(--fs-unit); }
+#page-control .charge-feedback-facts > .charge-end-fact {
+  grid-column: 1 / -1;
+  padding: var(--sp-2) 0 0;
+  margin-top: var(--sp-2);
+  border-left: 0;
+  border-top: 1px solid var(--line-soft);
+}
+#page-control .charge-feedback-facts > .charge-end-fact dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#page-control #legacyChargeEnd.bad { color: var(--fault); }
+#page-control #legacyChargeEnd.ok { color: var(--ok); }
 #page-control .charge-feedback-facts dd {
   overflow: hidden;
   font-size: var(--fs-label);

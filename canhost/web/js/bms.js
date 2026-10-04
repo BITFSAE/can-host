@@ -160,7 +160,7 @@ function renderOverview() {
   setClass("#hvOutput", "ok", hvOutputName === "已接通");
   setClass("#hvOutput", "bad", hvOutputName === "故障保持");
   text("#hvAcc", !hvFresh ? "等待数据" : hv.hv_acc ? "请求" : "已释放");
-  text("#chargeButton", !hvFresh ? "等待数据" : hv.charge_button ? "已按下" : "已释放");
+  text("#chargeButton", !hvFresh ? "等待数据" : hv.charge_button ? "有效" : "无效");
   const safetyEventKnown = hvFresh;
   const safetyEventActive = safetyEventKnown && !!hv.external_safety_event;
   text("#safetyEvent", !safetyEventKnown ? "等待数据" : safetyEventActive ? "已触发" : "未触发");
@@ -749,7 +749,13 @@ function renderControls() {
   }
   const faultFresh = fault.received === true && fault.age != null && fault.age <= 1.5;
   const charge = faultFresh ? fault.flags?.charge_mode : null;
-  const chargeLabel = charge == null ? "模式未知" : charge ? "充电 · Chroma" : "放电 / 待机";
+  const chargerType = runtimeFresh ? runtime.charger_type : faultFresh ? fault.flags?.charger_type : null;
+  const endView = legacyChargeEndView(state.snapshot.hv || {}, chargerType);
+  text("#legacyChargeEnd", endView.text);
+  setClass("#legacyChargeEnd", "bad", endView.bad);
+  setClass("#legacyChargeEnd", "ok", endView.complete);
+  const chargerName = chargerType === 0 ? "Legacy" : chargerType === 1 ? "Chroma" : "类型未知";
+  const chargeLabel = charge == null ? "模式未知" : charge ? `充电 · ${chargerName}` : "放电 / 待机";
   text("#chargeModeTag", chargeLabel);
   $("#chargeModeTag").className = `tag ${charge == null ? "neutral" : charge ? "warn" : "neutral"}`;
   text("#heroChargeMode", chargeLabel);
@@ -1037,4 +1043,21 @@ function confirmCommand(name, values, title, message, destructive = false) {
   $("#confirmCheck").checked = false; $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";
   $("#confirmDialog").showModal();
+}
+
+
+function legacyChargeEndView(hv, chargerType) {
+  const result = {text: "等待数据", bad: false, complete: false};
+  if (chargerType === 1) return {...result, text: "Chroma 未启用"};
+  if (chargerType !== 0 || hv.age == null || hv.age > 1.5) return result;
+  if (hv.legacy_end_version !== 1) {
+    return {...result, text: hv.legacy_end_version ? "状态版本未知" : "固件未提供"};
+  }
+  const status = hv.legacy_end_state;
+  result.text = hv.legacy_end_name || "状态未知";
+  if (status === 2 && hv.legacy_end_hold_s != null) result.text += ' · ' + hv.legacy_end_hold_s + '/30 s';
+  if (status === 4) result.text += " · 释放 PA0 后可重新请求";
+  result.bad = status === 5 || status === 6;
+  result.complete = status === 4;
+  return result;
 }

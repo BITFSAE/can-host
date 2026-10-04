@@ -208,6 +208,7 @@ def decode_fault_fields(data: bytes) -> dict[str, Any]:
             "latched": bool(flags & 0x80), "bms_output_latched": bool(flags & 0x40),
             "reset_pending": bool(flags & 0x20), "log_write_pending": bool(flags & 0x10),
             "log_clear_pending": bool(flags & 0x08), "charge_mode": bool(flags & 0x04),
+            "charger_type": 1 if flags & 0x02 else 0,
         },
         "slave_offline": [bool(data[6] & (1 << i)) for i in range(6)],
     }
@@ -591,7 +592,7 @@ BMS_FAN_COMMAND_ID = 0x5AB
 BMS_FAN_ACK_ID = 0x5AC
 BMS_FAN_CALIB_ID = 0x5AD
 BMS_FAN_MODE_NAMES = {0: "自动", 1: "手动", 2: "关闭"}
-BMS_FAN_SOURCE_NAMES = {0: "低压/未识别", 1: "Chroma 35W", 2: "高压/DCDC 70W"}
+BMS_FAN_SOURCE_NAMES = {0: "低压/未识别", 1: "充电车 35W", 2: "高压/DCDC 70W"}
 BMS_FAN_RESULT_NAMES = {
     0: "成功", 1: "CRC 错误", 2: "DLC 错误", 3: "参数错误",
     4: "操作码不支持", 5: "租约到期", 6: "安全条件拒绝", 7: "Flash 不可用",
@@ -744,3 +745,52 @@ def decode_tire_temp_frame(data: bytes) -> list[float | None] | None:
     if len(data) < 8:
         return None
     return [data[index * 2] + data[index * 2 + 1] / 100.0 for index in range(4)]
+
+
+def decode_bms_firmware_identity(data: bytes) -> dict[str, object]:
+    """CAN1 0x186C50F4; protocol v5 defines the charger build bits."""
+    if len(data) < 8:
+        raise ValueError("固件身份帧不足 8 字节")
+    variant = data[1] & 0x03
+    result = {
+        "protocol_version": data[0], "variant_code": variant,
+        "variant": {0: "Debug", 1: "Release", 2: "Debug-Bringup"}.get(variant, f"未知 {variant}"),
+        "dirty": bool(data[1] & 0x80), "git": data[2:8].hex(),
+    }
+    if data[0] == 5:
+        charger = (data[1] >> 2) & 0x03
+        result["charger_variant"] = {0: "运行时选择", 1: "Legacy 固定 250k"}.get(charger, f"未知 {charger}")
+        result["charger_variant_code"] = charger
+    return result
+
+
+LEGACY_CHARGER_REQUEST_ID = 0x1806E5F4
+LEGACY_CHARGER_FEEDBACK_ID = 0x18FF50E5
+LEGACY_CHARGER_NAMES = {LEGACY_CHARGER_REQUEST_ID: "Legacy 充电请求", LEGACY_CHARGER_FEEDBACK_ID: "Legacy 充电反馈"}
+
+
+def decode_legacy_charger_feedback(data: bytes) -> dict[str, object]:
+    if len(data) < 5:
+        raise ValueError("Legacy 反馈不足 5 字节")
+    return {"charger_type": 0, "charger_feedback_voltage_v": u16be(data) / 10.0,
+            "charger_feedback_current_a": u16be(data, 2) / 10.0,
+            "charger_feedback_state": data[4]}
+
+
+def decode_bms_hv_status(data: bytes) -> dict[str, Any]:
+    """CAN1 0x186950F4; preserve pre-extension firmware compatibility."""
+    if len(data) < 5:
+        raise ValueError("BMS HV status requires at least 5 bytes")
+    result = (data[0] >> 2) & 3
+    version = (data[5] >> 4) if len(data) >= 8 else 0
+    state = (data[5] & 15) if version == 1 else None
+    names = {0: "待机", 1: "充电中", 2: "满充确认中", 3: "停止中",
+             4: "充电完成", 5: "停止超时", 6: "停止中断"}
+    return {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
+            "external_safety_event": bool(data[0] & 0x10),
+            "precharge_result": result,
+            "precharge_result_name": {0: "未发生", 1: "成功", 2: "失败"}.get(result, "保留值"),
+            "success_ms": u16be(data, 1), "failure_ms": u16be(data, 3),
+            "legacy_end_version": version, "legacy_end_state": state,
+            "legacy_end_name": names.get(state, "状态未知" if version else "固件未提供"),
+            "legacy_end_hold_s": data[6] if state in names and data[6] <= 30 else None}

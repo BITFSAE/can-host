@@ -17,11 +17,12 @@ from typing import Any
 from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
                         CHROMA_CURR_STD_ID, CHROMA_OUTPUT_STD_ID,
                         CHROMA_PROTECT_STD_ID, CHROMA_VOLT_STD_ID,
-                        bms_cell_voltage_is_open, decode_alarm_levels,
+                        bms_cell_voltage_is_open, decode_alarm_levels, decode_bms_firmware_identity,
                         decode_ecu_sop_ack, decode_fault_fields,
                         decode_ivt_result, decode_pack_status, decode_sop_limits,
                         decode_sop_status, decode_bms_fan_detail, format_raw_frame, u16be, u16le,
-                        IVT_RESULT_KEYS, IVT_RESULT_SCALES)
+                        IVT_RESULT_KEYS, IVT_RESULT_SCALES, LEGACY_CHARGER_NAMES,
+                        LEGACY_CHARGER_FEEDBACK_ID, decode_legacy_charger_feedback, decode_bms_hv_status)
 
 
 CELL_COUNT = 138
@@ -160,6 +161,8 @@ def is_can1_bus_signature(arbitration_id: int, extended: bool) -> bool:
 
 
 def frame_name(arbitration_id: int, extended: bool) -> str:
+    if extended and arbitration_id in LEGACY_CHARGER_NAMES:
+        return LEGACY_CHARGER_NAMES[arbitration_id]
     if extended:
         delta = arbitration_id - CAN1_CELL_VOLT_BASE
         if 0 <= delta <= (35 << 16) and delta & 0xFFFF == 0:
@@ -213,6 +216,8 @@ class BmsProtocol:
         self.rtc_reply: dict[str, Any] = {}
         self.rtc_replies: dict[int, dict[str, Any]] = {}
         self.runtime_diag: dict[str, Any] = {}
+        self.legacy_feedback: dict[str, Any] = {}
+        self.last_legacy_feedback: float | None = None
         self.sensor_diag: dict[str, Any] = {}
         self.firmware: dict[str, Any] = {}
         self.command_acks: dict[int, dict[str, Any]] = {}
@@ -258,6 +263,11 @@ class BmsProtocol:
 
         data = frame.data
         can_id = frame.arbitration_id
+        if frame.is_extended_id and can_id == LEGACY_CHARGER_FEEDBACK_ID:
+            if len(data) >= 5:
+                self.legacy_feedback = decode_legacy_charger_feedback(data)
+                self.last_legacy_feedback = now_mono
+            return
         if frame.is_extended_id and self._decode_cells(can_id, data, now_mono):
             return
         if (can_id == 0x186050F4 or (can_id == 0x4B0 and not frame.is_extended_id)) and len(data) >= 7:
@@ -331,6 +341,7 @@ class BmsProtocol:
             feedback_flags = data[7]
             self.runtime_diag = {
                 "protocol_version": data[0], "current_direction_inverted": bool(flags & 0x01),
+                "charger_type": 1 if flags & 0x02 else 0,
                 "balance_compiled": bool(flags & 0x04), "balance_enabled": bool(flags & 0x08),
                 "flash_ready": bool(flags & 0x10), "config_save_pending": bool(flags & 0x20),
                 "current_direction_save_pending": bool(flags & 0x40), "rtc_valid": bool(flags & 0x80),
@@ -348,14 +359,10 @@ class BmsProtocol:
             self.relay.update({key: value for key, value in self.runtime_diag.items()
                                if key.startswith("charger_") or key == "chroma_output_state"})
         elif can_id == 0x186C50F4 and len(data) >= 8:
-            variants = {0: "Debug", 1: "Release", 2: "Debug-Bringup"}
-            variant = data[1] & 0x03
             self.slave_sample_timeout_s = 0.35
             build_date = self.firmware.get("build_date")
-            self.firmware = {"protocol_version": data[0], "variant_code": variant,
-                             "variant": variants.get(variant, f"未知 {variant}"),
-                             "dirty": bool(data[1] & 0x80), "git": data[2:8].hex(),
-                             "build_date": build_date}
+            self.firmware = decode_bms_firmware_identity(data)
+            self.firmware["build_date"] = build_date
         elif can_id == 0x186C51F4 and len(data) >= 4:
             # Companion identity frame: Beijing build date (year-2000, month, day).
             if not isinstance(self.firmware.get("variant"), str):
@@ -404,12 +411,7 @@ class BmsProtocol:
                         "resistance_raw_kohm": resistance_raw}
             self.last_imd_monotonic = now_mono
         elif can_id == 0x186950F4 and len(data) >= 5:
-            results = {0: "未发生", 1: "成功", 2: "失败"}
-            self.hv = {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
-                       "external_safety_event": bool(data[0] & 0x10),
-                       "precharge_result": (data[0] >> 2) & 0x03,
-                       "precharge_result_name": results.get((data[0] >> 2) & 0x03, "保留值"),
-                       "success_ms": u16be(data, 1), "failure_ms": u16be(data, 3)}
+            self.hv = decode_bms_hv_status(data)
             self.last_hv_monotonic = now_mono
         elif can_id == 0x186A50F4 and len(data) >= 8:
             self.sop = decode_sop_limits(data, little_endian=False)
@@ -644,6 +646,11 @@ class BmsProtocol:
         imd["age"] = age(now, self.last_imd_monotonic)
         runtime_diag = dict(self.runtime_diag)
         runtime_diag["age"] = age(now, self.last_runtime_diag_monotonic)
+        if connection.get("bus_profile") == "canb" and self.legacy_feedback:
+            feedback_age = age(now, self.last_legacy_feedback)
+            runtime_diag.update(self.legacy_feedback)
+            runtime_diag.update({"age": feedback_age,
+                                 "charger_feedback_fresh": feedback_age is not None and feedback_age <= 0.5})
         fault = dict(self.fault)
         fault["received"] = self.last_fault_monotonic is not None
         fault["age"] = age(now, self.last_fault_monotonic)

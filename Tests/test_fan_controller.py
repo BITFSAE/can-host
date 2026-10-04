@@ -364,7 +364,7 @@ class FanControllerToolTest(unittest.TestCase):
         try:
             result = service.connect({"mode": "simulation", "bus_profile": "canb", "bitrate": 250000})
             self.assertFalse(result["ok"])
-            self.assertIn("固定使用 CANB 500 kbit/s", result["error"])
+            self.assertIn("内置模拟只支持 500 kbit/s", result["error"])
         finally:
             service.disconnect()
 

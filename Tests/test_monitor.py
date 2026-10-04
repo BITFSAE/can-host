@@ -98,6 +98,7 @@ class MonitorTransportTest(unittest.TestCase):
         try:
             protected = (
                 {"id": "0x18A050F5", "extended": True},
+                {"id": "0x1806E5F4", "extended": True},
                 {"id": "0x410"}, {"id": "0x411"},
                 {"id": "0x5A4"}, {"id": "0x5AB"},
             )

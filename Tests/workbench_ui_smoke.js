@@ -33,6 +33,7 @@ function createApp(saved, channels, legacy = new Map()) {
   const nodes = {
     "#can1ConnectChannel": select(channels),
     "#canbConnectChannel": select(channels),
+    "#canbConnectBitrate": select(["500000", "250000"]),
     "#connectionSettingsMessage": element(),
     "#monitorTxRows": element(),
     "#monitorTxGate": element(),
@@ -62,11 +63,27 @@ function createApp(saved, channels, legacy = new Map()) {
   vm.runInContext(source("core.js"), context);
   vm.runInContext(source("monitor.js"), context);
   vm.runInContext(source("vehicle.js"), context);
+  vm.runInContext(source("bms.js"), context);
   vm.runInContext("state.api = bridge; state.bootstrap = {pcan_scan: {automatic: true}}", context);
   return { context, nodes };
 }
 
 async function main() {
+  const display = createApp({}, []);
+  const view = (hv, type = 0) => display.context.legacyChargeEndView(hv, type);
+  const complete = {age: 0.5, legacy_end_version: 1, legacy_end_state: 4,
+    legacy_end_name: "充电完成", legacy_end_hold_s: 30};
+  assert.equal(view(complete).complete, true);
+  assert.match(view(complete).text, /释放 PA0/);
+  assert.equal(view({...complete, age: 1.501}).text, "等待数据");
+  assert.equal(view({...complete, age: null}).complete, false);
+  assert.equal(view({...complete, legacy_end_version: 0}).text, "固件未提供");
+  assert.equal(view({...complete, legacy_end_version: 2}).text, "状态版本未知");
+  assert.equal(view(complete, 1).complete, false);
+  assert.equal(view(complete, null).text, "等待数据");
+  assert.match(view({...complete, legacy_end_state: 2, legacy_end_name: "满充确认中",
+    legacy_end_hold_s: 29}).text, new RegExp("29/30 s"));
+  for (const code of [5, 6]) assert.equal(view({...complete, legacy_end_state: code}).bad, true);
   const saved = { connection: { version: 3, can1Channel: "PCAN_USBBUS2",
     canbChannel: "PCAN_USBBUS1" }, monitor_tx_rows: [row] };
   const channels = ["PCAN_USBBUS1", "PCAN_USBBUS2"];
@@ -89,14 +106,21 @@ async function main() {
   const connected = { connection: null, monitor_tx_rows: [] };
   const live = createApp(connected, channels);
   live.context.bridge.connect_can = async () => ({ ok: true });
-  live.context.bridge.connect_vehicle = async () => ({ ok: true });
+  live.context.bridge.connect_vehicle = async config => {
+    assert.equal(config.bitrate, 250000); return { ok: true };
+  };
   vm.runInContext("toast = () => {}; setBusConnecting = () => {}; resetChargeTiming = () => {}; poll = async () => {}", live.context);
   live.nodes["#can1ConnectChannel"].value = "PCAN_USBBUS2";
   live.nodes["#canbConnectChannel"].value = "PCAN_USBBUS1";
   await vm.runInContext("toggleMainDockConnection()", live.context);
   assert.equal(connected.connection.can1Channel, "PCAN_USBBUS2");
+  live.nodes["#canbConnectBitrate"].value = "250000";
   await vm.runInContext("connectVehicle()", live.context);
+  assert.equal(connected.connection.canbBitrate, 250000);
   assert.equal(connected.connection.canbChannel, "PCAN_USBBUS1");
+  const legacyRestart = createApp(connected, channels);
+  await vm.runInContext("restoreWorkbenchPreferences()", legacyRestart.context);
+  assert.equal(legacyRestart.nodes["#canbConnectBitrate"].value, "250000");
 
   const partlyAvailable = { connection: { version: 3, can1Channel: "PCAN_USBBUS1",
     canbChannel: "PCAN_USBBUS2" }, monitor_tx_rows: [] };

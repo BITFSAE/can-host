@@ -557,6 +557,7 @@ function restoreConnectionPreferences(saved = null) {
   state.preferredCanbChannel = canbSaved;
   apply("#can1ConnectChannel", can1Saved);
   apply("#canbConnectChannel", canbSaved);
+  if ($("#canbConnectBitrate")) $("#canbConnectBitrate").value = String(prefs.canbBitrate === 250000 ? 250000 : 500000);
   renderConnectionSettingsMessage();
 }
 
@@ -568,6 +569,7 @@ async function persistConnectionPreferences({ connectedRole = null } = {}) {
   };
   const prefs = {
     version: 3,
+    canbBitrate: Number($("#canbConnectBitrate")?.value || 500000),
     can1Channel: selectedChannel("#can1ConnectChannel", state.preferredCan1Channel, "can1"),
     canbChannel: selectedChannel("#canbConnectChannel", state.preferredCanbChannel, "canb"),
   };
@@ -972,10 +974,12 @@ function updateScopeStrips(main, vehicle, bmsData) {
     && Number(vehicle.bitrate) === 500000 && !vehicleMismatch;
   updateScopeStrip("#vehicleScopeStrip", vehicleUsable ? { show: false } : {
     show: true, danger: !!vehicleMismatch,
-    title: vehicleMismatch ? "总线疑似接反" : "等待 CANB 连接",
+    title: vehicleMismatch ? "总线疑似接反" : vehicleConnected && Number(vehicle.bitrate) === 250000 ? "Legacy 250 kbit/s 已连接" : "等待 CANB 连接",
     detail: vehicleMismatch
       ? busMismatchDetail("CANB 连接", vehicleMismatch)
-      : "点击底部“CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。",
+      : vehicleConnected && Number(vehicle.bitrate) === 250000
+        ? "旧充电机反馈见 BMS 参数页，原始帧见 CAN 监视；整车节点使用 500 kbit/s。"
+        : "点击底部“CANB”按钮连接后查看 ECU / PDM / 赛会能量计等遥测。",
   });
 
   // 可写判定必须与风扇页 fanConnectionAvailable() 一致：内置模拟通道只提供数据，
@@ -1005,7 +1009,7 @@ function updateScopeStrips(main, vehicle, bmsData) {
 
 function busProfileLabel(connection, fallback) {
   const profile = connection?.bus_profile;
-  if (profile === "canb") return "CANB";
+  if (profile === "canb") return Number(connection.bitrate) === 250000 ? "CANB · Legacy 250k" : "CANB";
   if (profile === "can1") return "CAN1";
   return fallback;
 }
@@ -1026,8 +1030,10 @@ function renderFrameSourceLabels(main, vehicle) {
   const vehicleSourceButton = $('#frameSource button[data-source="vehicle"]');
   if (vehicleSourceButton) {
     vehicleSourceButton.textContent = "CANB";
-    vehicleSourceButton.title = "CANB 数据流";
+    vehicleSourceButton.title = busProfileLabel(vehicle, "CANB");
   }
+  const canbDockLabel = $("#canbBusButton b");
+  if (canbDockLabel) canbDockLabel.textContent = vehicle?.connected ? busProfileLabel(vehicle, "CANB") : "CANB";
   const dockLabel = $("#can1BusButton b");
   if (dockLabel) dockLabel.textContent = mainLabel;
 }
@@ -1149,6 +1155,7 @@ function renderConnection() {
   const firmware = state.mainSnapshot?.firmware || {};
   const firmwareText = [
     firmware.variant,
+    firmware.charger_variant_code ? firmware.charger_variant : "",
     firmware.git,
     firmware.build_date ? `构建 ${firmware.build_date}` : "",
   ].filter(Boolean).join(" · ") || "等待数据";
