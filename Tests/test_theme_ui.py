@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -15,6 +17,7 @@ from canhost.app import (
     LIGHT_WINDOW_BACKGROUND,
     _initial_window_background,
 )
+from canhost.decoders import bms_sampling_rules, bms_cell_voltage_is_open
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,40 @@ WEB = ROOT / "canhost" / "web"
 
 
 class ThemeFrontendTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the alarm UI check")
+    def test_alarm_sampling_rules_match_decoder_and_keep_missing_thresholds_unknown(self) -> None:
+        rules = bms_sampling_rules()
+        for boundary, direction in ((rules["voltage_open_low_max_mv"], 1),
+                                    (rules["voltage_open_high_min_mv"], -1)):
+            self.assertTrue(bms_cell_voltage_is_open(boundary))
+            self.assertFalse(bms_cell_voltage_is_open(boundary + direction))
+        script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const context = vm.createContext({state: {bootstrap: {sampling_rules: JSON.parse(process.argv[2])}}});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+const rule = (index, thresholds = {}) => {
+  context.thresholds = thresholds;
+  return vm.runInContext(`alarmRuleText(${index}, thresholds)`, context);
+};
+assert.match(rule(4), /≤2100.*≥5400 mV.*0xFFFF/);
+assert.match(rule(5), /0xFF/);
+assert.doesNotMatch(rule(5), /°C/);
+assert.match(rule(0), /阈值未回报/);
+assert.match(rule(0, {ov_mv: 4200}), /≥4200 mV/);
+assert.match(rule(2, {ot_c: 45}), /充电时45 °C/);
+assert.match(rule(3, {ut_c: 10}), /充电时10 °C/);
+vm.runInContext('state.bootstrap = null', context);
+assert.match(rule(4), /等待/);
+assert.match(rule(5), /等待/);
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script, str(WEB / "js" / "bms.js"), json.dumps(rules)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_debug_simulation_button_is_hidden_until_bootstrap_enables_it(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertRegex(

@@ -968,7 +968,7 @@ function updateScopeStrips(main, vehicle, bmsData) {
   setBmsScopeStrip("#cellsScopeStrip", cellsWaiting, mainMismatch, "等待 CAN1 连接",
     "逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。");
   setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
-    "连接 CAN1 或 CANB 后显示故障码、告警等级与历史记录。");
+    "连接底部 CAN1 或 CANB。");
 
   const vehicleUsable = vehicleConnected && vehicle.bus_profile === "canb"
     && Number(vehicle.bitrate) === 500000 && !vehicleMismatch;

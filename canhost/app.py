@@ -16,6 +16,7 @@ from . import __version__, __version_date__
 from .transport import CanService
 from .pcan_channels import discover_pcan_channels
 from .bms.protocol import switch_catalog
+from .decoders import bms_sampling_rules
 from .telemetry import TelemetryService
 from .updater import (
     DEFAULT_CNB_REPO,
@@ -227,6 +228,7 @@ class Api:
             })
         return {
             "version": __version__, "version_date": __version_date__, "switch_catalog": switch_catalog(),
+            "sampling_rules": bms_sampling_rules(),
             "simulation_enabled": self._service.allow_simulation,
             "bench_enabled": True,
             "ivt_enabled": True,

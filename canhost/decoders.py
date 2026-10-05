@@ -39,6 +39,16 @@ CELL_VOLT_OPEN_LOW_MAX_MV = 2100
 CELL_VOLT_OPEN_HIGH_MIN_MV = 5400
 
 
+def bms_sampling_rules() -> dict[str, Any]:
+    """Display the F405 raw sampling rules alongside the live alarm state."""
+    return {
+        "voltage_open_low_max_mv": CELL_VOLT_OPEN_LOW_MAX_MV,
+        "voltage_open_high_min_mv": CELL_VOLT_OPEN_HIGH_MIN_MV,
+        "voltage_open_code": "0xFFFF",
+        "temperature_open_code": "0xFF",
+    }
+
+
 def bms_cell_voltage_is_open(value_mv: int) -> bool:
     """Match the F405 rule for slave-reported open-wire cell voltages."""
     return value_mv <= CELL_VOLT_OPEN_LOW_MAX_MV or value_mv >= CELL_VOLT_OPEN_HIGH_MIN_MV

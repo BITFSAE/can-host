@@ -193,21 +193,21 @@ html, body {
 }
 
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
-/* 下拉框统一：原生外观关掉，指示改用 1px 折线（与应用内其它箭头同形）。
-   内联 SVG 里的颜色对应 --text-3 (#7c7f7d)，换主题时同步这一处。 */
+/* 下拉与折叠指示统一使用圆端 SVG，保持跨平台的尺寸与笔画一致。 */
 select {
   appearance: none;
   -webkit-appearance: none;
-  padding-right: var(--sp-5);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 3.6L9 1' fill='none' stroke='%237c7f7d' stroke-width='1.2'/%3E%3C/svg%3E");
+  padding-right: var(--sp-5) !important;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%237c7f7d' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: var(--select-chevron) !important;
   background-position: calc(100% - var(--sp-2)) 50%;
   background-repeat: no-repeat;
-  background-size: 10px 6px;
+  background-size: 16px 16px;
   color-scheme: dark;
 }
 :root[data-theme="light"] select {
   color-scheme: light;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 3.6L9 1' fill='none' stroke='%2366747b' stroke-width='1.2'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%2366747b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 button { cursor: pointer; }
 h1, h2, h3, p, dl, dd, dt, ol, ul { margin: 0; }
@@ -1104,8 +1104,8 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .alarm-matrix {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  padding: 1px;
+  gap: 0;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--r-flat);
   background: var(--line-soft);
@@ -1114,16 +1114,18 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .alarm-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name level" "rule rule";
   align-items: start;
-  gap: var(--sp-3);
+  align-content: start;
+  gap: var(--sp-1) var(--sp-2);
   min-height: 72px;
   padding: var(--sp-2) var(--sp-2);
   background: var(--surface-1);
 }
-.alarm-item > span { min-width: 0; }
-.alarm-item b { display: block; overflow-wrap: anywhere; font-family: var(--cjk); font-size: var(--fs-body); font-weight: 600; line-height: 1.3; }
-.alarm-item small { display: block; margin-top: 3px; overflow-wrap: anywhere; font-family: var(--ui); font-size: var(--fs-label); color: var(--text-3); line-height: 1.4; }
+.alarm-item b { grid-area: name; min-width: 0; display: block; overflow-wrap: anywhere; font-family: var(--cjk); font-size: var(--fs-body); font-weight: 600; line-height: 1.3; }
+.alarm-item small { grid-area: rule; display: block; overflow-wrap: anywhere; font-family: var(--ui); font-size: var(--fs-label); color: var(--text-3); line-height: 1.4; }
 .alarm-level {
+  grid-area: level;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
@@ -1134,22 +1136,18 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   font-size: var(--fs-label);
   font-weight: 600;
 }
-.alarm-level::before { content: ""; width: 7px; height: 7px; border-radius: var(--r-dot); background: var(--idle); }
-.alarm-item.lv1 { background: rgba(242, 85, 77, .09); box-shadow: inset 0 0 0 1px rgba(242, 85, 77, .72); }
+.alarm-item.lv1 { background: var(--fault-dim); }
 .alarm-item.lv1 b { font-weight: 600; }
 .alarm-item.lv1 .alarm-level { color: var(--fault); }
-.alarm-item.lv1 .alarm-level::before { background: var(--fault); box-shadow: 0 0 0 3px var(--fault-dim); }
 .alarm-item.lv1 small { color: var(--fault); }
-.alarm-item.lv2 { background: rgba(240, 180, 41, .08); box-shadow: inset 0 0 0 1px rgba(240, 180, 41, .68); }
+.alarm-item.lv2 { background: var(--warn-dim); }
 .alarm-item.lv2 b { font-weight: 600; }
 .alarm-item.lv2 .alarm-level { color: var(--warn); }
-.alarm-item.lv2 .alarm-level::before { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-dim); }
 .alarm-item.lv2 small { color: var(--warn); }
-.alarm-item.fc:not(.lv1):not(.lv2) { box-shadow: inset 0 0 0 1px rgba(240, 180, 41, .55); }
-.alarm-item.fc small { color: var(--warn); }
+.alarm-item.fc:not(.lv1):not(.lv2) { background: var(--warn-dim); }
+.alarm-item.fc:not(.lv1) small { color: var(--warn); }
 .alarm-item.pending .alarm-level { color: var(--text-3); }
-.alarm-item.pending .alarm-level::before { background: transparent; border: 1px solid var(--idle); }
-.alarm-item.reserved { opacity: .48; }
+.alarm-item.reserved:not(.lv1):not(.lv2):not(.fc) b { color: var(--text-3); }
 
 .event-list { max-height: 244px; overflow: auto; }
 .event-item {
@@ -2091,24 +2089,16 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .fault-readout > span { color: var(--text-3); font-size: var(--fs-label); }
 .alarm-matrix { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: var(--sp-2); }
 .alarm-item {
-  border: 1px solid var(--line);
-  border-radius: var(--r-ctl);
+  border: 0;
+  border-radius: var(--r-flat);
   background: var(--surface-1);
-  transition: background .14s ease, border-color .14s ease, box-shadow .14s ease;
-}
-.alarm-item:hover {
-  background: var(--surface-2);
-  border-color: var(--line-highlight);
+  box-shadow: inset -1px -1px 0 var(--line-soft);
 }
 .alarm-item.lv1 {
-  border-color: var(--warn);
-  background: var(--warn-dim);
-  box-shadow: inset 0 0 12px rgba(240, 180, 41, .08);
-}
-.alarm-item.lv2, .alarm-item.fc {
-  border-color: var(--fault);
   background: var(--fault-dim);
-  box-shadow: inset 0 0 14px rgba(242, 85, 77, .1);
+}
+.alarm-item.lv2, .alarm-item.fc:not(.lv1) {
+  background: var(--warn-dim);
 }
 .protection-status { margin-bottom: var(--sp-2); }
 .switch-status-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -2540,17 +2530,17 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
   user-select: none;
 }
 .nav-tools > summary::-webkit-details-marker { display: none; }
-/* 折叠箭头：1px 折线，展开时原地翻转 180°，不用字符也不用图片 */
+/* SVG 蒙版继承文字颜色，展开时原地翻转。 */
 .nav-tools > summary .chevron {
   justify-self: end;
-  width: 7px;
-  height: 7px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg);
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
   transition: transform .16s ease;
 }
-.nav-tools[open] > summary .chevron { transform: rotate(225deg); }
+.nav-tools[open] > summary .chevron { transform: rotate(180deg); }
 .nav-tools > summary:hover { background: var(--surface-2); color: var(--text); }
 .nav-tools > summary .nav-icon { color: currentColor; }
 .nav-tool-items { display: grid; gap: 2px; margin-top: 3px; padding-left: var(--sp-2); }
@@ -3449,7 +3439,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .switch-row, .field-input,
 .field > select, .field > input, .segmented, .bench-slave, .ivt-check-summary,
 .ivt-target-brief > div, .ivt-action-fact, .ivt-result, .ivt-identity > div,
-.simulator-output-card, .simulator-config-section, .alarm-item,
+.simulator-output-card, .simulator-config-section,
 .release-history-entry, .payload, .checkbox, .toast {
   border-radius: var(--r-ctl);
 }
@@ -3564,7 +3554,7 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 select {
   background-position: calc(100% - var(--sp-2)) 50% !important;
   background-repeat: no-repeat !important;
-  background-size: 10px 6px !important;
+  background-size: 16px 16px !important;
 }
 
 /* 协议缩写、来源标记等次级下标统一到 --fs-unit，不再使用 9px/10px。 */

@@ -16,16 +16,16 @@ const IMD_FREQUENCY_NOTES = {
 
 const ALARM_RULE_TEXTS = [
   null, null, null, null,
-  "采样线开路 · 下一处理周期", "温度线开路 · 下一处理周期",
+  null, null,
   "压差 ≥800 mV · 即时", "温差 ≥30 °C · 即时",
   "总压 ≥578.2 V · 480 ms", "总压 ≤415.4 V · 480 ms",
   "风扇/UART/RTC/Flash异常 · 二级", "≤10% 二级 / ≤5% 一级",
   "充电电流 >15.0 A · 270 ms", "放电电流 <−180.0 A · 270 ms",
-  "保留位 · 算法未启用", "保留位 · 算法未启用",
+  "", "",
   "任一从控数据未就绪 · 即时", "预充超时或失败 · 复位前锁存",
   "CAN/TIM启动失败 · 本次上电锁存", "单体累加与U1差 >100 V · 约1.5 s",
   "离线约360 ms / 状态异常270 ms", "HAL错误或Bus-off · 约3 s无新错误后清除",
-  "保留位 · 当前固定为 0", "充电机反馈 >500 ms · 按在线源定级",
+  "", "充电机反馈 >500 ms · 按在线源定级",
   "命令批次重试超时或应答错误 · 复位前锁存",
   "BMU 1 通信离线", "BMU 2 通信离线", "BMU 3 通信离线",
   "BMU 4 通信离线", "BMU 5 通信离线", "BMU 6 通信离线",
@@ -515,7 +515,14 @@ function alarmRuleText(index, thresholds) {
     if (thresholds.ut_c == null) return "阈值未回报 · 确认780 ms";
     return `≤${thresholds.ut_c} °C · 充电时${Math.max(thresholds.ut_c, 5)} °C · 780 ms`;
   }
-  return ALARM_RULE_TEXTS[index] || "按主控当前程序判定";
+  const sampling = state.bootstrap?.sampling_rules;
+  if (index === 4) return sampling
+    ? `原始 ≤${sampling.voltage_open_low_max_mv} 或 ≥${sampling.voltage_open_high_min_mv} mV · ${sampling.voltage_open_code}`
+    : "等待断线判定参数";
+  if (index === 5) return sampling
+    ? `原始码 ${sampling.temperature_open_code} · 下一处理周期`
+    : "等待断线判定参数";
+  return ALARM_RULE_TEXTS[index] ?? "按主控当前程序判定";
 }
 
 function renderAlarms() {
@@ -533,22 +540,20 @@ function renderAlarms() {
     else if (levelReceived && alarm.level === 2) classes.push("lv2");
     if (faultCodeActive) classes.push("fc");
     if (!levelReceived && !faultCodeActive) classes.push("pending");
-    if (alarm.index === 14 || alarm.index === 15) classes.push("reserved");
+    if ([14, 15, 22].includes(alarm.index)) classes.push("reserved");
     if (state.onlyActiveAlarms && !active) classes.push("hidden");
     node.className = classes.join(" ");
     const alarmTitle = node.querySelector("b");
     const alarmRule = node.querySelector("small");
     const ruleText = alarmRuleText(alarm.index, thresholds);
     alarmTitle.textContent = alarm.name;
-    alarmTitle.title = alarm.name;
     alarmRule.textContent = ruleText;
-    alarmRule.title = ruleText;
     node.querySelector("em").textContent = alarm.index === 22 && ((levelReceived && alarm.level) || faultCodeActive) ? "事件触发"
       : levelReceived && alarm.level === 1 ? "一级故障"
       : levelReceived && alarm.level === 2 ? "二级告警"
       : faultCodeActive ? "故障码置位"
       : !levelReceived ? "等待等级"
-      : alarm.index === 14 || alarm.index === 15 ? "未启用" : "正常";
+      : alarm.index === 14 || alarm.index === 15 ? "未启用" : alarm.index === 22 ? "保留" : "正常";
   });
   const history = state.snapshot.fault_history || [];
   $("#faultHistory").innerHTML = history.length ? history.map(event => `<div class="event-item"><time>${event.time}</time><b>${event.previous} → ${event.code}</b><p>${event.added.length ? `<span class="added">进入：${event.added.join("、")}</span>` : ""}${event.added.length && event.cleared.length ? "<br>" : ""}${event.cleared.length ? `<span class="cleared">清除：${event.cleared.join("、")}</span>` : ""}</p></div>`).join("") : `<div class="empty-state">故障码发生变化后在这里显示进入和清除记录。</div>`;
@@ -842,7 +847,7 @@ function updateSwitchRowState() {
 
 function buildAlarmMatrix() {
   $("#alarmMatrix").innerHTML = Array.from({ length: 32 }, (_, i) =>
-    `<div class="alarm-item" data-alarm="${i}" title="统一故障码 bit ${i}"><span><b>告警项 ${i}</b><small>等待主控状态</small></span><em class="alarm-level">未收到</em></div>`
+    `<div class="alarm-item" data-alarm="${i}" title="统一故障码 bit ${i}"><b>告警项 ${i}</b><em class="alarm-level">未收到</em><small>等待主控状态</small></div>`
   ).join("");
 }
 
