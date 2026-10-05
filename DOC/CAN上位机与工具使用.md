@@ -50,7 +50,7 @@ RTC 校时写入上位机本地时间。故障变化、CSV 和 `.bmslog` 使用�
 
 ### 旧充电机 Legacy 250 kbit/s
 
-主控先刷 `Release-Legacy` 专用固件；充电类型由固件决定，上位机不发送类型切换命令。主控变更和实物验收见 `../BMS_MASTER_F405/DOC/旧充电机使用.md`。
+主控先刷 `Debug-Bringup-Legacy` 专用固件；充电类型由固件决定，上位机不发送类型切换命令。CAN1 身份显示为 Debug-Bringup 和“Legacy 固定 250k”，保护动作开关按 Bringup 规则可修改。旧 Release-Legacy 会拒绝关闭基础保护，返回参数错误、detail=0。主控变更和实物验收见 `../BMS_MASTER_F405/DOC/旧充电机使用.md`。
 
 1. 在底部 CAN 连接设置中，为 CANB 选择“Legacy 充电机 · 250 kbit/s”，保存后连接 CANB。已连接时先断开再连接，新位率才会生效；修改设置不会中途重配总线。
 2. CAN1 保持 500 kbit/s，用于六个模组、IVT、参数和保护监视；双路连接选择不同的 PCAN 通道。单通道仍可轮换连接。

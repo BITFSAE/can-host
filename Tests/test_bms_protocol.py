@@ -529,6 +529,19 @@ class BmsProtocolTest(unittest.TestCase):
         protocol.ingest(CanFrame(0x186B50F4, bytes.fromhex("05 10 16 44 00 1E 10 00"), True))
         self.assertFalse(protocol.snapshot({"connected": True})["relay"]["charger_feedback_fresh"])
 
+    def test_fixed_legacy_bringup_identity_keeps_both_capabilities(self) -> None:
+        for identity_byte in (0x06, 0x86):
+            with self.subTest(identity_byte=identity_byte):
+                protocol = BmsProtocol()
+                protocol.ingest(CanFrame(0x186C50F4, bytes([5, identity_byte])
+                                         + bytes.fromhex("12 34 56 78 9A BC"), True))
+                firmware = protocol.snapshot({"connected": True})["firmware"]
+                self.assertEqual(firmware["variant_code"], 2)
+                self.assertEqual(firmware["variant"], "Debug-Bringup")
+                self.assertEqual(firmware["charger_variant_code"], 1)
+                self.assertEqual(firmware["charger_variant"], "Legacy 固定 250k")
+                self.assertEqual(firmware["dirty"], bool(identity_byte & 0x80))
+
     def test_build_date_rejects_non_leap_year_february_29(self) -> None:
         protocol = BmsProtocol()
         protocol.ingest(CanFrame(0x186C51F4, bytes.fromhex("04 1A 02 1D 00 00 00 00"), True))
