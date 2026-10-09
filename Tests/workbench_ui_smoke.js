@@ -78,12 +78,20 @@ async function main() {
   assert.equal(view({...complete, age: 1.501}).text, "等待数据");
   assert.equal(view({...complete, age: null}).complete, false);
   assert.equal(view({...complete, legacy_end_version: 0}).text, "固件未提供");
-  assert.equal(view({...complete, legacy_end_version: 2}).text, "状态版本未知");
+  assert.equal(view({...complete, legacy_end_version: 3}).text, "状态版本未知");
   assert.equal(view(complete, 1).complete, false);
   assert.equal(view(complete, null).text, "等待数据");
   assert.match(view({...complete, legacy_end_state: 2, legacy_end_name: "满充确认中",
     legacy_end_hold_s: 29}).text, new RegExp("29/30 s"));
   for (const code of [5, 6]) assert.equal(view({...complete, legacy_end_state: code}).bad, true);
+  const shared = {...complete, legacy_end_version: 2, legacy_end_hold_s: 10, charge_end_target_s: 10};
+  for (const type of [0, 1]) {
+    assert.equal(view(shared, type).complete, true);
+    assert.match(view({...shared, legacy_end_state: 2, legacy_end_hold_s: 9}, type).text, /9\/10 s/);
+    const limited = view({...shared, legacy_end_state: 7, legacy_end_name: "单体电压停止"}, type);
+    assert.match(limited.text, /单体电压停止/);
+    assert.equal(limited.complete, false);
+  }
   const saved = { connection: { version: 3, can1Channel: "PCAN_USBBUS2",
     canbChannel: "PCAN_USBBUS1" }, monitor_tx_rows: [row] };
   const channels = ["PCAN_USBBUS1", "PCAN_USBBUS2"];

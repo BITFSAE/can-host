@@ -793,9 +793,12 @@ def decode_bms_hv_status(data: bytes) -> dict[str, Any]:
         raise ValueError("BMS HV status requires at least 5 bytes")
     result = (data[0] >> 2) & 3
     version = (data[5] >> 4) if len(data) >= 8 else 0
-    state = (data[5] & 15) if version == 1 else None
+    state = (data[5] & 15) if version in (1, 2) else None
     names = {0: "待机", 1: "充电中", 2: "满充确认中", 3: "停止中",
              4: "充电完成", 5: "停止超时", 6: "停止中断"}
+    if version == 2:
+        names[7] = "单体电压停止"
+    hold_target = {1: 30, 2: 10}.get(version)
     return {"hv_acc": bool(data[0] & 1), "charge_button": bool(data[0] & 2),
             "external_safety_event": bool(data[0] & 0x10),
             "precharge_result": result,
@@ -803,4 +806,5 @@ def decode_bms_hv_status(data: bytes) -> dict[str, Any]:
             "success_ms": u16be(data, 1), "failure_ms": u16be(data, 3),
             "legacy_end_version": version, "legacy_end_state": state,
             "legacy_end_name": names.get(state, "状态未知" if version else "固件未提供"),
-            "legacy_end_hold_s": data[6] if state in names and data[6] <= 30 else None}
+            "legacy_end_hold_s": data[6] if state in names and hold_target is not None and data[6] <= hold_target else None,
+            "charge_end_target_s": hold_target}

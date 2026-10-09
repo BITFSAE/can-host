@@ -218,6 +218,17 @@ class BmsProtocolTest(unittest.TestCase):
         ack = next(frame for frame in frames if frame.arbitration_id == 0x18A650F4)
         self.assertEqual(ack.data[3], 5)
 
+    def test_simulator_charge_limits_match_firmware(self) -> None:
+        frames = []
+        simulator = BmsSimulator(frames.append)
+        self.assertEqual((simulator.request_voltage, simulator.request_current), (5750, 30))
+        for payload, result in (("51 01 16 76 00 23 00 00", 1),
+                                ("51 02 16 77 00 23 00 00", 5),
+                                ("51 03 16 76 00 24 00 00", 5)):
+            simulator.on_command(CanFrame(0x18A050F5, bytes.fromhex(payload), True))
+            self.assertEqual(frames[-1].data[3], result)
+            self.assertEqual((simulator.request_voltage, simulator.request_current), (5750, 35))
+
     def test_canb_simulator_does_not_emit_can1_frames(self) -> None:
         frames: list[CanFrame] = []
         simulator = BmsSimulator(frames.append, bus_profile="canb")
@@ -418,6 +429,12 @@ class BmsProtocolTest(unittest.TestCase):
         frame = build_command("charge_config", {"voltage_v": 570.0, "current_a": 3.0})
         self.assertEqual(frame.arbitration_id, 0x18A050F5)
         self.assertEqual(frame.data, bytes.fromhex("51 00 16 44 00 1E 00 00"))
+        frame = build_command("charge_config", {"voltage_v": 575.0, "current_a": 3.5})
+        self.assertEqual(frame.data, bytes.fromhex("51 00 16 76 00 23 00 00"))
+        for values in ({"voltage_v": 575.1, "current_a": 3.0},
+                       {"voltage_v": 575.0, "current_a": 3.6}):
+            with self.assertRaises(ValueError):
+                build_command("charge_config", values)
         frame = build_command("alarm_thresholds", {"ov_mv": 4190, "uv_mv": 3100, "ot_c": 60, "ut_c": 0})
         self.assertEqual(frame.data, bytes.fromhex("52 00 10 5E 0C 1C 5A 1E"))
         frame = build_command("alarm_thresholds", {"ov_mv": 4500, "uv_mv": 3100, "ot_c": 60, "ut_c": 0})

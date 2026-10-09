@@ -710,8 +710,8 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     if name == "charge_config":
         voltage = round(float(values["voltage_v"]) * 10)
         current = round(float(values["current_a"]) * 10)
-        if not 4154 <= voltage <= 5782 or not 0 <= current <= 45:
-            raise ValueError("充电请求范围为 415.4..578.2 V、0..4.5 A")
+        if not 4154 <= voltage <= 5750 or not 0 <= current <= 35:
+            raise ValueError("充电请求范围为 415.4..575.0 V、0..3.5 A")
         data = request_header(operation["charge_config"])
         data.extend(voltage.to_bytes(2, "big") + current.to_bytes(2, "big"))
         data.extend(b"\x00\x00")

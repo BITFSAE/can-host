@@ -26,11 +26,23 @@ class LegacyChargerTest(unittest.TestCase):
             self.assertTrue(hv["hv_acc"] and hv["charge_button"] and hv["external_safety_event"])
         now[0] += 1.6
         self.assertGreater(protocol.snapshot({"bus_profile": "can1"})["hv"]["age"], 1.5)
-        for data in [bytes(5), bytes(8), bytes([0,0,0,0,0,0x24,30,0])]:
+        for data in [bytes(5), bytes(8), bytes([0,0,0,0,0,0x34,30,0])]:
             self.assertIsNone(decode_bms_hv_status(data)["legacy_end_state"])
         self.assertEqual(decode_bms_hv_status(bytes([0,0,0,0,0,0x1f,255,0]))["legacy_end_name"], "状态未知")
         with self.assertRaises(ValueError):
             decode_bms_hv_status(bytes(4))
+
+    def test_shared_charge_end_v2(self):
+        for state in range(8):
+            hv = decode_bms_hv_status(bytes([0, 0, 0, 0, 0, 0x20 | state, 10, 0]))
+            self.assertEqual(hv["legacy_end_state"], state)
+            self.assertEqual(hv["legacy_end_hold_s"], 10)
+            self.assertEqual(hv["charge_end_target_s"], 10)
+        self.assertEqual(hv["legacy_end_name"], "单体电压停止")
+        invalid = decode_bms_hv_status(bytes([0, 0, 0, 0, 0, 0x22, 11, 0]))
+        self.assertIsNone(invalid["legacy_end_hold_s"])
+        old_reserved = decode_bms_hv_status(bytes([0, 0, 0, 0, 0, 0x17, 0, 0]))
+        self.assertEqual(old_reserved["legacy_end_name"], "状态未知")
 
     def test_decoder_and_freshness(self):
         now = [1.0]

@@ -1053,15 +1053,15 @@ function confirmCommand(name, values, title, message, destructive = false) {
 
 function legacyChargeEndView(hv, chargerType) {
   const result = {text: "等待数据", bad: false, complete: false};
-  if (chargerType === 1) return {...result, text: "Chroma 未启用"};
-  if (chargerType !== 0 || hv.age == null || hv.age > 1.5) return result;
-  if (hv.legacy_end_version !== 1) {
+  if (![0, 1].includes(chargerType) || hv.age == null || hv.age > 1.5) return result;
+  if (chargerType === 1 && hv.legacy_end_version === 1) return {...result, text: "Chroma 未启用"};
+  if (![1, 2].includes(hv.legacy_end_version)) {
     return {...result, text: hv.legacy_end_version ? "状态版本未知" : "固件未提供"};
   }
   const status = hv.legacy_end_state;
   result.text = hv.legacy_end_name || "状态未知";
-  if (status === 2 && hv.legacy_end_hold_s != null) result.text += ' · ' + hv.legacy_end_hold_s + '/30 s';
-  if (status === 4) result.text += " · 释放 PA0 后可重新请求";
+  if (status === 2 && hv.legacy_end_hold_s != null) result.text += ' · ' + hv.legacy_end_hold_s + '/' + (hv.charge_end_target_s ?? (hv.legacy_end_version === 2 ? 10 : 30)) + ' s';
+  if (status === 4 || status === 7) result.text += " · 释放 PA0 后可重新请求";
   result.bad = status === 5 || status === 6;
   result.complete = status === 4;
   return result;

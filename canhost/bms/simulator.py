@@ -26,7 +26,7 @@ class BmsSimulator:
         self.thread: threading.Thread | None = None
         self.thresholds = [4300, 3100, 90, 30]
         self.switch_bytes = [0xFF, 0xFF, 0xFE]
-        self.request_voltage = 5700
+        self.request_voltage = 5750
         self.request_current = 30
         self.current_inverted = True
         self.tick = 0
@@ -97,7 +97,7 @@ class BmsSimulator:
             voltage = int.from_bytes(data[2:4], "big")
             current = int.from_bytes(data[4:6], "big")
             if (data[6:8] != b"\x00\x00"
-                    or not 4154 <= voltage <= 5782 or not 0 <= current <= 45):
+                    or not 4154 <= voltage <= 5750 or not 0 <= current <= 35):
                 result = 5
             else:
                 self.request_voltage, self.request_current = voltage, current
