@@ -39,35 +39,32 @@ class SharedDecoderTest(unittest.TestCase):
         data[0] = 0b00001001
         self.assertEqual(decode_alarm_levels(bytes(data))[:4], [1, 2, 0, 0])
 
-    def test_sop_limits_little_and_big_endian(self) -> None:
-        data = bytes.fromhex("08 07 50 00 E4 02 50 00")
-        little = decode_sop_limits(data, little_endian=True)
-        self.assertEqual(little["discharge_current_a"], 180.0)
-        self.assertEqual(little["charge_current_a"], 8.0)
-        self.assertEqual(little["discharge_power_kw"], 74.0)
-        self.assertEqual(little["charge_power_kw"], 8.0)
-        big = decode_sop_limits(data, little_endian=False)
-        self.assertEqual(big["discharge_current_a"], 205.5)
+    def test_sop_v2_power_and_can1_mirror(self) -> None:
+        limits = decode_sop_limits(bytes.fromhex("E4 02 28 00 05 02 01 29"), True)
+        self.assertTrue(limits["frame_valid"])
+        self.assertEqual(limits["discharge_power_kw"], 74.0)
+        self.assertEqual(limits["charge_power_kw"], 4.0)
+        self.assertEqual(limits["sequence"], 5)
+        self.assertNotIn("discharge_current_a", limits)
+        mirror = decode_sop_limits(bytes.fromhex("07 08 00 50 02 E4 00 28"), False)
+        self.assertEqual(mirror["discharge_current_a"], 180.0)
+        for payload in (bytes.fromhex("E4 02 28 00 05 02 01 28"), b"", bytes.fromhex("08 07 50 00 E4 02 50 00")):
+            self.assertFalse(decode_sop_limits(payload, True)["frame_valid"])
 
-    def test_sop_status_pair_crc(self) -> None:
-        limits = bytes.fromhex("08 07 50 00 E4 02 50 00")
-        status = decode_sop_status(bytes.fromhex("15 27 05 00 00 FF 60 9C"), limits)
-        self.assertTrue(status["crc_valid"])
+    def test_sop_diagnostic_is_independent(self) -> None:
+        status = decode_sop_status(bytes.fromhex("08 07 50 00 00 00 FF 24"))
+        self.assertTrue(status["frame_valid"])
         self.assertTrue(status["ack_fresh"])
-        self.assertEqual(status["sequence"], 5)
-        self.assertEqual(status["protocol_version"], 1)
-        # Missing limits frame must report crc_valid False, not raise.
-        self.assertFalse(decode_sop_status(bytes.fromhex("15 27 05 00 00 FF 60 9C"), None)["crc_valid"])
+        self.assertEqual(status["charge_current_a"], 8.0)
+        self.assertFalse(decode_sop_status(bytes.fromhex("15 27 05 00 00 FF 60 9C"))["frame_valid"])
 
-    def test_ecu_sop_ack_crc(self) -> None:
-        data = bytes([0x10 | 3, 0x07, 0x46, 0xE8, 0x03, 0x82, 0x01, 0x00])
-        decoded = decode_ecu_sop_ack(data)
-        self.assertEqual(decoded["sequence"], 3)
-        self.assertFalse(decoded["crc_valid"])
-        # Corrupt CRC must fail; rebuild with the real CRC appended.
-        from canhost.decoders import crc8_sae_j1850
-        good = data[:7] + bytes([crc8_sae_j1850(bytes.fromhex("04 A4") + data[:7])])
-        self.assertTrue(decode_ecu_sop_ack(good)["crc_valid"])
+    def test_ecu_sop_ack_v2(self) -> None:
+        ack = decode_ecu_sop_ack(bytes.fromhex("05 02 01 98"))
+        self.assertTrue(ack["frame_valid"])
+        self.assertTrue(ack["limits_applied"])
+        self.assertNotIn("discharge_power_kw", ack)
+        for payload in (b"", bytes.fromhex("05 02 01 99"), bytes.fromhex("15 03 E4 02 50 00 00 D7")):
+            self.assertFalse(decode_ecu_sop_ack(payload)["frame_valid"])
 
     def test_ivt_result_is_little_endian(self) -> None:
         payload = bytes([0x00, 0x03]) + (-1234).to_bytes(4, "little", signed=True)

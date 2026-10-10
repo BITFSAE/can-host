@@ -1,7 +1,7 @@
 """Deterministic CANB vehicle traffic source for UI development.
 
 Emits representative frames from every node the vehicle page monitors:
-BMS mirror 0x4B0/0x4B1, the SOP pair 0x4A0/0x4A3, own IVT results, the
+BMS mirror 0x4B0/0x4B1, SOP power 0x4A0 and diagnostics 0x4A3, own IVT results, the
 competition meter (current and U1 only - the power/energy frames are
 commonly not sent by the device), PDM low-voltage telemetry, FanController
 status frames, the ECU debug frames at their real 10 ms cadence, and the
@@ -24,6 +24,7 @@ class VehicleSimulator:
         self.sink = sink
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.sop_sequence = 0
         self.tick = 0
         self.random = random.Random(519)
 
@@ -42,7 +43,7 @@ class VehicleSimulator:
 
     def _run(self) -> None:
         next_fast = 0.0    # 10 ms: ECU debug frames
-        next_sop = 0.0     # 10 ms: SOP pair
+        next_sop = 0.0     # 10 ms: SOP power frame
         next_mid = 0.0     # 100 ms: competition meter, tyres
         next_slow = 0.0    # 500 ms: pack, fault, PDM, fan
         while not self.stop_event.wait(0.005):
@@ -81,14 +82,16 @@ class VehicleSimulator:
         self._send(0x4B1, bytes([(5 << 4) | 0, 0, 0, 0, 0, 0, 0, 4]))
 
     def _emit_sop(self) -> None:
-        limits = (1800).to_bytes(2, "little") + (900).to_bytes(2, "little") \
-            + (740).to_bytes(2, "little") + (370).to_bytes(2, "little")
-        self._send(0x4A0, limits)
-        header = bytes([(1 << 4) | (self.tick & 0x0F), 0x47, 5]) \
-            + (0).to_bytes(2, "little") + bytes([0xFF])
-        body = header + bytes([0x20])
-        crc_input = bytes.fromhex("04 A0") + limits + bytes.fromhex("04 A3") + body
-        self._send(0x4A3, body + bytes([crc8_sae_j1850(crc_input)]))
+        seq = self.sop_sequence & 0xFF
+        body = bytes.fromhex("E4 02 28 00") + bytes([seq, 2, 1])
+        self._send(0x4A0, body + bytes([crc8_sae_j1850(bytes.fromhex("04 A0") + body)]))
+        # Diagnostic and confirmation are slow; they do not gate fast limits.
+        if self.sop_sequence % 50 == 0:
+            self._send(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 24"))
+        if self.sop_sequence % 5 == 0:
+            ack = bytes([seq, 2, 1])
+            self._send(0x4A4, ack + bytes([crc8_sae_j1850(bytes.fromhex("04 A4") + ack)]))
+        self.sop_sequence += 1
 
     def _emit_meter(self) -> None:
         _, current = self._pack()

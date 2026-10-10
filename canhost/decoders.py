@@ -233,43 +233,56 @@ def decode_alarm_levels(data: bytes) -> list[int]:
 # ---------------------------------------------------------------------------
 
 def decode_sop_limits(data: bytes, little_endian: bool) -> dict[str, Any]:
-    reader = u16le if little_endian else u16be
+    if not little_endian:  # CAN1 diagnostic mirror keeps its existing layout.
+        return {"discharge_current_a": u16be(data) / 10.0,
+                "charge_current_a": u16be(data, 2) / 10.0,
+                "discharge_power_kw": u16be(data, 4) / 10.0,
+                "charge_power_kw": u16be(data, 6) / 10.0}
+    if len(data) != 8:
+        return {"frame_valid": False, "crc_valid": False}
+    crc_valid = crc8_sae_j1850(bytes.fromhex("04 A0") + data[:7]) == data[7]
+    valid = bool(data[6] & 1)
     return {
-        "discharge_current_a": reader(data) / 10.0,
-        "charge_current_a": reader(data, 2) / 10.0,
-        "discharge_power_kw": reader(data, 4) / 10.0,
-        "charge_power_kw": reader(data, 6) / 10.0,
+        "discharge_power_kw": u16le(data) / 10.0 if valid else 0.0,
+        "charge_power_kw": u16le(data, 2) / 10.0 if valid else 0.0,
+        "sequence": data[4], "protocol_version": data[5], "limits_valid": valid,
+        "drive_allowed": valid and u16le(data) > 0,
+        "regen_allowed": valid and u16le(data, 2) > 0,
+        "crc_valid": crc_valid,
+        "frame_valid": crc_valid and data[5] == 2 and data[6] & 0xFE == 0,
     }
 
 
-def decode_sop_status(data: bytes, limits_data: bytes | None) -> dict[str, Any]:
-    flags, intervention = data[1], data[6]
-    crc_input = (bytes.fromhex("04 A0") + limits_data + bytes.fromhex("04 A3") + data[:7]
-                 if limits_data is not None else None)
+def decode_sop_status(data: bytes) -> dict[str, Any]:
+    if len(data) != 8 or data[7] >> 4 != 2:
+        return {"frame_valid": False}
+    reason = u16le(data, 4)
+    flags = data[7] & 0x0F
     return {
-        "protocol_version": data[0] >> 4, "sequence": data[0] & 0x0F,
-        "limits_valid": bool(flags & 0x01), "drive_allowed": bool(flags & 0x02),
-        "regen_allowed": bool(flags & 0x04), "intervention_active": bool(flags & 0x08),
-        "fault_latched": bool(flags & 0x10), "ack_required": bool(flags & 0x20),
-        "limits_reduced": bool(flags & 0x40), "bms_state": data[2],
-        "limit_reason": u16le(data, 3), "input_health": data[5],
-        "intervention_level": intervention & 0x03,
-        "discharge_intervention": bool(intervention & 0x04), "charge_intervention": bool(intervention & 0x08),
-        "waiting_ack": bool(intervention & 0x10), "ack_fresh": bool(intervention & 0x20),
-        "current_below_exit": bool(intervention & 0x40),
-        "crc_valid": crc_input is not None and crc8_sae_j1850(crc_input) == data[7],
+        "frame_valid": True, "protocol_version": data[7] >> 4,
+        "discharge_current_a": u16le(data) / 10.0,
+        "charge_current_a": u16le(data, 2) / 10.0,
+        "limit_reason": reason, "input_health": data[6],
+        "discharge_intervention": bool(flags & 1), "charge_intervention": bool(flags & 2),
+        "ack_fresh": bool(flags & 4), "ack_timeout": bool(flags & 8),
+        "intervention_level": 3 if reason & 0x2000 else 2 if flags & 3 else 1 if reason & 0x7F else 0,
     }
 
 
 def decode_ecu_sop_ack(data: bytes) -> dict[str, Any]:
-    return {
-        "protocol_version": data[0] >> 4, "sequence": data[0] & 0x0F, "flags": data[1],
-        "pair_valid": bool(data[1] & 0x01), "limits_applied": bool(data[1] & 0x02),
-        "zero_torque": bool(data[1] & 0x04), "ecu_fault": bool(data[1] & 0x08),
-        "discharge_power_kw": u16le(data, 2) / 10.0, "regen_power_kw": u16le(data, 4) / 10.0,
-        "limit_source": data[6],
-        "crc_valid": crc8_sae_j1850(bytes.fromhex("04 A4") + data[:7]) == data[7],
-    }
+    if len(data) != 4:
+        return {"frame_valid": False, "crc_valid": False}
+    crc_valid = crc8_sae_j1850(bytes.fromhex("04 A4") + data[:3]) == data[3]
+    return {"sequence": data[0], "protocol_version": data[1], "flags": data[2],
+            "limits_applied": bool(data[2] & 1), "crc_valid": crc_valid,
+            "frame_valid": crc_valid and data[1] == 2 and data[2] & 0xFE == 0}
+
+
+def sop_sequence_is_new(sequence: int, previous: int | None, age: float | None) -> bool:
+    if previous is None:
+        return True
+    delta = (sequence - previous) & 0xFF
+    return delta != 0 and ((age is not None and age > 0.3) or delta < 128)
 
 
 # ---------------------------------------------------------------------------

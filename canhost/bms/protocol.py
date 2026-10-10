@@ -20,7 +20,7 @@ from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
                         bms_cell_voltage_is_open, decode_alarm_levels, decode_bms_firmware_identity,
                         decode_ecu_sop_ack, decode_fault_fields,
                         decode_ivt_result, decode_pack_status, decode_sop_limits,
-                        decode_sop_status, decode_bms_fan_detail, format_raw_frame, u16be, u16le,
+                        decode_sop_status, sop_sequence_is_new, decode_bms_fan_detail, format_raw_frame, u16be, u16le,
                         IVT_RESULT_KEYS, IVT_RESULT_SCALES, LEGACY_CHARGER_NAMES,
                         LEGACY_CHARGER_FEEDBACK_ID, decode_legacy_charger_feedback, decode_bms_hv_status)
 
@@ -206,7 +206,7 @@ class BmsProtocol:
         self.hv: dict[str, Any] = {}
         self.imd: dict[str, Any] = {}
         self.sop: dict[str, Any] = {}
-        self._canb_sop_limits_data: bytes | None = None
+        self._sop_limits_received_at: float | None = None
         self.ivt: dict[str, Any] = {}
         self.config: dict[str, Any] = {"thresholds": {}, "switches": {}, "switch_version": None}
         self.fault: dict[str, Any] = {"code": 0, "version": None, "flags": {}, "slave_offline": [False] * 6}
@@ -414,15 +414,27 @@ class BmsProtocol:
             self.hv = decode_bms_hv_status(data)
             self.last_hv_monotonic = now_mono
         elif can_id == 0x186A50F4 and len(data) >= 8:
-            self.sop = decode_sop_limits(data, little_endian=False)
-        elif can_id == 0x4A0 and not frame.is_extended_id and len(data) >= 8:
-            self._canb_sop_limits_data = bytes(data[:8])
-            self.sop.update(decode_sop_limits(data, little_endian=True))
-            self.sop["source"] = "CANB"
-        elif can_id == 0x4A3 and not frame.is_extended_id and len(data) >= 8:
-            self.sop["status"] = decode_sop_status(data, self._canb_sop_limits_data)
-        elif can_id == 0x4A4 and not frame.is_extended_id and len(data) >= 8:
-            self.sop["ecu_ack"] = decode_ecu_sop_ack(data)
+            decoded = decode_sop_limits(data, little_endian=False)
+            self.sop.update({key: value for key, value in decoded.items() if "current" in key})
+            if self._sop_limits_received_at is None or now_mono - self._sop_limits_received_at > 0.3:
+                self.sop.update(decoded)
+                self.sop["source"] = "CAN1"
+        elif can_id == 0x4A0 and not frame.is_extended_id:
+            decoded = decode_sop_limits(data, little_endian=True)
+            sop_age = None if self._sop_limits_received_at is None else now_mono - self._sop_limits_received_at
+            if decoded["frame_valid"] and sop_sequence_is_new(decoded["sequence"], self.sop.get("sequence"), sop_age):
+                self.sop.update(decoded)
+                self.sop["source"] = "CANB"
+                self._sop_limits_received_at = now_mono
+        elif can_id == 0x4A3 and not frame.is_extended_id:
+            decoded = decode_sop_status(data)
+            if decoded["frame_valid"]:
+                self.sop["status"] = decoded
+        elif can_id == 0x4A4 and not frame.is_extended_id:
+            decoded = decode_ecu_sop_ack(data)
+            if decoded["frame_valid"] and decoded["sequence"] != self.sop.get("ecu_ack", {}).get("sequence"):
+                self.sop["ecu_ack"] = decoded
+
         elif can_id in (0x186450F4, 0x186550F4, 0x186650F4) and len(data) >= 6:
             offset = ((can_id - 0x186450F4) >> 16) * 6
             self.balance[offset:offset + 6] = list(data[:6])

@@ -137,50 +137,36 @@ function renderVehicle() {
   const snapshot = state.vehicleSnapshot || {};
   const connection = snapshot.connection || {};
   const available = vehicleConnectionAvailable();
-  // -- SOP ---------------------------------------------------------------
+  // -- SOP: fast power limits and independent diagnostics ----------------
   const sop = snapshot.sop || {};
   const limits = sop.limits || {};
-  const sopStatus = sop.status || {};
+  const diagnostic = sop.status || {};
   const limitsKnown = hasDataAge(sop.limits_age) && Object.keys(limits).length > 0;
-  text("#vehSopDisA", limitsKnown ? fmt(limits.discharge_current_a, 1) : "等待数据");
-  text("#vehSopChgA", limitsKnown ? fmt(limits.charge_current_a, 1) : "等待数据");
+  const diagnosticKnown = hasDataAge(sop.status_age) && Object.keys(diagnostic).length > 0;
+  const limitsFresh = isFresh(sop.limits_age);
+  const diagnosticFresh = isFresh(sop.status_age);
+  text("#vehSopDisA", diagnosticKnown ? fmt(diagnostic.discharge_current_a, 1) : "等待数据");
+  text("#vehSopChgA", diagnosticKnown ? fmt(diagnostic.charge_current_a, 1) : "等待数据");
+  ["#vehSopDisA", "#vehSopChgA", "#vehSopIntervention"].forEach(id => markStaleData(id, diagnosticKnown && !diagnosticFresh));
   text("#vehSopDisKw", limitsKnown ? fmt(limits.discharge_power_kw, 1) : "等待数据");
   text("#vehSopChgKw", limitsKnown ? fmt(limits.charge_power_kw, 1) : "等待数据");
-  const statusKnown = hasDataAge(sop.status_age) && Object.keys(sopStatus).length > 0;
-  const statusFresh = isFresh(sop.status_age);
-  const sopAges = [sop.limits_age, sop.status_age].filter(hasDataAge);
-  const sopStale = isStaleData(sop.limits_age) || isStaleData(sop.status_age);
-  const sopDisplayAge = sopAges.length ? (sopStale ? Math.max(...sopAges) : Math.min(...sopAges)) : null;
-  text("#vehSopAge", sopAges.length
-    ? `${sopStale ? "部分已过期 · 最旧 " : ""}${fmt(sopDisplayAge, 1)} s 前`
-    : "等待数据");
-  markStaleData("#vehSopAge", sopStale);
-  const flagText = value => statusKnown ? (value ? "是" : "否") : "—";
-  text("#vehSopLimitsValid", flagText(sopStatus.limits_valid));
-  text("#vehSopDrive", flagText(sopStatus.drive_allowed));
-  text("#vehSopRegen", flagText(sopStatus.regen_allowed));
-  text("#vehSopIntervention", statusKnown ? VEH_INTERVENTION_NAMES[sopStatus.intervention_level] ?? "—" : "—");
-  text("#vehSopCrc", statusKnown ? (sopStatus.crc_valid ? "通过" : "失败") : "—");
-  setClass("#vehSopCrc", "bad", statusFresh && sopStatus.crc_valid === false);
-  setClass("#vehSopCrc", "ok", statusFresh && sopStatus.crc_valid === true);
-  markStaleData("#vehSopCrc", statusKnown && !statusFresh);
-  text("#vehSopBmsState", statusKnown ? VEH_STATE_NAMES[sopStatus.bms_state] ?? sopStatus.bms_state ?? "—" : "—");
-  ["#vehSopLimitsValid", "#vehSopDrive", "#vehSopRegen", "#vehSopIntervention", "#vehSopBmsState"]
-    .forEach(id => markStaleData(id, statusKnown && !statusFresh));
+  text("#vehSopAge", limitsKnown ? dataAgeText(sop.limits_age) : "等待数据");
+  ["#vehSopAge", "#vehSopDisKw", "#vehSopChgKw", "#vehSopLimitsValid", "#vehSopDrive", "#vehSopRegen", "#vehSopCrc"]
+    .forEach(id => markStaleData(id, limitsKnown && !limitsFresh));
+  const flagText = value => limitsKnown ? (value ? "是" : "否") : "—";
+  text("#vehSopLimitsValid", flagText(limits.limits_valid));
+  text("#vehSopDrive", flagText(limits.drive_allowed));
+  text("#vehSopRegen", flagText(limits.regen_allowed));
+  text("#vehSopIntervention", diagnosticKnown ? VEH_INTERVENTION_NAMES[diagnostic.intervention_level] ?? "—" : "—");
+  text("#vehSopCrc", limitsKnown ? "通过" : "—");
+  setClass("#vehSopCrc", "ok", limitsKnown && limitsFresh);
   const ack = sop.ecu_ack || {};
   const ackKnown = hasDataAge(sop.ecu_ack_age) && Object.keys(ack).length > 0;
   const ackFresh = isFresh(sop.ecu_ack_age);
-  const ackStateBase = ack.pair_valid && ack.limits_applied ? "已采用新限值"
-    : ack.ecu_fault ? "ECU 故障" : ack.pair_valid ? "校验通过 · 未确认采用" : "校验未通过";
-  const ackState = !ackKnown ? "等待数据"
-    : ackFresh ? ackStateBase : `已过期 · ${ackStateBase}`;
-  text("#vehEcuAckState", ackState);
-  setClass("#vehEcuAckState", "ok", ackFresh && ack.pair_valid && ack.limits_applied);
-  setClass("#vehEcuAckState", "bad", ackFresh && (ack.ecu_fault || (ack.pair_valid === false)));
+  text("#vehEcuAckState", !ackKnown ? "等待数据" : `${ackFresh ? "" : "已过期 · "}${ack.limits_applied ? "已用于扭矩限制" : "尚未采用"}`);
+  setClass("#vehEcuAckState", "ok", ackFresh && ack.limits_applied);
   markStaleData("#vehEcuAckState", ackKnown && !ackFresh);
-  text("#vehEcuPowers", ackKnown ? `${fmt(ack.discharge_power_kw, 1)} / ${fmt(ack.regen_power_kw, 1)} kW` : "—");
-  text("#vehEcuMeta", ackKnown ? `序号 ${ack.sequence ?? "—"} · 来源 ${ack.limit_source ?? "—"} · ${dataAgeText(sop.ecu_ack_age)}` : "—");
-  markStaleData("#vehEcuPowers", ackKnown && !ackFresh);
+  text("#vehEcuMeta", ackKnown ? `序号 ${ack.sequence} · ${dataAgeText(sop.ecu_ack_age)}` : "—");
   markStaleData("#vehEcuMeta", ackKnown && !ackFresh);
 
   // -- BMS mirror ---------------------------------------------------------

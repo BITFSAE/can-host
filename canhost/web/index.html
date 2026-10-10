@@ -410,7 +410,7 @@
 
           <div class="vehicle-column">
             <article class="data-section vehicle-sop-section">
-              <header><h3>SOP 限功率</h3><span id="vehSopAge" class="state-text" title="来源 0x4A0 / 0x4A3">等待数据</span></header>
+              <header><h3>SOP 限功率</h3><span id="vehSopAge" class="state-text" title="来源 0x4A0">等待数据</span></header>
               <div class="readout-grid vehicle-limit-grid">
                 <div><span>放电电流上限</span><b id="vehSopDisA">等待数据</b><em>A</em></div>
                 <div><span>充电电流上限</span><b id="vehSopChgA">等待数据</b><em>A</em></div>
@@ -422,13 +422,11 @@
                 <div><dt>允许行驶</dt><dd id="vehSopDrive">—</dd></div>
                 <div><dt>允许回收</dt><dd id="vehSopRegen">—</dd></div>
                 <div><dt>干预等级</dt><dd id="vehSopIntervention">—</dd></div>
-                <div><dt>配对 CRC</dt><dd id="vehSopCrc">—</dd></div>
-                <div><dt>BMS 状态</dt><dd id="vehSopBmsState">—</dd></div>
+                <div><dt>限值 CRC</dt><dd id="vehSopCrc">—</dd></div>
               </dl>
               <div class="readout-grid rows vehicle-ecu-ack">
                 <div title="来源 0x4A4 · ECU 对 SOP 限值的确认"><span>ECU 确认</span><em id="vehEcuAckState">等待数据</em></div>
-                <div><span>ECU 最终放电 / 回收上限</span><em id="vehEcuPowers">—</em></div>
-                <div><span>确认序号 / 主要限制来源</span><em id="vehEcuMeta">—</em></div>
+                <div><span>确认序号</span><em id="vehEcuMeta">—</em></div>
               </div>
             </article>
             <article class="data-section vehicle-pack-section">

@@ -31,15 +31,21 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["fault"]["received"])
         self.assertEqual(snapshot["fault"]["code_hex"], "0x00000000")
 
-    def test_sop_trio_states(self) -> None:
+    def test_sop_v2_single_frame_and_diagnostic(self) -> None:
         protocol = VehicleProtocol()
-        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("08 07 50 00 E4 02 50 00"), False))
-        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("15 27 05 00 00 FF 60 9C"), False))
-        protocol.ingest(CanFrame(0x4A4, bytes([0x11, 0x07, 0x46, 0xE8, 0x03, 0x82, 0x01, 0x00]), False))
+        frame = CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 02 01 29"), False)
+        protocol.ingest(frame)
+        self.assertEqual(protocol.sop["limits"]["discharge_power_kw"], 74.0)
+        received = protocol.last_sop_limits_monotonic
+        protocol.ingest(frame)
+        self.assertEqual(protocol.last_sop_limits_monotonic, received)
+        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 06 02 01 00"), False))
+        self.assertEqual(protocol.last_sop_limits_monotonic, received)
+        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 24"), False))
+        protocol.ingest(CanFrame(0x4A4, bytes.fromhex("05 02 01 98"), False))
         snapshot = protocol.snapshot({"connected": True})
-        self.assertEqual(snapshot["sop"]["limits"]["discharge_power_kw"], 74.0)
-        self.assertTrue(snapshot["sop"]["status"]["crc_valid"])
-        self.assertFalse(snapshot["sop"]["ecu_ack"]["crc_valid"])
+        self.assertEqual(snapshot["sop"]["status"]["discharge_current_a"], 180.0)
+        self.assertTrue(snapshot["sop"]["ecu_ack"]["limits_applied"])
 
     def test_meter_channels(self) -> None:
         protocol = VehicleProtocol()
@@ -85,7 +91,7 @@ class VehicleProtocolTest(unittest.TestCase):
     def test_quick_values(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x5A0, bytes.fromhex("5D C0 00 96 01 68 00 7B"), False))
-        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("08 07 50 00 E4 02 50 00"), False))
+        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 02 01 29"), False))
         protocol.ingest(CanFrame(0x5A2, bytes([0x0B, 0xB8, 0x0D, 0x48, 0x00, 0x00, 50, 60]), False))
         quick = protocol.quick_values()
         self.assertEqual(quick["pdm"]["bus_voltage_v"], 24.0)
@@ -197,7 +203,7 @@ class VehicleSimulatorTest(unittest.TestCase):
         for frame in frames:
             protocol.ingest(frame)
         snapshot = protocol.snapshot({"connected": True})
-        self.assertTrue(snapshot["sop"]["status"]["crc_valid"])
+        self.assertTrue(snapshot["sop"]["limits"]["crc_valid"])
         self.assertTrue(snapshot["pdm"]["bus"]["voltage_v"] > 20)
         self.assertIsNotNone(snapshot["pack"]["voltage_v"])
         self.assertTrue(snapshot["fan"]["status"]["rpm"][0] > 0)
@@ -217,7 +223,7 @@ class VehicleSimulatorTest(unittest.TestCase):
                 snapshot = service.vehicle_snapshot()
             self.assertIsNotNone(snapshot["pack"]["voltage_v"])
             self.assertIsNotNone(snapshot["pdm"]["bus"]["voltage_v"])
-            self.assertIsNotNone(snapshot["sop"]["limits"]["discharge_current_a"])
+            self.assertIsNotNone(snapshot["sop"]["status"]["discharge_current_a"])
             self.assertTrue(snapshot["fan"]["status"])
             self.assertTrue(snapshot["battery_fan"]["status"])
             quick = service.quick_snapshot()

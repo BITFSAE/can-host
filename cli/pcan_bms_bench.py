@@ -106,18 +106,10 @@ def crc8_sae_j1850(data: Sequence[int]) -> int:
     return crc ^ 0xFF
 
 
-def build_sop_ack(limits: Sequence[int], status: Sequence[int]) -> can.Message:
-    seq_version = status[0]
-    limits_valid = bool(status[1] & 0x01)
-    p_dis = limits[4] | (limits[5] << 8)
-    p_chg = limits[6] | (limits[7] << 8)
-    data = [seq_version, 0x03,
-            p_dis & 0xFF, (p_dis >> 8) & 0xFF,
-            p_chg & 0xFF, (p_chg >> 8) & 0xFF,
-            0 if limits_valid else 7]
+def build_sop_ack(limits: Sequence[int]) -> can.Message:
+    data = [limits[4], 2, 1]
     data.append(crc8_sae_j1850([0x04, 0xA4, *data]))
-    return can.Message(arbitration_id=CAN2_SOP_ACK_ID,
-                       is_extended_id=False, data=data)
+    return can.Message(arbitration_id=CAN2_SOP_ACK_ID, is_extended_id=False, data=data)
 
 
 class BenchModel:
@@ -380,18 +372,14 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
         prefix = "CANB告警等级" if aid == CAN2_ALARM_LEVEL_ID else "告警等级"
         return f"{prefix}: {format_alarm_levels(levels)}"
 
-    if aid == CAN2_SOP_LIMITS_ID and len(data) >= 8:
-        return (f"SOP限值: 放电={(data[0]|data[1]<<8)/10.0:.1f}A/"
-                f"{(data[4]|data[5]<<8)/10.0:.1f}kW 回充="
-                f"{(data[2]|data[3]<<8)/10.0:.1f}A/"
-                f"{(data[6]|data[7]<<8)/10.0:.1f}kW")
-
-    if aid == CAN2_SOP_STATUS_ID and len(data) >= 8:
-        return (f"SOP状态: ver={data[0]>>4} seq={data[0]&0x0F} "
-                f"flags=0x{data[1]:02X} state={data[2]} "
-                f"reason=0x{(data[3]|data[4]<<8):04X} "
-                f"health=0x{data[5]:02X} intervention=0x{data[6]:02X} "
-                f"crc=0x{data[7]:02X}")
+    if aid == CAN2_SOP_LIMITS_ID and len(data) == 8:
+        return (f"SOP功率: 放电={(data[0]|data[1]<<8)/10.0:.1f}kW "
+                f"回收={(data[2]|data[3]<<8)/10.0:.1f}kW "
+                f"seq={data[4]} ver={data[5]} valid={data[6]&1}")
+    if aid == CAN2_SOP_STATUS_ID and len(data) == 8:
+        return (f"SOP诊断: 放电={(data[0]|data[1]<<8)/10.0:.1f}A "
+                f"回充={(data[2]|data[3]<<8)/10.0:.1f}A "
+                f"reason=0x{(data[4]|data[5]<<8):04X} health=0x{data[6]:02X}")
 
     if aid == BMS_CELL_MAX_V_ID and len(data) >= 6:
         return (f"单体极值: Max={((data[0]<<8)|data[1])}mV#{data[4]} "
@@ -806,21 +794,27 @@ class PcanBenchApp:
             self.monitor.cell_max_t_data = data
         elif aid == CAN2_SOP_LIMITS_ID and len(data) == 8:
             self.monitor.sop_limits_data = data
+            self._send_sop_ack_if_valid()
         elif aid == CAN2_SOP_STATUS_ID and len(data) == 8:
             self.monitor.sop_status_data = data
-            self._send_sop_ack_if_valid()
 
     def _send_sop_ack_if_valid(self) -> None:
         if not self.args.sop_ack:
             return
         limits = self.monitor.sop_limits_data
-        status = self.monitor.sop_status_data
-        if limits is None or status is None:
+        if limits is None or limits[5] != 2 or limits[6] & 0xFE:
             return
-        crc_data = [0x04, 0xA0, *limits, 0x04, 0xA3, *status[:7]]
-        if (status[0] >> 4) != 1 or crc8_sae_j1850(crc_data) != status[7]:
+        if crc8_sae_j1850([0x04, 0xA0, *limits[:7]]) != limits[7]:
             return
-        self._send(build_sop_ack(limits, status))
+        sequence = limits[4]
+        if sequence == getattr(self, "_last_sop_ack_sequence", None):
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_last_sop_ack_at", 0.0) < 0.05:
+            return
+        self._send(build_sop_ack(limits))
+        self._last_sop_ack_sequence = sequence
+        self._last_sop_ack_at = now
         self.monitor.sop_ack_count += 1
 
     def _stdin(self) -> None:
@@ -840,7 +834,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
     p.add_argument("--canb-sop-ack", "--sop-ack", dest="sop_ack", action="store_true",
-                   help="CANB ECU确认模式：校验 0x4A0/0x4A3 并发送 0x4A4")
+                   help="CANB ECU确认模式：校验 V2 单帧 0x4A0 并发送 4 字节 0x4A4")
     return p.parse_args(argv)
 
 

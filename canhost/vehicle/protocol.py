@@ -25,7 +25,7 @@ from ..decoders import (ECU_WHEEL_NAMES, METER_IDS, CanFrame, age, canb_frame_na
                         decode_fan_calib_limits, decode_fan_profile, decode_bms_fan_status,
                         decode_bms_fan_ack, decode_bms_fan_calib,
                         decode_meter_result, decode_pack_status,
-                        decode_pdm_side, decode_sop_limits, decode_sop_status,
+                        decode_pdm_side, decode_sop_limits, decode_sop_status, sop_sequence_is_new,
                         decode_tire_temp_frame, format_raw_frame,
                         FAN_COMMAND_ACK_ID, FAN_CURVE_STATUS_ID, FAN_DIAGNOSTIC_ID,
                         FAN_FAILSAFE_STATUS_ID, FAN_STATUS_ID, FAN_POWER_STATUS_ID,
@@ -48,7 +48,6 @@ class VehicleProtocol:
         self.fault: dict[str, Any] = {}
         self.last_fault_monotonic: float | None = None
         self.sop: dict[str, Any] = {"limits": {}, "status": {}, "ecu_ack": {}}
-        self._sop_limits_data: bytes | None = None
         self.last_sop_limits_monotonic: float | None = None
         self.last_sop_status_monotonic: float | None = None
         self.last_sop_ack_monotonic: float | None = None
@@ -131,16 +130,23 @@ class VehicleProtocol:
         elif can_id == 0x4B1 and len(data) >= 8:
             self.fault = decode_fault_fields(data)
             self.last_fault_monotonic = now_mono
-        elif can_id == 0x4A0 and len(data) >= 8:
-            self._sop_limits_data = bytes(data[:8])
-            self.sop["limits"] = decode_sop_limits(data, little_endian=True)
-            self.last_sop_limits_monotonic = now_mono
-        elif can_id == 0x4A3 and len(data) >= 8:
-            self.sop["status"] = decode_sop_status(data, self._sop_limits_data)
-            self.last_sop_status_monotonic = now_mono
-        elif can_id == 0x4A4 and len(data) >= 8:
-            self.sop["ecu_ack"] = decode_ecu_sop_ack(data)
-            self.last_sop_ack_monotonic = now_mono
+        elif can_id == 0x4A0:
+            decoded = decode_sop_limits(data, little_endian=True)
+            sop_age = None if self.last_sop_limits_monotonic is None else now_mono - self.last_sop_limits_monotonic
+            if decoded["frame_valid"] and sop_sequence_is_new(decoded["sequence"], self.sop["limits"].get("sequence"), sop_age):
+                self.sop["limits"] = decoded
+                self.last_sop_limits_monotonic = now_mono
+        elif can_id == 0x4A3:
+            decoded = decode_sop_status(data)
+            if decoded["frame_valid"]:
+                self.sop["status"] = decoded
+                self.last_sop_status_monotonic = now_mono
+        elif can_id == 0x4A4:
+            decoded = decode_ecu_sop_ack(data)
+            if decoded["frame_valid"] and decoded["sequence"] != self.sop["ecu_ack"].get("sequence"):
+                self.sop["ecu_ack"] = decoded
+                self.last_sop_ack_monotonic = now_mono
+
         elif can_id in METER_IDS and len(data) >= 6:
             expected_mux, key, scale = METER_IDS[can_id]
             result = decode_meter_result(data, expected_mux)
