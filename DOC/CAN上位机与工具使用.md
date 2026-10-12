@@ -59,6 +59,8 @@ CAN1 `0x186950F4` 结束状态版本 2 用于 Chroma 和 Legacy，满充确认�
 
 故障 bit18 的提示涵盖 CAN/TIM 启动、CANB 位率切换和 Legacy 停充确认失败。具体来源需结合主控保存的 BOOT 结果及结束状态判断，排查步骤见 F405 的 `DOC/调试与台架测试.md` 第 16.5 节。
 
+2026-10-12 修订后的 F405 把纯 CAN 仲裁失败单独记为发送诊断，bit21 继续表示其他运行错误。故障和等级帧布局保持，上位机仍按原字段解码；旧固件的 bit21 也可能包含纯仲裁失败。具体错误需读取主控串口 `status show` 的 `CAN:` 和 `CAN_DETAIL:`，字段与验证方法见 [F405 调试说明](../../BMS_MASTER_F405/DOC/调试与台架测试.md#165-canflash-和风扇)。
+
 ### 旧充电机 Legacy 250 kbit/s
 
 主控先刷 `Debug-Bringup-Legacy` 专用固件；充电类型由固件决定，上位机不发送类型切换命令。CAN1 身份显示为 Debug-Bringup 和“固定 Legacy 类型”，保护动作开关按 Bringup 规则可修改。旧 Release-Legacy 会拒绝关闭基础保护，返回参数错误、detail=0。主控变更和实物验收见 `../BMS_MASTER_F405/DOC/旧充电机使用.md`。

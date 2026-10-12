@@ -66,6 +66,30 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["config"]["switches"]["cell_lbk"])
         self.assertTrue(snapshot["config"]["switches"]["cell_tbk"])
 
+    def test_can_runtime_alarm_keeps_existing_can1_canb_layout(self) -> None:
+        # F405 only changes which errors set bit21; frame version 4 stays valid.
+        for fault_id, level_id, extended in ((0x187650F4, 0x187850F4, True),
+                                             (0x4B1, 0x4B2, False)):
+            with self.subTest(fault_id=hex(fault_id)):
+                protocol = BmsProtocol()
+                protocol.ingest(CanFrame(fault_id, bytes.fromhex("30 00 21 00 10 00 00 04"), extended))
+                protocol.ingest(CanFrame(level_id, bytes.fromhex("00 01 00 00 01 08 00 00"), extended))
+                snapshot = protocol.snapshot({"connected": True})
+                self.assertEqual(snapshot["fault"]["version"], 4)
+                self.assertEqual(snapshot["fault"]["alarm_level"], 0)
+                self.assertEqual(snapshot["alarms"][21]["name"], "CAN 运行异常")
+                self.assertEqual(snapshot["alarms"][21]["level"], 2)
+                self.assertTrue(snapshot["alarms"][21]["in_fault_code"])
+                self.assertEqual(snapshot["alarms"][22]["level"], 0)
+
+                protocol.ingest(CanFrame(fault_id, bytes.fromhex("30 00 01 00 10 00 00 04"), extended))
+                protocol.ingest(CanFrame(level_id, bytes.fromhex("00 01 00 00 01 00 00 00"), extended))
+                snapshot = protocol.snapshot({"connected": True})
+                self.assertEqual(snapshot["alarms"][21]["level"], 0)
+                self.assertFalse(snapshot["alarms"][21]["in_fault_code"])
+                self.assertTrue(snapshot["alarms"][4]["in_fault_code"])
+                self.assertTrue(snapshot["alarms"][16]["in_fault_code"])
+
     def test_fault_frames_do_not_keep_electrical_summary_fresh(self) -> None:
         clock = [0.0]
         protocol = BmsProtocol(clock=lambda: clock[0])
