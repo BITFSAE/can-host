@@ -782,7 +782,7 @@ def decode_bms_firmware_identity(data: bytes) -> dict[str, object]:
     }
     if data[0] == 5:
         charger = (data[1] >> 2) & 0x03
-        result["charger_variant"] = {0: "运行时选择", 1: "Legacy 固定 250k"}.get(charger, f"未知 {charger}")
+        result["charger_variant"] = {0: "运行时选择", 1: "固定 Legacy 类型"}.get(charger, f"未知 {charger}")
         result["charger_variant_code"] = charger
     return result
 

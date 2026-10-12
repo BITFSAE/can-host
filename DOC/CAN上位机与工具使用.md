@@ -60,15 +60,17 @@ CAN1 `0x186950F4` 结束状态版本 2 用于 Chroma 和 Legacy，满充确认�
 
 ### 旧充电机 Legacy 250 kbit/s
 
-主控先刷 `Debug-Bringup-Legacy` 专用固件；充电类型由固件决定，上位机不发送类型切换命令。CAN1 身份显示为 Debug-Bringup 和“Legacy 固定 250k”，保护动作开关按 Bringup 规则可修改。旧 Release-Legacy 会拒绝关闭基础保护，返回参数错误、detail=0。主控变更和实物验收见 `../BMS_MASTER_F405/DOC/旧充电机使用.md`。
+主控先刷 `Debug-Bringup-Legacy` 专用固件；充电类型由固件决定，上位机不发送类型切换命令。CAN1 身份显示为 Debug-Bringup 和“固定 Legacy 类型”，保护动作开关按 Bringup 规则可修改。旧 Release-Legacy 会拒绝关闭基础保护，返回参数错误、detail=0。主控变更和实物验收见 `../BMS_MASTER_F405/DOC/旧充电机使用.md`。
 
 1. 在底部 CAN 连接设置中，为 CANB 选择“Legacy 充电机 · 250 kbit/s”，保存后连接 CANB。已连接时先断开再连接，新位率才会生效；修改设置不会中途重配总线。
 2. CAN1 保持 500 kbit/s，用于六个模组、IVT、参数和保护监视；双路连接选择不同的 PCAN 通道。单通道仍可轮换连接。
 3. “参数与命令”显示“充电 · Legacy”和充电机反馈。连接 CAN1 时使用 F405 的反馈镜像；仅连接 CANB 时使用 `0x18FF50E5` 原始反馈，超过 500 ms 显示反馈超时。原始状态字节保留在 CAN 监视中，不推断各位含义。
 4. CAN 监视器将两条 Legacy 扩展帧标为充电请求/反馈。`.bmslog` 保存 250 kbit/s 元数据，回放保持总线与位率；CSV 缺少位率元数据时按默认档案推断，不据此确认实体位率。
-5. CAN1 固件身份可识别“Legacy 固定 250k”。电池箱风扇来源 1 显示“充电车 35W”，兼容 Chroma 与 Legacy 共用供电。
+5. CAN1 固件身份可识别“固定 Legacy 类型”。电池箱风扇来源 1 显示“充电车 35W”，兼容 Chroma 与 Legacy 共用供电。
 
 “参数与命令”的“正常充电结束”使用 CAN1 `0x186950F4`；两种充电机的当前版本 2、历史版本 1 和旧帧兼容统一见本页第 5 节。上位机只显示主控结果，不发起充电。仅连接 CANB 可看充电机原始反馈；正常完成以主控结束状态为准。
+
+新版 `Debug-Bringup-Legacy` 自检使用 250 kbit/s；无 CHG_SIG 请求进入待机后回到 500 kbit/s，再次收到请求后恢复 250 kbit/s。身份帧只标识固定 Legacy 类型，新旧固件使用相同布局，实际位率以主控 `status show` 的 `Can2Kbps` 为准。上位机连接不会自动跟随切换；确认主控位率后选择对应设置并断开重连。完整切换条件及异常恢复见主控 `DOC/旧充电机使用.md` 第 2.2 节。
 
 250 kbit/s 用于旧充电机监视。F405 参数命令仍要求真实 CAN1、新鲜状态及确认；IVT 配置仍固定 CAN1 500 kbit/s。两套风扇写操作和标定仍要求 CANB 500 kbit/s，Legacy 连接下保持禁用。原始发送器禁止单发或周期发送 `0x1806E5F4`，充电使能由主控决定。恢复整车或 Chroma 时选择 500 kbit/s 并重连。
 
