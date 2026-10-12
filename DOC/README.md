@@ -21,6 +21,7 @@
 | FanController | `../FanController/`：`Core/Src/fan_controller.c`、`Doc/风扇控制.md` |
 | F405 电池箱风扇 | `../BMS_MASTER_F405/`：`App/bms_fan.c`、`DOC/风扇控制.md` |
 | PDM | `../PDM/`：`Core/Src/pdm_monitor.c`、`Doc/CAN接口.md` |
+| 车手屏收发 | `../HMI_Display/`：`stm32_port/Core/Src/can.c`、`sop.c`、`docs/can_interface.md` |
 | 整车 DBC | `../vehicle-interfaces/can/Vehicle_CanB.dbc` |
 | MQTT Protobuf | `../vehicle-interfaces/telemetry/fsae_telemetry.proto` |
 | IVT 目标配置 | `../BMS_MASTER_F405/DOC/IVT能量计配置与CANB切换.md` |

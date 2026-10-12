@@ -17,6 +17,9 @@
     calib  电池箱风扇标定进行中，整车写入锁定
     sim    内置模拟通道（只能读、不能下发），用于核对写入锁定与横幅
 
+车手屏联调页不用快照：它的接口转发到本进程里真实的后端（无硬件预览模式），
+点“连接车手屏”并勾选“无硬件预览”即可操作整页，不发送任何 CAN 帧。
+
 只用于界面审阅：数据是模拟值，不代表任何真实测量。
 """
 
@@ -56,8 +59,16 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
     return data;
   }
   const ok = async () => ({ ok: true });
+  // 车手屏联调走真实后端（预览模式），其余接口仍用静态快照。
+  const live = name => async (...args) => (await fetch(`/api/${name}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) })).json();
   const base = {
-    bootstrap: async () => clone((await load()).bootstrap),
+    bootstrap: async () => ({ ...clone((await load()).bootstrap), ...(await live("bootstrap_display")()) }),
+    connect_display_bench: live("connect_display_bench"),
+    disconnect_display_bench: live("disconnect_display_bench"),
+    get_display_bench_snapshot: live("get_display_bench_snapshot"),
+    display_bench_set: live("display_bench_set"),
+    display_bench_command: live("display_bench_command"),
     workbench_preferences: async () => clone(workbench),
     set_connection_preferences: async value => { workbench.connection = clone(value); return { ok: true }; },
     set_monitor_tx_rows: async value => { workbench.monitor_tx_rows = clone(value); return { ok: true }; },
@@ -238,6 +249,33 @@ def build_page(out_dir: Path) -> None:
 class PreviewHandler(SimpleHTTPRequestHandler):
     """预览用的静态服务：禁用缓存，改完前端刷新即生效；不打印每条请求。"""
 
+    live_api: Api | None = None
+    live_methods = {"connect_display_bench", "disconnect_display_bench", "get_display_bench_snapshot",
+                    "display_bench_set", "display_bench_command"}
+
+    def do_POST(self) -> None:
+        """把车手屏联调的接口调用转给真实后端，其余路径一律拒绝。"""
+        name = self.path.removeprefix("/api/")
+        api = type(self).live_api
+        if not self.path.startswith("/api/") or api is None:
+            self.send_error(404)
+            return
+        args = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or "[]")
+        if name == "bootstrap_display":
+            full = api.bootstrap()
+            result = {key: full[key] for key in ("display_bench_enabled", "display_bench_preview", "display_bench")}
+        elif name in self.live_methods:
+            result = getattr(api, name)(*args)
+        else:
+            self.send_error(404)
+            return
+        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
         super().end_headers()
@@ -259,6 +297,7 @@ def main() -> None:
     for variant in VARIANTS:
         assert (out_dir / f"mock-{variant}.json").is_file()
 
+    PreviewHandler.live_api = Api()
     handler = partial(PreviewHandler, directory=str(out_dir))
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
@@ -272,6 +311,8 @@ def main() -> None:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\n已停止")
+        finally:
+            PreviewHandler.live_api.close()
 
 
 if __name__ == "__main__":

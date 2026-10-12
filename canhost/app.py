@@ -17,6 +17,7 @@ from .transport import CanService
 from .pcan_channels import discover_pcan_channels
 from .bms.protocol import switch_catalog
 from .decoders import bms_sampling_rules
+from .display.service import DisplayBenchService, bench_catalog
 from .telemetry import TelemetryService
 from .updater import (
     DEFAULT_CNB_REPO,
@@ -100,6 +101,10 @@ class Api:
         # sender, the IVT configurator, or the fan tool uses its own PCAN handle.
         self._bench_service = CanService(allow_simulation=False)
         self._ivt_service = CanService(allow_simulation=False)
+        # The driver-display bench owns its PCAN handles as well.  It sends real
+        # frames, so release packages keep it hardware-only: the no-hardware
+        # preview exists only for source runs, like the CAN debug simulation.
+        self._display_bench = DisplayBenchService(allow_preview=simulation_available)
         # CANB is one physical connection.  Its receive stream feeds both the
         # vehicle protocol and a BMS mirror projection while the independent
         # CAN1 connection remains available for detailed data and commands.
@@ -231,6 +236,9 @@ class Api:
             "sampling_rules": bms_sampling_rules(),
             "simulation_enabled": self._service.allow_simulation,
             "bench_enabled": True,
+            "display_bench_enabled": True,
+            "display_bench_preview": self._display_bench.allow_preview,
+            "display_bench": bench_catalog(),
             "ivt_enabled": True,
             "vehicle_enabled": True,
             "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
@@ -472,6 +480,21 @@ class Api:
 
     def get_bench_snapshot(self) -> dict[str, Any]:
         return self._bench_service.bench_snapshot()
+
+    def connect_display_bench(self, config: dict[str, Any]) -> dict[str, Any]:
+        return self._display_bench.connect(config)
+
+    def disconnect_display_bench(self) -> dict[str, Any]:
+        return self._display_bench.disconnect()
+
+    def get_display_bench_snapshot(self) -> dict[str, Any]:
+        return self._display_bench.snapshot()
+
+    def display_bench_set(self, patch: dict[str, Any]) -> dict[str, Any]:
+        return self._display_bench.set_values(patch)
+
+    def display_bench_command(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._display_bench.command(name, args)
 
     def connect_ivt(self, config: dict[str, Any]) -> dict[str, Any]:
         bitrate = int(config.get("bitrate") or 500000)
@@ -938,6 +961,7 @@ class Api:
     def close(self) -> None:
         self._service.disconnect()
         self._bench_service.disconnect()
+        self._display_bench.disconnect()
         self._ivt_service.disconnect()
         self._vehicle_service.disconnect()
         self._telemetry_service.disconnect()
@@ -1027,6 +1051,8 @@ def main() -> None:
                 raise SystemExit("打包自检失败：缺少 PCAN 通道枚举接口")
             if not bootstrap["telemetry_simulator_enabled"]:
                 raise SystemExit("打包自检失败：发布包未包含本地遥测模拟器")
+            if not bootstrap["display_bench_enabled"] or not bootstrap["display_bench"]["frames"]:
+                raise SystemExit("打包自检失败：发布包未包含车手屏联调")
             simulator_frame = TelemetryFrameGenerator().generate_frame()
             if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
                 raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
@@ -1038,6 +1064,9 @@ def main() -> None:
                 # 界面上的“调试模拟”开关因此根本不会出现。
                 if bootstrap["simulation_enabled"] or bootstrap["vehicle_simulation_enabled"]:
                     raise SystemExit("打包自检失败：硬件专用发布包不应提供调试模拟通道")
+                if bootstrap["display_bench_preview"] or api.connect_display_bench(
+                        {"preview": True, "confirmed": True}).get("ok"):
+                    raise SystemExit("打包自检失败：硬件专用发布包不应提供车手屏联调的无硬件预览")
                 rejected = api.connect_can({"mode": "simulation", "bus_profile": "can1",
                                             "bitrate": 500000})
                 if rejected.get("ok") or "真实 PCAN" not in str(rejected.get("error", "")):

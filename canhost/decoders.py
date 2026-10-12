@@ -9,7 +9,9 @@ module and the DBC get updated.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+import math
 import time
 from typing import Any
 
@@ -821,3 +823,259 @@ def decode_bms_hv_status(data: bytes) -> dict[str, Any]:
             "legacy_end_name": names.get(state, "状态未知" if version else "固件未提供"),
             "legacy_end_hold_s": data[6] if state in names and hold_target is not None and data[6] <= hold_target else None,
             "charge_end_target_s": hold_target}
+
+
+# ---------------------------------------------------------------------------
+# Frame builders for the driver-display bench (车手屏联调)
+#
+# Each builder is the exact inverse of the decoder next to it and produces the
+# bytes a vehicle node sends to the display; the bench therefore never keeps a
+# second copy of a layout.  Out-of-range inputs saturate at the field limits so
+# a typo in the UI cannot raise inside the sender thread.  Fields the display
+# does not read keep fixed fillers and are documented where they occur.
+# ---------------------------------------------------------------------------
+
+PACK_STATUS_ID = 0x4B0
+SOP_POWER_ID = 0x4A0
+SOP_STATUS_ID = 0x4A3
+DATA_LOGGER_ID = 0x305
+ECU_TORQUE_ID = 0x502
+ECU_DIAG_RL_RR_ID = 0x503
+ECU_DIAG_FL_FR_ID = 0x504
+ECU_VELOCITY_ID = 0x505
+ECU_MOTOR_TEMP_ID = 0x506
+ECU_INVERTER_TEMP_ID = 0x507
+ECU_IGBT_TEMP_ID = 0x508
+ECU_STATUS_ID = 0x509
+
+SOP_PROTOCOL_VERSION = 2
+# Display-order wheels are FL, FR, RL, RR; ECU frames carry RL, RR, FL, FR.
+ECU_WIRE_ORDER = (2, 3, 0, 1)
+
+
+def _scaled(value: float, scale: float, minimum: int, maximum: int) -> int:
+    """Round half up after dividing by the DBC factor, then saturate."""
+    return max(minimum, min(maximum, int(math.floor(value / scale + 0.5))))
+
+
+def _i16(value: int, byteorder: str) -> bytes:
+    return int(value).to_bytes(2, byteorder, signed=True)  # type: ignore[arg-type]
+
+
+def _u16(value: int, byteorder: str) -> bytes:
+    return int(value).to_bytes(2, byteorder, signed=False)  # type: ignore[arg-type]
+
+
+def build_pack_status(voltage_v: float, current_a: float, soc_raw: int, *,
+                      voltage_valid: bool = True, current_valid: bool = True,
+                      soc_valid: bool = True, cells_complete: bool = True,
+                      temperatures_complete: bool = True, state: int = 5,
+                      alarm_level: int = 0) -> bytes:
+    """BMS 0x4B0 (7 bytes); inverse of :func:`decode_pack_status`."""
+    flags = (int(voltage_valid) | int(current_valid) << 1 | int(soc_valid) << 2
+             | int(cells_complete) << 3 | int(temperatures_complete) << 4)
+    return (_u16(_scaled(voltage_v, 0.1, 0, 0xFFFF), "big")
+            + _i16(_scaled(current_a, 0.1, -32768, 32767), "big")
+            + bytes([max(0, min(255, int(soc_raw))), flags,
+                     (state & 0x0F) << 4 | (alarm_level & 0x0F)]))
+
+
+def build_sop_limits(discharge_kw: float, regen_kw: float, sequence: int, *,
+                     limits_valid: bool = True, version: int = SOP_PROTOCOL_VERSION,
+                     reserved_bits: int = 0, crc_error: bool = False) -> bytes:
+    """BMS 0x4A0 (8 bytes, little endian, trailing CRC-8); see decode_sop_limits.
+
+    With ``limits_valid`` false the BMS sends zero power, so the builder does
+    too.  ``version``, ``reserved_bits`` and ``crc_error`` exist to produce the
+    frames the display must reject.
+    """
+    discharge = _scaled(discharge_kw, 0.1, 0, 0xFFFF) if limits_valid else 0
+    regen = _scaled(regen_kw, 0.1, 0, 0xFFFF) if limits_valid else 0
+    body = (_u16(discharge, "little") + _u16(regen, "little")
+            + bytes([sequence & 0xFF, version & 0xFF, int(limits_valid) | (reserved_bits & 0xFE)]))
+    crc = crc8_sae_j1850(SOP_POWER_ID.to_bytes(2, "big") + body)
+    return body + bytes([crc ^ 0xFF if crc_error else crc])
+
+
+def build_sop_status(discharge_a: float, regen_a: float, *, inputs_valid: bool = True,
+                     limit_reason: int = 0, flags: int = 0x4,
+                     version: int = SOP_PROTOCOL_VERSION) -> bytes:
+    """BMS 0x4A3 (8 bytes); the display reads currents, InputHealth bit7 and the version.
+
+    ``flags`` is the low nibble of byte 7 (default: ECU acknowledge fresh).
+    """
+    return (_u16(_scaled(discharge_a, 0.1, 0, 0xFFFF), "little")
+            + _u16(_scaled(regen_a, 0.1, 0, 0xFFFF), "little")
+            + _u16(limit_reason & 0xFFFF, "little")
+            + bytes([0xFF if inputs_valid else 0x7F, (version & 0x0F) << 4 | (flags & 0x0F)]))
+
+
+def build_data_logger(steering_deg: float, throttle_pct: float, oil_kpa: float) -> bytes:
+    """ECU 0x305 (6 bytes, little endian): steering 0.1 deg, throttle 0.1 %, oil 0.001 kPa."""
+    return (_i16(_scaled(steering_deg, 0.1, -32768, 32767), "little")
+            + _u16(_scaled(throttle_pct, 0.1, 0, 0xFFFF), "little")
+            + _u16(_scaled(oil_kpa, 0.001, 0, 0xFFFF), "little"))
+
+
+def build_ecu_wheels_i16(values: Sequence[float], scale: float) -> bytes:
+    """ECU 0x502/0x505..0x508; ``values`` in display order FL, FR, RL, RR (inverse of decode_ecu_wheels_i16)."""
+    return b"".join(_i16(_scaled(values[index], scale, -32768, 32767), "little")
+                    for index in ECU_WIRE_ORDER)
+
+
+def build_amk_diagnostic(first: int, second: int) -> bytes:
+    """ECU 0x503 (RL, RR) or 0x504 (FL, FR): two little-endian uint32 AMK diagnostic numbers."""
+    return (max(0, min(0xFFFFFFFF, int(first))).to_bytes(4, "little")
+            + max(0, min(0xFFFFFFFF, int(second))).to_bytes(4, "little"))
+
+
+def _wheel_nibble(fl: bool, fr: bool, rl: bool, rr: bool) -> int:
+    return int(fr) | int(fl) << 1 | int(rr) << 2 | int(rl) << 3
+
+
+def build_ecu_status(mode: int, enabled: Sequence[bool], faults: Sequence[int]) -> bytes:
+    """ECU 0x509 (5 bytes); ``enabled`` and ``faults`` in display order FL, FR, RL, RR.
+
+    The display reads the mode nibble (signed, -1 = ECU default) and the four
+    enable bits.  Error, ready and quit nibbles mirror enable and fault state;
+    the two logic-state bytes are a fixed filler the display ignores.
+    """
+    enable = _wheel_nibble(*enabled)
+    error = _wheel_nibble(*(bool(value) for value in faults))
+    return bytes([(mode & 0x0F) << 4 | error, enable | enable << 4, enable | enable << 4, 0x44, 0x44])
+
+
+def build_pdm_side(voltage_v: float, current_a: float, power_w: float, energy_wh: float, *,
+                   offline: bool = False) -> bytes:
+    """PDM 0x5A0/0x5A1 (big endian); ``offline`` sends the four INA226-offline placeholders."""
+    if offline:
+        return bytes.fromhex("7FFF7FFFFFFFFFFF")
+    return (_i16(_scaled(voltage_v, 0.001, -32768, 32767), "big")
+            + _i16(_scaled(current_a, 0.01, -32768, 32767), "big")
+            + _u16(_scaled(power_w, 0.1, 0, 0xFFFF), "big")
+            + _u16(_scaled(energy_wh, 0.01, 0, 0xFFFF), "big"))
+
+
+def build_fan_status(rpm: Sequence[int], duty_pct: Sequence[int]) -> bytes:
+    """FanController 0x5A2 (big endian); inverse of :func:`decode_fan_status`."""
+    return (b"".join(_u16(max(0, min(0xFFFF, int(value))), "big") for value in rpm[:3])
+            + bytes(max(0, min(255, int(value))) for value in duty_pct[:2]))
+
+
+def build_tire_frame(temperatures_c: Sequence[float]) -> bytes:
+    """Tyre module 0x071..0x074: four points, each an integer-degree byte and a hundredths byte."""
+    payload = bytearray()
+    for value in temperatures_c[:4]:
+        centi = _scaled(value, 0.01, 0, 255 * 100 + 99)
+        payload += bytes([centi // 100, centi % 100])
+    return bytes(payload)
+
+
+DRIVE_MODE_REQUEST_ID = 0x310
+SLIP_LEVEL_ID = 0x700
+LAP_TOGGLE_ID = 0x701
+ERROR_CLEAR_ID = 0x702
+DRIVE_MODE_ASCII_ZERO = 48
+
+
+def build_drive_mode_request(code: int) -> bytes:
+    """Steering wheel 0x310: DLC 8, byte 0 is the ASCII code ('0'..'3' = 48..51)."""
+    return bytes([code & 0xFF]) + bytes(7)
+
+
+def build_slip_level(level: int) -> bytes:
+    """Steering wheel 0x700: DLC 1, slip level 0..7."""
+    return bytes([level & 0xFF])
+
+
+def build_button_press(pressed: bool = True) -> bytes:
+    """Steering wheel 0x701/0x702: DLC 1, bit 0 set once per press."""
+    return bytes([1 if pressed else 0])
+
+
+# ---------------------------------------------------------------------------
+# Frames the display itself sends on CANB (consumed by the bench to prove the
+# display is alive and to show what it relays).  Layouts follow HMI_Display
+# Core/Src/can.c and vehicle-interfaces docs/CANB接口.md section 10.
+# ---------------------------------------------------------------------------
+
+DISPLAY_SPEED_ID = 0x301
+DISPLAY_POSITION_ID = 0x067
+DISPLAY_MOTION_ID = 0x068
+DISPLAY_STATUS_ID = 0x7A0
+DISPLAY_LAP_ID = 0x7A1
+STEERING_COMMAND_ID = 0x703
+DISPLAY_TX_IDS = (DISPLAY_SPEED_ID, DISPLAY_POSITION_ID, DISPLAY_MOTION_ID,
+                  DISPLAY_STATUS_ID, DISPLAY_LAP_ID, STEERING_COMMAND_ID, DRIVE_MODE_REQUEST_ID)
+LAP_DIAG_NAMES = {0: "未启用", 1: "等待布防", 2: "已布防", 3: "接近起终点线",
+                  4: "漏门", 5: "反向穿越", 6: "已过线"}
+
+
+def decode_display_speed(data: bytes) -> dict[str, Any] | None:
+    """0x301 GPS ground speed, DLC 2, 0.1 km/h."""
+    if len(data) != 2:
+        return None
+    return {"speed_kmh": u16le(data) / 10.0}
+
+
+def decode_display_position(data: bytes) -> dict[str, Any] | None:
+    """0x067 latitude then longitude, int32 little endian, 1e-7 degree."""
+    if len(data) != 8:
+        return None
+    return {"latitude_deg": int.from_bytes(data[0:4], "little", signed=True) / 1e7,
+            "longitude_deg": int.from_bytes(data[4:8], "little", signed=True) / 1e7}
+
+
+def decode_display_motion(data: bytes) -> dict[str, Any] | None:
+    """0x068 track, dual-antenna heading, altitude and the packed status word."""
+    if len(data) != 8:
+        return None
+    word = u16le(data, 6)
+    return {
+        "track_deg": u16le(data) / 100.0, "heading_deg": u16le(data, 2) / 100.0,
+        "altitude_m": int.from_bytes(data[4:6], "little", signed=True) / 10.0,
+        "position_valid": bool(word & 1), "heading_valid": bool(word & 2),
+        "lap_active": bool(word & 4), "rmc_valid": bool(word & 8),
+        "lap_diag_state": (word >> 4) & 7, "heading_quality": (word >> 7) & 7,
+        "fix_quality": (word >> 10) & 7, "signal_level": (word >> 13) & 7,
+    }
+
+
+def decode_display_status(data: bytes) -> dict[str, Any] | None:
+    """0x7A0 odometer (0.1 km, 24 bit), SNR, satellites and lap count."""
+    if len(data) != 8:
+        return None
+    return {
+        "odometer_km": int.from_bytes(data[0:3], "little") / 10.0,
+        "max_snr": int.from_bytes(data[3:4], "little", signed=True),
+        "avg_snr": int.from_bytes(data[4:5], "little", signed=True),
+        "satellites": data[5], "gsv_tracked_satellites": data[6], "lap_count": data[7],
+    }
+
+
+def decode_display_lap(data: bytes) -> dict[str, Any] | None:
+    """0x7A1 current, last and best lap (0.01 s) and the signed lap delta."""
+    if len(data) != 8:
+        return None
+    return {
+        "current_s": u16le(data) / 100.0, "last_s": u16le(data, 2) / 100.0,
+        "best_s": u16le(data, 4) / 100.0,
+        "delta_s": int.from_bytes(data[6:8], "little", signed=True) / 100.0,
+    }
+
+
+def decode_steering_command(data: bytes) -> dict[str, Any] | None:
+    """0x703 merged steering command: slip level, lap-timer toggle and error clear."""
+    if len(data) != 2:
+        return None
+    return {"slip_level": data[0] & 7, "lap_toggle": bool(data[1] & 1),
+            "error_clear": bool(data[1] & 2)}
+
+
+def decode_drive_mode_request(data: bytes) -> dict[str, Any] | None:
+    """0x310 drive-mode request as relayed by the display; ``mode`` is None outside '0'..'3'."""
+    if not data:
+        return None
+    code = data[0]
+    valid = DRIVE_MODE_ASCII_ZERO <= code <= DRIVE_MODE_ASCII_ZERO + 3
+    return {"code": code, "mode": code - DRIVE_MODE_ASCII_ZERO if valid else None}

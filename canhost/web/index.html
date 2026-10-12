@@ -84,6 +84,10 @@
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>
               <span>IVT配置</span>
             </button>
+            <button class="nav-item" type="button" data-page="display" title="车手屏联调">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.8"/><path d="M8 20h8M12 17v3"/><path d="m7 13 2.5-3 2.5 2 3.5-4"/></svg>
+              <span>车手屏联调</span>
+            </button>
             <button class="nav-item" id="telemetrySimulatorNav" type="button" data-page="simulator" title="本地遥测模拟器">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5h16M6.5 14.5a7 7 0 0 1 11 0M9.2 11.5a3.8 3.8 0 0 1 5.6 0"/><path d="M12 4.5v4M10 6.5h4"/><circle cx="12" cy="17.5" r="1.3"/></svg>
               <span>遥测数据模拟</span>
@@ -681,6 +685,156 @@
           </div>
         </section>
 
+        <section class="page" id="page-display" aria-label="车手屏联调">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>车手屏联调</h2>
+              <span class="tool-header-desc">模拟 CANB 节点与方向盘 · 500 kbit/s · 发送给 HMI_Display</span>
+            </div>
+            <div class="tool-header-connection">
+              <span id="dbStatus" class="tag neutral" role="status" aria-live="polite">未连接</span>
+              <div class="tool-connection-controls">
+                <button class="action-button" type="button" id="dbConnectButton">连接车手屏</button>
+                <button class="danger-outline hidden" type="button" id="dbDisconnectButton">断开</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="dbNotice" class="db-notice hidden" role="alert">
+            <span id="dbNoticeText"></span>
+            <button class="outline-button hidden" type="button" id="dbResumeButton">继续发送</button>
+          </div>
+
+          <article class="panel db-control">
+            <div class="db-control-row">
+              <div class="db-control-group">
+                <span class="db-label">运行方式</span>
+                <div class="segmented small" id="dbRunMode" role="group" aria-label="运行方式">
+                  <button type="button" data-run="manual" title="数值保持你设定的值">手动</button>
+                  <button type="button" data-run="cycle" title="循环演示加速、巡航、制动和绕桩，读数自动变化">行驶循环</button>
+                </div>
+                <span id="dbCycleInfo" class="db-cycle-info hidden"></span>
+              </div>
+              <div class="db-control-group db-control-end">
+                <span id="dbAliveTag" class="tag neutral">车手屏 —</span>
+                <span id="dbTxSummary" class="db-tx-summary">未连接</span>
+                <button class="outline-button" type="button" id="dbPauseButton" title="全部报文停发，车手屏各读数在超时后显示 --">暂停发送</button>
+                <button class="outline-button" type="button" id="dbResetButton" title="数值、开关、异常注入全部回到默认">恢复默认</button>
+              </div>
+            </div>
+            <div class="db-control-row db-scenario-row">
+              <span class="db-label">场景</span>
+              <div id="dbScenarios" class="db-chip-row"></div>
+            </div>
+          </article>
+
+          <div class="db-body">
+            <div class="db-main">
+              <div class="db-tabbar">
+                <div class="segmented" id="dbTabs" role="tablist" aria-label="联调内容">
+                  <button type="button" role="tab" data-tab="vehicle" class="active">整车数据</button>
+                  <button type="button" role="tab" data-tab="wheel">方向盘</button>
+                  <button type="button" role="tab" data-tab="frames">报文监视</button>
+                </div>
+                <span id="dbTabHint" class="db-tab-hint"></span>
+              </div>
+
+              <div class="db-cards" id="dbCards" data-tab-panel="vehicle" role="tabpanel"></div>
+
+              <div class="db-wheel hidden" data-tab-panel="wheel" role="tabpanel">
+                <article class="panel db-card">
+                  <header class="panel-head">
+                    <div class="db-head-title"><h3>实物方向盘</h3><span class="panel-context">车手屏接着真方向盘时：从它发到 CANB 的 0x703 / 0x310 读出方向盘做了什么，不用接 CAN2</span></div>
+                    <span id="dbObserveTag" class="tag neutral">未连接</span>
+                  </header>
+                  <div class="panel-body">
+                    <p class="db-hint db-hint-top">直接拨旋钮、转电位器、按按键。车手屏会把操作转发或合并后发到 CANB，下面实时解读并检查每一帧的格式。做了操作却没有出现新记录，说明车手屏没有发出。</p>
+                    <div class="db-tiles">
+                      <div class="db-tile" title="0x310：方向盘旋钮的驾驶模式请求，车手屏原样转发给 ECU；圈速计时中不转发"><span>旋钮档位</span><b id="dbKnobValue">—</b><small id="dbKnobAge">尚未操作</small></div>
+                      <div class="db-tile" title="0x703 字节 0：方向盘电位器的滑级 0–7，每帧都带"><span>滑级</span><b id="dbSlipValue">—</b><small id="dbSlipAge">尚未收到</small></div>
+                      <div class="db-tile" title="0x703 字节 1 位 0：圈速计时键的一次有效按下"><span>圈速计时键</span><b id="dbLapValue">—</b><small id="dbLapAge">尚未按下</small></div>
+                      <div class="db-tile" title="0x703 字节 1 位 1：消错键的一次有效按下"><span>消错键</span><b id="dbClearValue">—</b><small id="dbClearAge">尚未按下</small></div>
+                    </div>
+                    <div class="db-observe-summary">
+                      <span>格式检查：正确 <b id="dbObserveOk">0</b> · 异常 <b id="dbObserveBad">0</b></span>
+                      <button class="outline-button" type="button" id="dbObserveClear">清空记录</button>
+                    </div>
+                  </div>
+                  <div class="panel-body flush db-table-scroll">
+                    <table class="db-table db-observe-table">
+                      <thead><tr><th>时间</th><th>识别出的操作</th><th>车手屏发出的帧（CANB）</th><th>检查</th></tr></thead>
+                      <tbody id="dbObserveRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article class="panel db-card">
+                  <header class="panel-head">
+                    <div class="db-head-title"><h3>模拟方向盘</h3><span class="panel-context">没有实物方向盘时用：需要第二个 PCAN 通道接车手屏 CAN2，点击后车手屏的反应出现在上面</span></div>
+                    <span id="dbWheelStatus" class="tag neutral">未连接</span>
+                  </header>
+                  <div class="panel-body">
+                    <p class="db-hint db-hint-top" id="dbWheelHint"></p>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">驾驶模式</span><small>0x310 · 旋钮四档，车手屏转发给 ECU</small></div><div class="db-big-row" id="dbWheelModes"></div></div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">滑级</span><small>0x700 · 电位器 0–7 档，显示在车手屏左栏 SLIP 条</small></div><div class="segmented" id="dbSlipLevels" role="group" aria-label="滑级"></div></div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">按键</span><small>0x701 / 0x702 · 按一下发一帧</small></div>
+                      <div class="db-chip-row" id="dbWheelButtons">
+                        <button type="button" class="outline-button" data-db-command="wheel_lap" title="0x701：车手屏开始或停止圈速/冲刺计时，与触摸顶栏相同">圈速计时键（开始/停止计时）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_clear" title="0x702：车手屏清除界面上的全部告警">消错键（清除告警）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_powerup" title="像方向盘上电那样补发当前滑级和驾驶模式">上电补发</button>
+                      </div>
+                    </div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">异常输入</span><small>车手屏应丢弃、不转发的坏帧</small></div>
+                      <div class="db-chip-row" id="dbWheelFaults">
+                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"mode_ff"}' title="0x310 的模式码为 0xFF（方向盘换档途中的无效值）">模式码 0xFF</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"mode_4"}' title="0x310 的模式码为 ASCII '4'，超出 '0'..'3'">模式码 '4'（越界）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"slip_8"}' title="0x700 的滑级为 8，超出 0..7；车手屏不更新滑级也不发 0x703">滑级 8（越界）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_lap_double" title="两帧 0x701 间隔 100 ms：车手屏 300 ms 内只算一次按下">计时键连按两次（100 ms）</button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="db-frame-monitor hidden" data-tab-panel="frames" role="tabpanel">
+                <article class="panel">
+                  <header class="panel-head"><h3>发送报文</h3><span class="panel-context">开关停发单个报文；异常注入发送车手屏应丢弃的坏帧</span></header>
+                  <div class="panel-body flush db-table-scroll">
+                    <table class="db-table db-frame-table">
+                      <thead><tr><th>发送</th><th>ID</th><th>报文</th><th title="标称周期 · 本机实测发送频率，下方为累计发送次数">周期 / 实测</th><th title="最近一次发出的数据字节">最近数据</th><th title="车手屏收不到此帧多久后把对应读数显示为 --">车手屏超时</th><th title="选一种坏帧持续发送，用来测车手屏的丢弃路径；正常表示不注入">异常注入</th></tr></thead>
+                      <tbody id="dbFrameRows"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <aside class="db-side" aria-label="车手屏回传">
+              <article class="panel">
+                <header class="panel-head"><h3>车手屏回传</h3><span class="panel-context">车手屏自己发到 CANB 的报文</span></header>
+                <div class="panel-body flush">
+                  <dl class="db-kv">
+                    <div title="车手屏用自带 GNSS 算出的车速，每 50 ms 发给 ECU"><dt>GPS 车速<small>0x301 · 发给 ECU 的地速</small></dt><dd id="dbSpeed">等待数据</dd></div>
+                    <div title="GNSS 的纬度和经度，每 50 ms 一帧，供遥测记录"><dt>位置<small>0x067 · 经纬度</small></dt><dd id="dbPosition">等待数据</dd></div>
+                    <div title="双天线航向、GPS 航迹和海拔，供遥测记录"><dt>航向<small>0x068 · 航向、航迹、海拔</small></dt><dd id="dbHeading">等待数据</dd></div>
+                    <div title="车速、位置、双天线航向各自是否有效，以及信号等级 0..4"><dt>GPS 状态<small>0x068 · 有效位、信号等级</small></dt><dd id="dbGpsFlags">等待数据</dd></div>
+                    <div title="累计里程（掉电保存）、卫星数和信噪比，每 500 ms 一帧"><dt>里程与卫星<small>0x7A0 · 里程、卫星、信噪比</small></dt><dd id="dbOdometer">等待数据</dd></div>
+                    <div title="圈速计时开始后已完成的圈数"><dt>圈数<small>0x7A0 · 已跑圈数</small></dt><dd id="dbLapCount">等待数据</dd></div>
+                    <div title="单位秒；差值为当前圈相对最快圈，负数表示更快"><dt>圈速<small>0x7A1 · 各圈用时与差值</small></dt><dd id="dbLapTimes">等待数据</dd></div>
+                    <div title="圈速计时是否在进行，以及起终点线的检测状态"><dt>过线检测<small>0x068 · 起终点线状态</small></dt><dd id="dbLapDiag">等待数据</dd></div>
+                    <div title="车手屏把方向盘的滑级、圈速计时键、消错键合并成一帧发给 ECU；每收到一个方向盘帧发一次"><dt>方向盘指令<small>0x703 · 车手屏发给 ECU</small></dt><dd id="dbLastCommand">等待数据</dd></div>
+                    <div title="方向盘旋钮的驾驶模式请求，车手屏原样转发给 ECU；圈速计时中不转发"><dt>转发的驾驶模式<small>0x310 · 车手屏转发给 ECU</small></dt><dd id="dbLastMode">等待数据</dd></div>
+                  </dl>
+                </div>
+              </article>
+              <article class="panel">
+                <header class="panel-head"><h3>事件</h3><span id="dbRxSummary" class="panel-context">接收 0 帧</span></header>
+                <div class="panel-body flush"><ul class="db-events" id="dbEvents"></ul></div>
+              </article>
+            </aside>
+          </div>
+        </section>
+
         <section class="page" id="page-fan" aria-label="整车风扇">
           <div class="scope-strip" id="fanScopeStrip" hidden>
             <span class="scope-strip-icon" aria-hidden="true"></span>
@@ -1238,6 +1392,43 @@
     </form>
   </dialog>
 
+  <dialog id="displayBenchDialog" class="modal simulator-modal" data-backdrop-close>
+    <form method="dialog">
+      <header><h2>连接车手屏测试台</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <div class="modal-body">
+        <section class="simulator-config-section" id="dbHardwareFields">
+          <header><b>PCAN 通道</b><span>500 kbit/s</span></header>
+          <div class="simulator-pcan-fields">
+            <label class="field"><span class="field-label">车手屏 CANB（CAN1 口）</span><select id="dbChannel"></select></label>
+            <label class="field"><span class="field-label">模拟方向盘 CAN2（可选）</span><select id="dbWheelChannel"></select></label>
+          </div>
+        </section>
+        <fieldset class="simulator-output-choices" id="dbNodeChoices">
+          <legend>模拟的节点（取消勾选的节点不发送，可与总线上的真实节点混用）</legend>
+          <label><input type="checkbox" value="bms" checked><span><b>BMS 包状态</b><small>0x4B0</small></span></label>
+          <label><input type="checkbox" value="sop" checked><span><b>BMS 功率限值</b><small>0x4A0 / 0x4A3</small></span></label>
+          <label><input type="checkbox" value="ecu" checked><span><b>ECU</b><small>0x305 / 0x502..0x509</small></span></label>
+          <label><input type="checkbox" value="pdm" checked><span><b>PDM 低压</b><small>0x5A0 / 0x5A1</small></span></label>
+          <label><input type="checkbox" value="fan" checked><span><b>风扇控制器</b><small>0x5A2</small></span></label>
+          <label><input type="checkbox" value="tire" checked><span><b>胎温模块</b><small>0x071..0x074</small></span></label>
+        </fieldset>
+        <label class="switch hidden" id="dbPreviewRow">
+          <input id="dbPreview" type="checkbox"><i class="switch-track" aria-hidden="true"></i>
+          <span>无硬件预览：只运行界面和数值，不向任何总线发送（仅源码运行提供）</span>
+        </label>
+        <label class="checkbox simulator-pcan-confirm" id="dbConfirmRow">
+          <input id="dbConfirm" type="checkbox" required>
+          <span>我已确认所选通道只连接车手屏测试台，没有接入实车 CANB；连接时会先监听 1 秒，发现真实节点会自动取消。</span>
+        </label>
+        <div id="dbConnectError" class="modal-error hidden" role="alert"></div>
+      </div>
+      <footer>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="dbStartButton">连接并开始发送</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
       <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
@@ -1445,6 +1636,7 @@
   <script src="js/ivt.js"></script>
   <script src="js/telemetry.js"></script>
   <script src="js/telemetry-simulator.js"></script>
+  <script src="js/display.js"></script>
   <script src="js/updater.js"></script>
 </body>
 </html>

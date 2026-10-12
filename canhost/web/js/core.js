@@ -12,7 +12,7 @@ var state = {
   mainSnapshot: null,
   snapshot: null,
   canbBmsSnapshot: null,
-  toolSnapshots: { bench: null, ivt: null, simulator: null },
+  toolSnapshots: { bench: null, ivt: null, simulator: null, display: null },
   vehicleSnapshot: null,
   telemetrySnapshot: null,
   quickSnapshot: null,
@@ -46,8 +46,8 @@ window.state = state;
 const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
 
-const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "simulator", "telemetry"];
-const TOOL_PAGES = ["bench", "ivt", "simulator"];
+const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "display", "simulator", "telemetry"];
+const TOOL_PAGES = ["bench", "ivt", "display", "simulator"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
 const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
@@ -240,6 +240,7 @@ async function init() {
   bindIvtControls();
   bindTelemetryControls();
   bindTelemetrySimulatorControls();
+  bindDisplayBenchControls();
   buildAlarmMatrix();
   buildVehicleStatics();
   try {
@@ -255,6 +256,7 @@ async function init() {
     $("#telemetrySimulatorNav")?.classList.toggle("hidden", state.bootstrap.telemetry_simulator_enabled !== true);
     populateConnectionOptions();
     populateToolChannelOptions();
+    buildDisplayBenchStatics();
     populateVehicleOptions();
     await restoreWorkbenchPreferences();
     buildSwitchList();
@@ -316,7 +318,7 @@ function showPage(page) {
   // scroll offset can make a short page appear blank after navigation.
   $("#main").scrollTop = 0;
   if (state.snapshot) render();
-  if (["bench", "ivt", "simulator"].includes(page)) refreshPcanChannels(false);
+  if (TOOL_PAGES.includes(page)) refreshPcanChannels(false);
   schedulePoll(0);
 }
 
@@ -476,6 +478,7 @@ async function refreshPcanChannels(announce = false) {
       populateConnectionOptions();
       populateToolChannelOptions();
       if (typeof populateTelemetrySimulatorHardware === "function") populateTelemetrySimulatorHardware();
+      if (typeof populateDisplayBenchHardware === "function") populateDisplayBenchHardware();
       if (announce) toast(scan.message || "PCAN 设备扫描完成", scan.ok !== true);
       return scan;
     } catch (error) {
@@ -840,6 +843,8 @@ async function poll() {
       await optionalSnapshot(state.api.get_bench_snapshot, value => { state.toolSnapshots.bench = value; });
     } else if (page === "ivt" && state.api.get_ivt_snapshot) {
       await optionalSnapshot(state.api.get_ivt_snapshot, value => { state.toolSnapshots.ivt = value; });
+    } else if (page === "display" && state.api.get_display_bench_snapshot) {
+      await optionalSnapshot(state.api.get_display_bench_snapshot, value => { state.toolSnapshots.display = value; });
     } else if (page === "simulator" && state.api.get_telemetry_simulator_snapshot) {
       await optionalSnapshot(state.api.get_telemetry_simulator_snapshot,
         value => { state.toolSnapshots.simulator = value; });
@@ -872,7 +877,8 @@ async function poll() {
   } finally {
     state.pollInFlight = false;
     const detailedPage = state.page !== "overview";
-    schedulePoll(document.hidden ? 1000 : detailedPage ? 500 : 250);
+    // 车手屏联调的读数随行驶循环变化，轮询比其他详情页更密。
+    schedulePoll(document.hidden ? 1000 : state.page === "display" ? 250 : detailedPage ? 500 : 250);
   }
 }
 
@@ -905,6 +911,8 @@ function render() {
     renderBench();
   } else if (state.page === "ivt") {
     renderIvtConfig();
+  } else if (state.page === "display") {
+    renderDisplayBench();
   } else if (state.page === "simulator") {
     renderTelemetrySimulator();
   } else if (state.page === "fan") {
