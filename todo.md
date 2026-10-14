@@ -1,5 +1,11 @@
 # 进度与待办
 
+## 2026-10-14 v0.9.27 发布验证
+
+- 已发布 [GitHub v0.9.27](https://github.com/BITFSAE/can-host/releases/tag/v0.9.27) 与 [CNB 镜像](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.27)，标签对应 `9189548`。版本变化见 [CHANGELOG](CHANGELOG.md#v0927--2026-10-14)。
+- 本地 638 项测试中 637 项通过、1 项平台跳过；主分支测试、双平台构建、冻结包自检、GitHub 发布及 CNB 同步 CI 全部通过。两端各有 7 个附件，CNB 更新频道已指向新版，匿名下载的全部附件 SHA-256 与 GitHub 一致，3 份校验文件与对应归档一致，两端发布说明同为 CHANGELOG 的 5 条。
+- 下载的 macOS 更新包通过签名与冻结程序自检，应用版本为 0.9.27；Windows ZIP 与 macOS 更新包中的 DBC 脚本及 uPlot 与源码一致。原生 WebView 交互与实体 PCAN 联调仍待实机验证。
+
 ## 2026-10-14 CANA/CANC 文件切换检查
 
 - 四份团队 DBC 均可载入。CANA/CANC 默认不解码，界面已明确提示仅查看并提供定位绑定控件的入口；接收源仍是现有主连接与整车连接，操作边界见 [DBC工作台](DOC/DBC工作台.md#2-文件与总线绑定)。
