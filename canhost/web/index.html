@@ -18,6 +18,7 @@
     })();
   </script>
   <link rel="stylesheet" href="styles.css?v=fan-v4-clean">
+  <link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
 </head>
 <body>
   <div class="app">
@@ -64,6 +65,10 @@
         <button class="nav-item" type="button" data-page="frames" title="CAN 监视器（Alt+7）">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12h4l3-7.5 4.4 15 3.1-7.5h4.5"/></svg>
           <span>CAN 监视器</span>
+        </button>
+        <button class="nav-item" type="button" data-page="dbc" title="DBC 工作台：实时解码、曲线与编辑">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="1.8"/><path d="M3.5 9.5h17M8.5 9.5v10M13.5 9.5v10"/><path d="M6 14.5h.01M11 14.5h.01M16 14.5h.01"/></svg>
+          <span>DBC 工作台</span>
         </button>
         <button class="nav-item" type="button" data-page="telemetry" title="遥测故障">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.5h16M6.5 14.5a7 7 0 0 1 11 0M9.2 11.5a3.8 3.8 0 0 1 5.6 0"/><circle cx="12" cy="17.5" r="1.3"/></svg>
@@ -1153,6 +1158,166 @@
           </div>
         </section>
 
+        <section class="page" id="page-dbc" aria-label="DBC 工作台">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>DBC 工作台</h2>
+              <span class="tool-header-desc">载入 DBC · 实时解码 · 曲线 · 编辑与保存 · 总线对账</span>
+            </div>
+            <div class="tool-header-connection">
+              <div class="segmented small" id="dbcSource" role="group" aria-label="解码数据源">
+                <button class="active" type="button" data-source="main" title="CAN1 数据流">CAN1</button>
+                <button type="button" data-source="vehicle" title="CANB 数据流">CANB</button>
+              </div>
+              <span id="dbcLinkTag" class="tag neutral" role="status" aria-live="polite">未连接</span>
+              <button class="action-button" type="button" id="dbcOpenButton">打开 DBC</button>
+              <button class="outline-button" type="button" id="dbcNewButton">新建</button>
+            </div>
+          </div>
+
+          <div class="dbc-workspace">
+            <aside class="panel dbc-side" aria-label="DBC 文件与报文">
+              <div id="dbcFiles" class="dbc-files"></div>
+              <div class="dbc-side-bar">
+                <label class="search">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.2"/><path d="M15.6 15.6 20 20"/></svg>
+                  <input id="dbcSearch" placeholder="筛选报文、ID 或信号" aria-label="筛选报文">
+                </label>
+              </div>
+              <div id="dbcTree" class="dbc-tree" role="listbox" aria-label="报文列表"></div>
+            </aside>
+
+            <div class="dbc-main">
+              <div class="dbc-tabbar">
+                <div class="segmented" id="dbcTabs" role="tablist" aria-label="DBC 功能">
+                  <button type="button" role="tab" data-tab="live" class="active">实时</button>
+                  <button type="button" role="tab" data-tab="plot">曲线</button>
+                  <button type="button" role="tab" data-tab="edit">编辑</button>
+                  <button type="button" role="tab" data-tab="send">发送</button>
+                  <button type="button" role="tab" data-tab="audit">对账</button>
+                </div>
+                <span id="dbcTabHint" class="dbc-tab-hint"></span>
+              </div>
+
+              <div class="dbc-panel" data-dbc-panel="live" role="tabpanel">
+                <article class="panel">
+                  <header class="panel-head"><h3 id="dbcLiveTitle">未选择报文</h3><div class="head-actions" id="dbcLiveTags"></div></header>
+                  <div class="dbc-live-meta" id="dbcLiveMeta"></div>
+                  <div class="table-wrap dbc-signal-wrap">
+                    <table class="frame-table dbc-signal-table" aria-label="报文信号">
+                      <thead><tr><th>信号</th><th>物理值</th><th>原始值</th><th>含义</th><th>范围</th><th aria-label="操作"></th></tr></thead>
+                      <tbody id="dbcSignalRows"></tbody>
+                    </table>
+                    <div id="dbcLiveEmpty" class="empty-state large">从左侧选择一条报文查看实时信号。</div>
+                  </div>
+                </article>
+                <article class="panel" id="dbcWatchPanel">
+                  <header class="panel-head"><h3>观察表</h3><div class="head-actions"><button class="outline-button" type="button" id="dbcWatchClear">清空</button></div></header>
+                  <div class="table-wrap dbc-signal-wrap">
+                    <table class="frame-table dbc-signal-table" aria-label="观察信号">
+                      <thead><tr><th>信号</th><th>物理值</th><th>原始值</th><th>含义</th><th>状态</th><th aria-label="操作"></th></tr></thead>
+                      <tbody id="dbcWatchRows"></tbody>
+                    </table>
+                    <div id="dbcWatchEmpty" class="empty-state">在信号行右侧点“观察”，跨报文的信号会汇总到这里。</div>
+                  </div>
+                </article>
+                <article class="panel" id="dbcUnknownPanel">
+                  <header class="panel-head"><h3>未识别帧 <span class="dbc-count" id="dbcUnknownCount">0</span></h3></header>
+                  <div class="table-wrap dbc-signal-wrap">
+                    <table class="frame-table dbc-unknown-table" aria-label="未识别帧">
+                      <thead><tr><th>CAN ID</th><th>长度</th><th>数据</th><th>周期</th><th>帧数</th><th aria-label="操作"></th></tr></thead>
+                      <tbody id="dbcUnknownRows"></tbody>
+                    </table>
+                    <div id="dbcUnknownEmpty" class="empty-state">当前数据源的帧都已在已绑定的 DBC 中。</div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="dbc-panel hidden" data-dbc-panel="plot" role="tabpanel">
+                <div class="toolbar">
+                  <div class="segmented small" id="dbcPlotMode" role="group" aria-label="曲线来源">
+                    <button class="active" type="button" data-mode="live">实时</button>
+                    <button type="button" data-mode="trace">记录文件</button>
+                  </div>
+                  <label class="monitor-sort" title="可见时间窗口">
+                    <select id="dbcPlotWindow" aria-label="时间窗口">
+                      <option value="10">10 s</option><option value="30" selected>30 s</option>
+                      <option value="60">1 min</option><option value="300">5 min</option><option value="0">全部</option>
+                    </select>
+                  </label>
+                  <label class="switch" title="每条曲线按自身范围归一化到 0–100%，便于比较形状">
+                    <input id="dbcPlotNormalize" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>归一化</span>
+                  </label>
+                  <label class="switch" title="暂停后曲线不再滚动，数据仍在后台记录">
+                    <input id="dbcPlotPause" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>冻结</span>
+                  </label>
+                  <span class="toolbar-actions">
+                    <button class="outline-button" type="button" id="dbcTraceOpen">打开记录</button>
+                    <button class="outline-button" type="button" id="dbcPlotClear">清除</button>
+                    <button class="outline-button" type="button" id="dbcPlotExport">导出 CSV</button>
+                  </span>
+                </div>
+                <div class="dbc-chips" id="dbcPlotChips"></div>
+                <article class="panel dbc-plot-card">
+                  <div id="dbcPlot" class="dbc-plot" aria-label="信号曲线"></div>
+                  <div id="dbcPlotEmpty" class="empty-state large">在“实时”页的信号行点“曲线”，把信号加入这里。</div>
+                </article>
+                <article class="panel hidden" id="dbcTraceCard">
+                  <header class="panel-head"><h3 id="dbcTraceTitle">记录文件</h3><div class="head-actions">
+                    <div class="segmented small" id="dbcTraceBus" role="group" aria-label="记录使用的总线绑定">
+                      <button type="button" data-bus="can1">CAN1</button><button type="button" data-bus="canb">CANB</button>
+                    </div>
+                    <button class="outline-button" type="button" id="dbcTraceExport">按 DBC 导出全部信号</button>
+                    <button class="outline-button" type="button" id="dbcTraceClose">关闭</button>
+                  </div></header>
+                  <div class="dbc-live-meta" id="dbcTraceMeta"></div>
+                </article>
+              </div>
+
+              <div class="dbc-panel hidden" data-dbc-panel="edit" role="tabpanel">
+                <div class="toolbar dbc-edit-bar">
+                  <span class="toolbar-actions">
+                    <button class="outline-button" type="button" id="dbcUndo">撤销</button>
+                    <button class="outline-button" type="button" id="dbcRedo">重做</button>
+                    <button class="outline-button" type="button" id="dbcCompare" title="与另一个已打开的 DBC 比较差异">对比</button>
+                  </span>
+                  <div class="segmented small" id="dbcEditTabs" role="group" aria-label="编辑对象">
+                    <button class="active" type="button" data-sub="message">报文与信号</button>
+                    <button type="button" data-sub="nodes">节点</button>
+                    <button type="button" data-sub="tables">值表与属性</button>
+                    <button type="button" data-sub="check">校验 <b class="dbc-count" id="dbcCheckCount">0</b></button>
+                  </div>
+                  <span id="dbcEditState" class="tag neutral">已保存</span>
+                  <span class="toolbar-actions dbc-save-actions">
+                    <button class="outline-button" type="button" id="dbcReview">评审变更</button>
+                    <button class="outline-button" type="button" id="dbcSaveAs">另存为</button>
+                    <button class="action-button" type="button" id="dbcSave">保存</button>
+                  </span>
+                </div>
+                <div id="dbcEditNotice" class="db-notice hidden" role="alert"></div>
+                <div id="dbcEditor" class="dbc-editor"></div>
+              </div>
+
+              <div class="dbc-panel hidden" data-dbc-panel="send" role="tabpanel">
+                <div id="dbcSender" class="dbc-sender"></div>
+              </div>
+
+              <div class="dbc-panel hidden" data-dbc-panel="audit" role="tabpanel">
+                <div class="toolbar">
+                  <span id="dbcAuditState" class="tag neutral">未开始</span>
+                  <span class="monitor-inline-stats" id="dbcAuditStats"></span>
+                  <span class="toolbar-actions">
+                    <button class="action-button" type="button" id="dbcAuditToggle">开始对账</button>
+                    <button class="outline-button" type="button" id="dbcAuditReset">重新统计</button>
+                    <button class="outline-button" type="button" id="dbcAuditTrace">对账记录文件</button>
+                  </span>
+                </div>
+                <div id="dbcAudit" class="dbc-audit"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="page" id="page-telemetry" aria-label="遥测故障">
           <div class="telemetry-status-strip">
             <div class="telemetry-status-main">
@@ -1429,6 +1594,35 @@
     </form>
   </dialog>
 
+  <dialog id="dbcFormDialog" class="modal dbc-form-dialog" data-backdrop-close>
+    <form method="dialog" id="dbcFormDialogForm">
+      <header><h2 id="dbcFormTitle">DBC</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <div class="modal-body" id="dbcFormBody"></div>
+      <footer>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="dbcFormOk">确定</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="dbcReviewDialog" class="modal dbc-review-dialog" data-backdrop-close>
+    <form method="dialog">
+      <header><h2 id="dbcReviewTitle">保存前评审</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <div class="modal-body" id="dbcReviewBody"></div>
+      <footer>
+        <label class="dbc-review-option" title="按 CANdb++ 要求重排段落、合并注释为单行，并默认存为 GBK"><input type="checkbox" id="dbcReviewCandbpp"><span>CANdb++ 规整保存</span></label>
+        <label class="dbc-review-option">编码
+          <select id="dbcReviewEncoding" aria-label="保存编码">
+            <option value="">保持原编码</option><option value="utf-8">UTF-8</option>
+            <option value="utf-8-sig">UTF-8 带 BOM</option><option value="gbk">GBK</option>
+          </select>
+        </label>
+        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button type="button" class="action-button" id="dbcReviewSave">保存</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
       <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
@@ -1629,6 +1823,11 @@
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <script src="js/core.js"></script>
   <script src="js/monitor.js"></script>
+  <script src="vendor/uplot/uPlot.iife.min.js"></script>
+  <script src="js/dbc.js"></script>
+  <script src="js/dbc-plot.js"></script>
+  <script src="js/dbc-editor.js"></script>
+  <script src="js/dbc-tools.js"></script>
   <script src="js/bms.js"></script>
   <script src="js/vehicle.js"></script>
   <script src="js/fan.js?v=fan-v4-clean"></script>

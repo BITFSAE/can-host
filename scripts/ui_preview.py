@@ -20,6 +20,11 @@
 车手屏联调页不用快照：它的接口转发到本进程里真实的后端（无硬件预览模式），
 点“连接车手屏”并勾选“无硬件预览”即可操作整页，不发送任何 CAN 帧。
 
+DBC 工作台同样转发到真实后端：脚本启动时让后端连上内置模拟的 CAN1 与 CANB，
+载入团队 DBC（左侧文件卡里的中央库按钮）后即可看到真实的实时解码、曲线和对账。
+文件对话框在浏览器里不可用，保存请用“另存为”以外的路径验证；设置写入当前
+XDG_CONFIG_HOME，建议预览时指向临时目录，避免改动真实用户设置。
+
 只用于界面审阅：数据是模拟值，不代表任何真实测量。
 """
 
@@ -92,6 +97,8 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
     get: (target, key) => {
       if (typeof key !== "string") return undefined;
       if (key in target) return target[key];
+      // DBC 工作台与它依赖的原始帧发送接口走真实后端。
+      if (key.startsWith("dbc_") || key === "send_monitor_frame" || key === "configure_monitor_periodic") return live(key);
       return (key === "then" || key === "catch" || key === "finally") ? undefined : ok;
     },
   }) };
@@ -234,7 +241,7 @@ def write_variants(out_dir: Path) -> None:
 
 def build_page(out_dir: Path) -> None:
     web = ROOT / "canhost" / "web"
-    for name in ("js", "assets"):
+    for name in ("js", "assets", "vendor"):
         shutil.copytree(web / name, out_dir / name, dirs_exist_ok=True)
     shutil.copy2(web / "styles.css", out_dir / "styles.css")
     html = (web / "index.html").read_text(encoding="utf-8")
@@ -250,6 +257,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
     """预览用的静态服务：禁用缓存，改完前端刷新即生效；不打印每条请求。"""
 
     live_api: Api | None = None
+    live_extra = {"send_monitor_frame", "configure_monitor_periodic"}
     live_methods = {"connect_display_bench", "disconnect_display_bench", "get_display_bench_snapshot",
                     "display_bench_set", "display_bench_command"}
 
@@ -264,7 +272,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         if name == "bootstrap_display":
             full = api.bootstrap()
             result = {key: full[key] for key in ("display_bench_enabled", "display_bench_preview", "display_bench")}
-        elif name in self.live_methods:
+        elif name in self.live_methods or name.startswith("dbc_") or name in self.live_extra:
             result = getattr(api, name)(*args)
         else:
             self.send_error(404)
@@ -298,6 +306,11 @@ def main() -> None:
         assert (out_dir / f"mock-{variant}.json").is_file()
 
     PreviewHandler.live_api = Api()
+    # DBC 工作台读真实后端的监视数据：连上内置模拟，让两条总线都有帧可解码。
+    for connect, profile in ((PreviewHandler.live_api.connect_can, "can1"), (PreviewHandler.live_api.connect_vehicle, "canb")):
+        result = connect({"mode": "simulation", "bus_profile": profile, "bitrate": 500000})
+        if not result.get("ok"):
+            print(f"提示：{profile} 模拟通道未启动（{result.get('error')}），DBC 实时解码将没有数据")
     handler = partial(PreviewHandler, directory=str(out_dir))
     try:
         server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)

@@ -46,7 +46,8 @@ window.state = state;
 const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
 
-const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "display", "simulator", "telemetry"];
+// 新页面追加在末尾：前 9 项对应 Alt+1..9 快捷键，不能被挤动。
+const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "display", "simulator", "telemetry", "dbc"];
 const TOOL_PAGES = ["bench", "ivt", "display", "simulator"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
@@ -241,6 +242,7 @@ async function init() {
   bindTelemetryControls();
   bindTelemetrySimulatorControls();
   bindDisplayBenchControls();
+  bindDbcControls();
   buildAlarmMatrix();
   buildVehicleStatics();
   try {
@@ -850,9 +852,15 @@ async function poll() {
         value => { state.toolSnapshots.simulator = value; });
     }
     if ((page === "vehicle" || page === "fan"
-         || (page === "frames" && state.frameSource === "vehicle"))
+         || (page === "frames" && state.frameSource === "vehicle")
+         || (page === "dbc" && dbcUi.source === "vehicle" && dbcUi.tab === "send"))
         && state.api.get_vehicle_snapshot) {
       await optionalSnapshot(state.api.get_vehicle_snapshot, value => { state.vehicleSnapshot = value; });
+    }
+    if ((page === "dbc" || page === "frames") && state.api.dbc_live) {
+      // 实时解码只读监视器已有的最新帧；曲线样本由后端逐帧记录，这里只增量取回。
+      await optionalSnapshot(dbcFetchLive, dbcStoreLive);
+      if (page === "dbc") await optionalSnapshot(dbcPlotFetch, () => {});
     }
     const telemetryState = state.telemetrySnapshot?.connection?.state;
     const telemetryActive = !!telemetryState && telemetryState !== "disconnected";
@@ -922,6 +930,8 @@ function render() {
     renderFrames();
   } else if (state.page === "telemetry") {
     renderTelemetry();
+  } else if (state.page === "dbc") {
+    renderDbc();
   }
 }
 

@@ -7,6 +7,7 @@ let monitorTxPersistPending = null;
 let monitorTxPersistActive = false;
 const monitorUi = {
   expanded: new Set(),
+  dbcExpanded: new Set(),
   frozenGroups: [],
   sort: "id",
   txRows: [],
@@ -138,6 +139,15 @@ function bindMonitorControls() {
     state.api?.replay_control("seek", replay.duration * (+event.target.value / 1000));
   });
   $("#frameRows")?.addEventListener("click", event => {
+    const dbcButton = event.target.closest(".monitor-dbc-toggle");
+    if (dbcButton) {
+      const entry = `${state.frameSource}|${dbcButton.dataset.dbc}`;
+      if (monitorUi.dbcExpanded.has(entry)) monitorUi.dbcExpanded.delete(entry); else monitorUi.dbcExpanded.add(entry);
+      monitorUi.lastFrameSignature = "";
+      renderFrames();
+      schedulePoll(0);
+      return;
+    }
     const button = event.target.closest(".monitor-expand"); if (!button || button.disabled) return;
     const key = button.dataset.group;
     if (monitorUi.expanded.has(key)) monitorUi.expanded.delete(key); else monitorUi.expanded.add(key);
@@ -205,7 +215,12 @@ function renderFrames() {
     if (monitorUi.sort === "cycle") return Number(a.cycle_ms ?? Infinity) - Number(b.cycle_ms ?? Infinity);
     return Number(a.arbitration_id) - Number(b.arbitration_id) || Number(a.extended) - Number(b.extended);
   });
-  const signature = JSON.stringify([groups, [...monitorUi.expanded], state.framePaused]);
+  // DBC 名称与展开行的解码值来自 DBC 工作台已绑定到这条总线的文件，只用于查看。
+  const dbcLive = typeof dbcUi !== "undefined" ? dbcUi.live[state.frameSource] : null;
+  const dbcNames = dbcLive?.names || {};
+  const dbcDecoded = dbcLive?.decoded || {};
+  const signature = JSON.stringify([groups, [...monitorUi.expanded], state.framePaused, dbcNames,
+    [...monitorUi.dbcExpanded], dbcDecoded]);
   if (signature === monitorUi.lastFrameSignature) return;
   monitorUi.lastFrameSignature = signature;
   const html = groups.map(group => {
@@ -220,11 +235,43 @@ function renderFrames() {
       + `<td>${monitorDirection(group)}</td><td>${group.extended ? "扩展" : "标准"}</td><td>${group.dlc}</td>`
       + `<td title="${escapeHtml(group.data)}">${monitorDataHtml(group.data, group.changed)}</td>`
       + `<td>${monitorCycleLabel(group.cycle_ms)}</td><td class="monitor-count">${Number(group.count || 0).toLocaleString()}</td>`
-      + `<td title="${escapeHtml(group.name)}">${escapeHtml(group.name || "未登记帧")}</td></tr>`
-      + monitorVariantRows(group);
+      + monitorNameCell(group, dbcNames)
+      + monitorVariantRows(group) + monitorDbcRow(group, dbcDecoded);
   }).join("");
   $("#frameRows").innerHTML = html;
   $("#frameEmpty").classList.toggle("hidden", groups.length > 0);
+}
+
+function monitorDbcKey(group) { return `${group.extended ? "e" : "s"}:${group.arbitration_id}`; }
+
+/** 内置名称优先；内置没有登记时显示 DBC 报文名，两者并存时把 DBC 名作为附注。 */
+function monitorNameCell(group, dbcNames) {
+  const key = monitorDbcKey(group);
+  const dbcName = dbcNames[key];
+  const builtIn = group.name || "未登记帧";
+  if (!dbcName) return `<td title="${escapeHtml(group.name)}">${escapeHtml(builtIn)}</td></tr>`;
+  const unregistered = !group.name || /未定义|未登记/.test(group.name);
+  const open = monitorUi.dbcExpanded.has(`${state.frameSource}|${key}`);
+  const label = unregistered ? `${escapeHtml(dbcName)} <span class="monitor-dbc-name">DBC</span>`
+    : `${escapeHtml(builtIn)} <span class="monitor-dbc-name">· DBC ${escapeHtml(dbcName)}</span>`;
+  return `<td title="${escapeHtml(unregistered ? dbcName : `${builtIn} · DBC ${dbcName}`)}">${label}`
+    + `<button class="monitor-dbc-toggle ${open ? "on" : ""}" type="button" data-dbc="${key}" aria-pressed="${open}" title="展开 DBC 解码信号">Σ</button></td></tr>`;
+}
+
+function monitorDbcRow(group, decodedMap) {
+  const key = monitorDbcKey(group);
+  if (!monitorUi.dbcExpanded.has(`${state.frameSource}|${key}`)) return "";
+  const decoded = decodedMap[key];
+  if (!decoded) return '<tr class="monitor-dbc-row"><td colspan="9"><span class="muted">读取 DBC 解码中…</span></td></tr>';
+  const cells = decoded.signals.map(row => {
+    if (row.state !== "ok") {
+      const reason = row.state === "inactive" ? "未生效" : row.state === "missing" ? "DLC 不足" : "等待数据";
+      return `<span class="off"><span>${escapeHtml(row.name)}</span><b>${reason}</b></span>`;
+    }
+    const meaning = row.has_label ? (row.label != null ? ` ${escapeHtml(row.label)}` : " 表外值") : "";
+    return `<span><span>${escapeHtml(row.name)}</span><b>${escapeHtml(dbcNumber(row.value))}${row.unit ? ` ${escapeHtml(row.unit)}` : ""}${meaning}</b></span>`;
+  }).join("");
+  return `<tr class="monitor-dbc-row"><td colspan="9"><div class="monitor-dbc-grid">${cells || '<span class="muted">这条报文没有信号</span>'}</div></td></tr>`;
 }
 
 function renderMonitorStatus() {
