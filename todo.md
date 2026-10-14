@@ -1,5 +1,15 @@
 # 进度与待办
 
+## 2026-10-14 DBC 工作台
+
+- 新增“监视 → DBC 工作台”，用法与边界见 [DBC工作台](DOC/DBC工作台.md)。后端在 `canhost/dbc/`（保真文档模型 `document.py`、目录 `catalog.py`、校验 `lint.py`、解码 `decode.py`、曲线 `series.py`、对账 `audit.py`、记录文件 `trace.py`、工作区 `workspace.py`、接口 `api.py`），页面为 `canhost/web/js/dbc*.js`；监视器、`transport.py` 只增加了只读观察者、最新帧事实和 DBC 报文名展示，接收、记录、回放和发送规则未改。DBC 解码只用于查看与调试，`canhost/decoders.py` 仍是唯一的帧定义。
+- 依赖：新增 `cantools>=43,<44`，`python-can` 下限升到 4.6；曲线库 uPlot 1.6.32（MIT）放在 `canhost/web/vendor/uplot/`，下载后与 npm 公布的完整性值逐字节核对。两个发布包的打包自检增加“载入内置 DBC 并解码一帧”。
+- 实测依据：cantools 用 `sort_signals=None` 加载时无法解码部分团队报文（CAN1 2 条、CANA 20 条、CANB 9 条），默认排序则全部成功，所以解码库与保真写回分开；cantools 导出会丢 `VECTOR__INDEPENDENT_SIG_MSG`（CANA 少 51 个信号），所以保存走语句级保真模型，不用 cantools 导出。
+- 软件验证：全量 636 项测试通过（1 项平台跳过），其中 DBC 相关 159 项；除四份团队 DBC 外，工作区里其余 18 个 DBC（含 SavvyCAN 的 501 报文 ThinkCity 和各固件仓库的）也都逐字节往返并与 cantools 的报文名一致；四份团队 DBC 解析后写出逐字节相同、与 cantools 逐字段一致、每条报文的随机载荷都能解码；CANdb++ 规整对 CAN1/CANA/CANC 与团队现有 `_candbpp_gbk` 文件逐字节一致（CANB 的那份在规整后被手工改过）；位布局对照 cantools 编码器逐位核对，前端与后端的位布局逐位一致。单帧接收路径在曲线与对账都开启时增加约 11 µs，未订阅时开销可忽略。浏览器预览用内置模拟的 BMS/IVT 帧对照团队 CAN1 DBC，核对深浅主题、实时解码、监视器展开、曲线、位图拖选、保存评审落盘（只改被编辑的两行并留 `.bak`）和对账。
+- 校验发现：`Vehicle_CanC.dbc` 的 `CDC_HeaveAcc`、`CDC_LatAcc`、`CDC_LgtAcc` 声明范围 [-30|30]，12 位原始值只能表示到 [-30|10.95]；待确认是供应商定义还是笔误，上位机不改文件。
+- 未验证：实体 PCAN 上的实时解码、曲线和对账；Windows WebView2 与 macOS WKWebView 里的文件对话框和拖入文件；Windows 冻结包里的 cantools 与 uPlot（macOS arm64 冻结包已构建，包内带 cantools 与 uPlot，`--packaging-smoke-test` 通过，含 DBC 解码检查；Windows 待发布 CI 构建核对）。
+- 已知不足与后续：只支持经典 CAN；环境变量、信号组和关系属性语句保留但不可编辑；J1939/GMLAN 匹配与 KCD/SYM/ARXML 导入未做；尚未做“DBC 与 `decoders.py` 逐帧一致性检查”。
+
 ## 2026-10-12 CAN 运行告警说明同步
 
 - F405 将纯仲裁失败单独记为发送诊断；上位机同步 bit21 提示和新旧固件说明。已核对 `canhost/decoders.py`，ID、DLC、故障位、等级布局和格式版本均保持，无需新增解码字段。

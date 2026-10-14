@@ -7,6 +7,7 @@
 | [`../README.md`](../README.md) | 项目简介、能力边界和文档入口 |
 | [`开发与发布.md`](开发与发布.md) | 安装、源码运行、测试、打包、CI、发布和软件更新 |
 | [`CAN上位机与工具使用.md`](CAN上位机与工具使用.md) | 页面、500/250 kbit/s 连接、Legacy 监视、安全边界、异常处理和现场验证 |
+| [`DBC工作台.md`](DBC工作台.md) | DBC 载入与总线绑定、实时解码、曲线、编辑与保存、按信号发送、总线对账 |
 | [`风扇标定与手动调试指南.md`](风扇标定与手动调试指南.md) | 整车风扇 V4 标定、调试与 F405 电池箱风扇标定、租约和验收 |
 | [`../todo.md`](../todo.md) | 当前状态、未完成工作、风险和最近验证 |
 | [`../CHANGELOG.md`](../CHANGELOG.md) | 已发布与未发布的行为和兼容性变化 |
@@ -26,4 +27,4 @@
 | MQTT Protobuf | `../vehicle-interfaces/telemetry/fsae_telemetry.proto` |
 | IVT 目标配置 | `../BMS_MASTER_F405/DOC/IVT能量计配置与CANB切换.md` |
 
-上位机的 CAN 解码只在 `canhost/decoders.py` 定义；协议变化同时更新对应状态机和 `Tests/`。
+上位机的 CAN 解码只在 `canhost/decoders.py` 定义；协议变化同时更新对应状态机和 `Tests/`。DBC 工作台只用于查看和调试，不驱动任何页面状态机，也不替代这里的定义。
