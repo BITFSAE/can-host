@@ -67,6 +67,7 @@ function renderDbcEditBar(file) {
   $("#dbcSave").disabled = !file || readonly || !file.dirty;
   $("#dbcReview").disabled = !file || !file.dirty;
   $("#dbcSaveAs").disabled = !file;
+  $("#dbcCompare").disabled = !file || dbcUi.files.length < 2;
   const issues = dbcDetail()?.issues || [];
   const blocking = issues.filter(issue => issue.level === "error").length;
   const counter = $("#dbcCheckCount");
@@ -77,11 +78,12 @@ function renderDbcEditBar(file) {
   $$("#dbcEditTabs button").forEach(button => button.classList.toggle("active", button.dataset.sub === dbcEdit.sub));
   const notice = $("#dbcEditNotice");
   let message = "";
-  if (file?.readonly) message = "这是团队中央库的 DBC，默认只读。点“另存为”得到可编辑的副本；改动中央库本身请走 vehicle-interfaces 的校验与提交流程。";
+  if (file?.readonly) message = "团队中央库 · 只读。另存为副本后可编辑。";
   else if (file?.disk_changed) message = "磁盘上的文件在打开后被改动过。保存会覆盖它（旧内容留在 .bak）；也可以先在左侧文件卡里“重新载入”。";
   if (notice) {
     notice.textContent = message;
     notice.classList.toggle("hidden", !message);
+    notice.classList.toggle("warn", !!file?.disk_changed && !readonly);
   }
 }
 
@@ -98,11 +100,16 @@ function renderDbcEditor() {
     dbcUi.signatures.editor = signature;
     const active = document.activeElement;
     const focusField = active && root.contains(active) ? active.dataset.field || active.dataset.receiver || null : null;
+    const focusForm = focusField ? active.closest("[data-form]")?.dataset.form : null;
+    const focusBit = active && root.contains(active) ? active.dataset.bit : null;
+    const focusSignal = active?.classList.contains("dbc-signal-select") ? active.closest("[data-signal]")?.dataset.signal : null;
     root.innerHTML = dbcEditorHtml();
     if (focusField) {
-      const target = root.querySelector(`[data-field="${focusField}"]`) || root.querySelector(`[data-receiver="${focusField}"]`);
-      target?.focus();
-    }
+      const scope = focusForm ? root.querySelector(`[data-form="${focusForm}"]`) : root;
+      const target = scope?.querySelector(`[data-field="${focusField}"]`) || scope?.querySelector(`[data-receiver="${focusField}"]`);
+      target?.focus({ preventScroll: true });
+    } else if (focusBit != null) root.querySelector(`[data-bit="${focusBit}"]`)?.focus({ preventScroll: true });
+    else if (focusSignal) [...root.querySelectorAll("#dbcSignalList tr")].find(row => row.dataset.signal === focusSignal)?.querySelector("button")?.focus({ preventScroll: true });
   }
   renderDbcTrial();
 }
@@ -127,6 +134,11 @@ function dbcMessageEditorHtml(catalog) {
   const entry = dbcMessageEntry();
   const readonly = dbcReadonly();
   const lock = readonly ? "disabled" : "";
+  if (entry?.virtual) {
+    return '<article class="panel"><header class="panel-head"><h3>未使用信号</h3></header>'
+      + '<div class="panel-body note tight">这些信号尚未分配到报文，不参与总线解码。</div></article>'
+      + dbcSignalPanelHtml(entry, catalog);
+  }
   const actions = (names) => names.map(([act, label, danger]) =>
     `<button class="dbc-mini ${danger ? "danger" : ""}" type="button" data-act="${act}" ${lock}>${label}</button>`).join("");
   if (!entry) {
@@ -147,13 +159,13 @@ function dbcMessageEditorHtml(catalog) {
   const messageIssues = dbcIssueFor(issues, entry.key).filter(issue => issue.level !== "note");
   const issueNote = messageIssues.length
     ? `<div class="note tight" style="margin-top:var(--sp-2)">${messageIssues.slice(0, 3).map(issue => `<span class="tag ${issue.level === "error" ? "bad" : "warn"}">${escapeHtml(issue.message)}</span>`).join(" ")}</div>` : "";
-  const left = `<article class="panel"><header class="panel-head"><h3>报文 · ${escapeHtml(entry.name)}</h3><div class="head-actions">`
+  const left = `<article class="panel dbc-message-panel"><header class="panel-head"><h3 title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</h3><div class="head-actions">`
     + actions([["msg-new", "新建"], ["msg-dup", "复制"], ["msg-up", "上移"], ["msg-down", "下移"], ["msg-del", "删除", true]])
-    + `</div></header><div class="panel-body">${messageForm}${issueNote}`
+    + `</div></header><div class="panel-body dbc-message-layout"><div>${messageForm}${issueNote}</div><div class="dbc-layout-preview">`
     + `<div class="dbc-subhead"><span>位布局</span><span class="dbc-inline">${dbcMuxViewHtml(entry)}<div class="segmented small" id="dbcNewOrder" role="group" aria-label="新信号字节序">`
     + ["intel", "motorola"].map(order => `<button type="button" data-order="${order}" class="${dbcEdit.newOrder === order ? "active" : ""}" title="新建信号时使用的字节序">${DBC_ORDER_LABEL[order]}</button>`).join("")
     + `</div></span></div>${dbcBitGridHtml(entry)}`
-    + `<p class="dbc-grid-legend">点击格子选中信号；拖选设置选中信号的位置，没有选中信号时拖选会新建一个。红色表示重叠，虚线格在 DLC 之外。</p></div></article>`;
+    + `<p class="dbc-grid-legend">${readonly ? "点击位格查看信号。" : "拖选位格调整信号，空白处拖选新建。"} 红色表示重叠，虚线表示超出 DLC。</p></div></div></article>`;
   return `<div class="dbc-edit-grid">${left}${dbcSignalPanelHtml(entry, catalog)}</div>`;
 }
 
@@ -196,7 +208,7 @@ function dbcBitGridHtml(entry) {
         if (list.includes(selectedIndex)) classes.push("selected");
       }
       const owner = list.map(item => entry.signals[item].name).join(" / ");
-      html += `<td class="${classes.join(" ")}" style="${style}" data-bit="${index}" title="${escapeHtml(owner ? `${owner} · bit ${index}` : `bit ${index}（空闲）`)}"><span class="bit">${index}</span>${label}</td>`;
+      html += `<td class="${classes.join(" ")}" style="${style}" data-bit="${index}" ${owner ? `tabindex="0" role="button" aria-label="${escapeHtml(owner)}，bit ${index}"` : ""} title="${escapeHtml(owner ? `${owner} · bit ${index}` : `bit ${index}（空闲）`)}"><span class="bit">${index}</span>${label}</td>`;
     }
     html += "</tr>";
   }
@@ -211,7 +223,7 @@ function dbcSignalPanelHtml(entry, catalog) {
     const bad = dbcIssueFor(issues, entry.key, signal.name).some(issue => issue.level === "error");
     const mux = signal.mux.role !== "none" ? `<span class="dbc-badge-mux">${signal.mux.role === "multiplexor" ? "M" : `m${signal.mux.value}`}</span>` : "";
     return `<tr class="${signal.name === dbcUi.selected.signal ? "active" : ""}" data-signal="${escapeHtml(signal.name)}">`
-      + `<td><span class="dbc-swatch" style="background:var(--series-${(index % 8) + 1})"></span>${escapeHtml(signal.name)}${mux}${bad ? ' <span class="dbc-count bad">!</span>' : ""}</td>`
+      + `<td><button class="dbc-signal-select" type="button" aria-pressed="${signal.name === dbcUi.selected.signal}"><span class="dbc-swatch" style="background:var(--series-${(index % 8) + 1})"></span>${escapeHtml(signal.name)}${mux}</button>${bad ? ' <span class="dbc-count bad">!</span>' : ""}</td>`
       + `<td>${signal.start}|${signal.length}</td><td>${signal.byte_order === "intel" ? "Intel" : "Motorola"}</td>`
       + `<td>${dbcNumber(signal.factor)}</td><td>${dbcNumber(signal.offset)}</td><td>${escapeHtml(signal.unit)}</td></tr>`;
   }).join("");
@@ -806,12 +818,13 @@ function dbcFinishDrag() {
   $$("#dbcEditor .dbc-bitgrid td.drag").forEach(cell => cell.classList.remove("drag"));
   if (!drag) return;
   const entry = dbcMessageEntry();
-  if (!entry || dbcReadonly()) return;
+  if (!entry) return;
   if (drag.a === drag.b) {
     const owner = entry.signals.find(signal => signal.bits.includes(drag.a));
     if (owner) dbcSelectMessage(entry.key, owner.name);
     return;
   }
+  if (dbcReadonly()) return;
   const signal = dbcSelectedSignal();
   const range = dbcRangeFromCells(drag.a, drag.b, signal ? signal.byte_order : dbcEdit.newOrder);
   if (range.length > 64) return toast("信号最长 64 位", true);
@@ -823,6 +836,13 @@ function dbcFinishDrag() {
 
 function bindDbcEditorControls() {
   const root = $("#dbcEditor");
+  root?.addEventListener("keydown", event => {
+    const cell = event.target.closest(".dbc-bitgrid td[data-bit]");
+    if (!cell || !["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    const owner = dbcMessageEntry()?.signals.find(signal => signal.bits.includes(Number(cell.dataset.bit)));
+    if (owner) dbcSelectMessage(dbcUi.selected.key, owner.name);
+  });
   root?.addEventListener("change", dbcEditorChange);
   root?.addEventListener("click", dbcEditorClick);
   root?.addEventListener("mousedown", event => {

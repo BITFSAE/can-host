@@ -4,6 +4,7 @@
 
 const dbcUi = {
   ready: false,
+  directoryHidden: false,
   loading: false,
   source: "main",
   tab: "live",
@@ -21,6 +22,9 @@ const dbcUi = {
   signatures: {},
   viewTimer: null,
   lastData: new Map(),
+  stateRequest: 0,
+  detailRequests: new Map(),
+  selectionRequest: 0,
 };
 
 const DBC_BUS_LABEL = { can1: "CAN1", canb: "CANB", all: "全部总线", none: "不解码" };
@@ -42,7 +46,11 @@ function dbcPaint(key, node, html) {
   if (!node) return false;
   if (dbcUi.signatures[key] === html) return false;
   dbcUi.signatures[key] = html;
+  const scrollTop = node.scrollTop;
+  const focusedKey = node.id === "dbcTree" && node.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   node.innerHTML = html;
+  node.scrollTop = scrollTop;
+  if (focusedKey) [...node.querySelectorAll("[data-key]")].find(item => item.dataset.key === focusedKey)?.focus({ preventScroll: true });
   return true;
 }
 
@@ -91,8 +99,11 @@ function dbcMessageEntry(key = dbcUi.selected.key, fileId = dbcUi.fileId) {
 async function dbcRefreshState() {
   const api = dbcApi();
   if (!api) return;
+  const request = ++dbcUi.stateRequest;
   const reply = await api.dbc_state();
+  if (request !== dbcUi.stateRequest) return;
   if (!reply?.ok) throw new Error(reply?.error || "无法读取 DBC 状态");
+  if (reply.revision < dbcUi.revision) return;
   const first = !dbcUi.ready;
   dbcUi.files = reply.files;
   dbcUi.recent = reply.recent || [];
@@ -109,6 +120,7 @@ async function dbcRefreshState() {
     for (const problem of reply.problems || []) toast(problem, true);
   }
   await dbcEnsureDetail();
+  if (request !== dbcUi.stateRequest) return;
   dbcUi.signatures = {};
   dbcSelectDefault();
 }
@@ -119,7 +131,10 @@ async function dbcEnsureDetail(fileId = dbcUi.fileId) {
   if (!api || !file) return;
   const cached = dbcUi.details.get(fileId);
   if (cached && cached.fileRevision === file.revision) return;
+  const request = (dbcUi.detailRequests.get(fileId) || 0) + 1;
+  dbcUi.detailRequests.set(fileId, request);
   const reply = await api.dbc_detail(fileId);
+  if (dbcUi.detailRequests.get(fileId) !== request || !dbcUi.files.some(item => item.id === fileId)) return;
   if (!reply?.ok) throw new Error(reply?.error || "无法读取 DBC 内容");
   dbcUi.details.set(fileId, { fileRevision: reply.file.revision, catalog: reply.catalog, issues: reply.issues });
 }
@@ -142,15 +157,43 @@ async function dbcSync() {
   renderDbc();
 }
 
-function dbcSelectFile(fileId) {
-  if (dbcUi.fileId === fileId) return;
+function dbcResetFileView(fileId) {
+  dbcUi.selectionRequest += 1;
   dbcUi.fileId = fileId;
   dbcUi.selected = { key: null, signal: null };
+  dbcUi.filter = "";
+  if (typeof dbcEdit !== "undefined") dbcEdit.muxView = "";
+  if (typeof dbcSend !== "undefined") {
+    clearTimeout(dbcSend.timer);
+    dbcSend.token += 1;
+    dbcSend.payload = null;
+    dbcSend.form = null;
+  }
+  const search = $("#dbcSearch");
+  if (search) search.value = "";
+  $(".dbc-content")?.scrollTo(0, 0);
+  if ($("#dbcTree")) $("#dbcTree").scrollTop = 0;
   dbcUi.signatures = {};
-  dbcEnsureDetail().then(() => { dbcSelectDefault(); renderDbc(); }).catch(error => toast(String(error), true));
+}
+
+async function dbcSelectFile(fileId) {
+  if (dbcUi.fileId === fileId) return;
+  dbcResetFileView(fileId);
+  const request = dbcUi.selectionRequest;
+  dbcSelectDefault();
+  renderDbc();
+  try {
+    await dbcEnsureDetail(fileId);
+    if (request !== dbcUi.selectionRequest || dbcUi.fileId !== fileId) return;
+    dbcSelectDefault();
+    renderDbc();
+  } catch (error) {
+    if (request === dbcUi.selectionRequest && dbcUi.fileId === fileId) toast(String(error), true);
+  }
 }
 
 function dbcSelectMessage(key, signal = null) {
+  if (key !== dbcUi.selected.key) $(".dbc-content")?.scrollTo(0, 0);
   dbcUi.selected = { key, signal };
   dbcUi.signatures.editor = "";
   renderDbc();
@@ -162,7 +205,11 @@ function dbcRestoreView(view) {
   if (view.source === "main" || view.source === "vehicle") dbcUi.source = view.source;
   dbcUi.watch = Array.isArray(view.watch) ? view.watch.slice(0, 64) : [];
   if (typeof dbcRestorePlot === "function") dbcRestorePlot(Array.isArray(view.plot) ? view.plot : []);
-  $$("#dbcSource button").forEach(button => button.classList.toggle("active", button.dataset.source === dbcUi.source));
+  $$("#dbcSource button").forEach(button => {
+    button.classList.toggle("active", button.dataset.source === dbcUi.source);
+    button.setAttribute("aria-pressed", String(button.dataset.source === dbcUi.source));
+    button.textContent = dbcSourceLabel(button.dataset.source);
+  });
 }
 
 function dbcPersistView() {
@@ -256,8 +303,14 @@ function renderDbc() {
   renderDbcHeader();
   renderDbcFiles();
   renderDbcTree();
+  renderDbcBindingNotice();
   $$("[data-dbc-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.dbcPanel !== dbcUi.tab));
-  $$("#dbcTabs button").forEach(button => button.classList.toggle("active", button.dataset.tab === dbcUi.tab));
+  $$("#dbcTabs button").forEach(button => {
+    const active = button.dataset.tab === dbcUi.tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
   text("#dbcTabHint", DBC_TAB_HINT[dbcUi.tab] || "");
   if (dbcUi.tab === "live") renderDbcLive();
   else if (dbcUi.tab === "plot" && typeof renderDbcPlot === "function") renderDbcPlot();
@@ -280,7 +333,20 @@ function renderDbcHeader() {
     tag.textContent = label;
     tag.className = `tag ${cls}`;
   }
-  $$("#dbcSource button").forEach(button => button.classList.toggle("active", button.dataset.source === dbcUi.source));
+  $$("#dbcSource button").forEach(button => {
+    button.classList.toggle("active", button.dataset.source === dbcUi.source);
+    button.setAttribute("aria-pressed", String(button.dataset.source === dbcUi.source));
+    button.textContent = dbcSourceLabel(button.dataset.source);
+  });
+}
+
+function renderDbcBindingNotice() {
+  const file = dbcCurrentFile();
+  const bus = dbcLiveFor()?.bus || (dbcUi.source === "vehicle" ? "canb" : "can1");
+  const mismatch = file && file.bus !== "all" && file.bus !== bus;
+  $("#dbcBindingNotice")?.classList.toggle("hidden", !mismatch);
+  text("#dbcBindingText", file?.bus === "none" ? `${file.name} · 仅查看，尚未绑定接收数据流。`
+    : file ? `${file.name} 绑定 ${DBC_BUS_LABEL[file.bus]}，当前查看 ${dbcSourceLabel()}。` : "");
 }
 
 function renderDbcFiles() {
@@ -320,7 +386,12 @@ function renderDbcFiles() {
 function renderDbcTree() {
   const catalog = dbcCatalog();
   const container = $("#dbcTree");
-  if (!catalog) { dbcPaint("tree", container, '<div class="empty-state">载入 DBC 后在这里选择报文。</div>'); return; }
+  if (!catalog) {
+    text("#dbcSearchResults", "");
+    $("#dbcSearchClear")?.classList.toggle("hidden", !dbcUi.filter);
+    dbcPaint("tree", container, `<div class="empty-state">${dbcCurrentFile() ? "正在载入报文…" : "载入 DBC 后在这里选择报文。"}</div>`);
+    return;
+  }
   const summaries = dbcMessageSummaries();
   const query = dbcUi.filter.trim().toLowerCase();
   const groups = new Map();
@@ -333,11 +404,14 @@ function renderDbcTree() {
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(message);
   }
+  text("#dbcSearchResults", query ? `${[...groups.values()].reduce((count, messages) => count + messages.length, 0)} / ${catalog.messages.length} 条报文` : "");
+  $("#dbcSearchClear")?.classList.toggle("hidden", !query);
   let html = "";
   for (const [group, messages] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "zh"))) {
     html += `<div class="dbc-group"><span>${escapeHtml(group)}</span><span>${messages.length}</span></div>`;
     for (const message of messages.sort((a, b) => a.id - b.id || Number(a.extended) - Number(b.extended))) {
-      const info = dbcStateInfo(summaries.get(`${dbcUi.fileId}|${message.key}`));
+      const info = message.virtual ? { dot: "", label: "未使用信号" }
+        : dbcStateInfo(summaries.get(`${dbcUi.fileId}|${message.key}`));
       const active = message.key === dbcUi.selected.key;
       html += `<button class="dbc-msg ${active ? "active" : ""}" type="button" role="option" aria-selected="${active}" data-key="${message.key}">`
         + `<i class="dbc-dot ${info.dot}" title="${escapeHtml(info.label)}"></i>`
@@ -356,13 +430,15 @@ function renderDbcLive() {
   const decoded = live?.decoded?.[dbcUi.selected.key];
   const fileMatches = decoded && decoded.file === dbcUi.fileId;
   const summary = fileMatches ? decoded : null;
-  const info = dbcStateInfo(summary);
+  const info = entry?.virtual ? { cls: "neutral", label: "未使用信号" } : dbcStateInfo(summary);
   text("#dbcLiveTitle", entry ? entry.name : "未选择报文");
   const tags = entry ? `<span class="tag ${info.cls}">${escapeHtml(info.label)}</span>` : "";
   dbcPaint("liveTags", $("#dbcLiveTags"), tags);
 
   let meta = "";
-  if (entry) {
+  if (entry?.virtual) {
+    meta = '<span class="note tight">这些信号尚未分配到报文，不参与总线解码。</span>';
+  } else if (entry) {
     const previous = dbcUi.lastData.get(entry.key) || "";
     const bytes = summary?.data ? summary.data.split(" ") : [];
     const before = previous ? previous.split(" ") : [];
@@ -388,12 +464,14 @@ function renderDbcLive() {
     dbcPaint("signals", rows, "");
     $("#dbcLiveEmpty")?.classList.remove("hidden");
   } else {
-    const rowsData = summary?.signals || entry.signals.map(signal => ({ name: signal.name, unit: signal.unit, state: "waiting", has_label: signal.choices.length > 0 }));
+    const rowsData = summary?.signals || entry.signals.map(signal => ({ name: signal.name, unit: signal.unit, state: entry.virtual ? "unassigned" : "waiting", has_label: signal.choices.length > 0 }));
     dbcPaint("signals", rows, rowsData.map(row => dbcSignalRow(entry, row, summary)).join(""));
     const hint = $("#dbcLiveEmpty");
-    hint?.classList.toggle("hidden", !!summary || entry.signals.length === 0);
-    if (hint) hint.textContent = entry.virtual ? "Vector 的未使用信号容器不会出现在总线上。"
-      : "这个 DBC 没有绑定到当前数据源的总线，先在左侧文件卡的下拉里选择 CAN1 或 CANB。";
+    hint?.classList.toggle("hidden", !!summary || entry.virtual || entry.signals.length === 0);
+    if (hint) hint.textContent = decoded && !fileMatches ? "同一 ID 优先由另一个 DBC 解码，请核对文件绑定。"
+      : dbcCurrentFile()?.bus === "none" ? "当前文件仅查看。选择接收数据流后可实时解码。"
+      : !(live?.files || []).some(file => file.id === dbcUi.fileId) ? "当前文件未绑定到这个接收数据流。"
+      : "等待报文数据。";
   }
   renderDbcWatch();
   renderDbcUnknown();
@@ -410,6 +488,7 @@ function dbcRangeBar(signal, row) {
 }
 
 function dbcValueCells(row, stale) {
+  if (row.state === "unassigned") return { value: "未分配报文", raw: "—", label: "—", cls: "waiting" };
   if (row.state === "waiting") return { value: "等待数据", raw: "—", label: "—", cls: "waiting" };
   if (row.state === "inactive") return { value: "未生效", raw: "—", label: "多路复用分支未选中", cls: "inactive" };
   if (row.state === "missing") return { value: "DLC 不足", raw: "—", label: "—", cls: "missing" };
@@ -431,8 +510,8 @@ function dbcSignalRow(entry, row, summary) {
     + `<td class="dbc-name" title="${escapeHtml(signal?.comment || "")}">${escapeHtml(row.name)}${mux}</td>`
     + `<td class="dbc-value">${cells.value}</td><td>${cells.raw}</td><td>${cells.label}</td>`
     + `<td>${dbcRangeBar(signal, row)}</td>`
-    + `<td><div class="dbc-row-actions"><button data-act="watch" class="${watched ? "on" : ""}">${watched ? "已观察" : "观察"}</button>`
-    + `<button data-act="plot" class="${plotted ? "on" : ""}">${plotted ? "已画" : "曲线"}</button></div></td></tr>`;
+    + `<td><div class="dbc-row-actions"><button data-act="watch" ${entry.virtual ? "disabled" : ""} aria-pressed="${watched}" aria-label="${watched ? "取消观察" : "观察"} ${escapeHtml(row.name)}" class="${watched ? "on" : ""}">${watched ? "已观察" : "观察"}</button>`
+    + `<button data-act="plot" ${entry.virtual ? "disabled" : ""} aria-pressed="${plotted}" aria-label="${plotted ? "移除曲线" : "添加曲线"} ${escapeHtml(row.name)}" class="${plotted ? "on" : ""}">${plotted ? "已添加" : "曲线"}</button></div></td></tr>`;
 }
 
 function renderDbcWatch() {
@@ -466,6 +545,8 @@ function renderDbcUnknown() {
     + `<td><div class="dbc-row-actions"><button data-act="model">建模</button></div></td></tr>`).join("");
   dbcPaint("unknown", $("#dbcUnknownRows"), rows);
   $("#dbcUnknownEmpty")?.classList.toggle("hidden", unknown.length > 0);
+  text("#dbcUnknownEmpty", !live?.connection?.connected ? "连接数据源后查看未识别帧。"
+    : !(live?.files?.length) ? "绑定 DBC 后查看未识别帧。" : "当前收到的帧均已识别。");
 }
 
 /* ---------- 弹窗表单 ---------- */
@@ -489,10 +570,10 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
       return `<label class="checkbox"><input id="${id}" type="checkbox" ${field.value ? "checked" : ""}><span>${escapeHtml(field.label)}</span></label>`;
     }
     if (field.type === "textarea") {
-      return `<label class="field">${label}<textarea id="${id}" rows="3">${escapeHtml(field.value ?? "")}</textarea></label>`;
+      return `<label class="field">${label}<textarea id="${id}" rows="3" ${field.required ? "required" : ""}>${escapeHtml(field.value ?? "")}</textarea></label>`;
     }
     return `<label class="field">${label}<input id="${id}" type="${field.type || "text"}" value="${escapeHtml(field.value ?? "")}"`
-      + `${field.min != null ? ` min="${field.min}"` : ""}${field.max != null ? ` max="${field.max}"` : ""} autocomplete="off"></label>`;
+      + `${field.min != null ? ` min="${field.min}"` : ""}${field.max != null ? ` max="${field.max}"` : ""}${field.required ? " required" : ""} autocomplete="off"></label>`;
   }).join("");
   body.innerHTML = (message ? `<p class="confirm-text">${escapeHtml(message)}</p>` : "") + inputs;
   return new Promise(resolve => {
@@ -501,6 +582,7 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
       if (settled) return;
       settled = true;
       okButton.removeEventListener("click", accept);
+      dialog.removeEventListener("keydown", onKey);
       dialog.removeEventListener("close", cancel);
       if (dialog.open) dialog.close("done");
       resolve(value);
@@ -509,6 +591,7 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
       const values = {};
       for (const field of fields) {
         const node = $(`#dbcField_${field.name}`);
+        if (!node.reportValidity()) return;
         values[field.name] = field.type === "checkbox" ? node.checked : field.type === "number" ? Number(node.value) : node.value.trim();
         if (field.required && (values[field.name] === "" || Number.isNaN(values[field.name]))) {
           node.classList.add("invalid");
@@ -519,7 +602,13 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
       finish(values);
     };
     const cancel = () => finish(null);
+    const onKey = event => {
+      if (event.key === "Enter" && !event.isComposing && /^(INPUT|SELECT)$/.test(event.target.tagName)) {
+        event.preventDefault(); accept();
+      }
+    };
     okButton.addEventListener("click", accept);
+    dialog.addEventListener("keydown", onKey);
     dialog.addEventListener("close", cancel);
     dialog.showModal();
     body.querySelector("input, select, textarea")?.focus();
@@ -528,7 +617,66 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
 
 /* ---------- 事件 ---------- */
 
+function dbcSetDirectory(hidden) {
+  dbcUi.directoryHidden = hidden;
+  $(".dbc-workspace")?.classList.toggle("directory-hidden", hidden);
+  $("#dbcDirectoryToggle")?.setAttribute("aria-expanded", String(!hidden));
+  const button = $("#dbcDirectoryToggle");
+  if (button) button.title = hidden ? "展开报文目录" : "收起报文目录";
+  try { localStorage.setItem("canHostDbcDirectoryHidden", String(hidden)); } catch { /* storage may be disabled */ }
+}
+
 function bindDbcControls() {
+  let directoryHidden = window.matchMedia("(max-width: 800px)").matches;
+  try {
+    const saved = localStorage.getItem("canHostDbcDirectoryHidden");
+    if (saved !== null) directoryHidden = saved === "true";
+  } catch { /* storage may be disabled */ }
+  dbcSetDirectory(directoryHidden);
+  const closeDirectory = () => { dbcSetDirectory(true); $("#dbcDirectoryToggle")?.focus(); };
+  $("#dbcDirectoryToggle")?.addEventListener("click", () => {
+    dbcSetDirectory(!dbcUi.directoryHidden);
+    if (!dbcUi.directoryHidden) $("#dbcSearch")?.focus();
+  });
+  $("#dbcDirectoryClose")?.addEventListener("click", closeDirectory);
+  $("#dbcBindingChoose")?.addEventListener("click", () => {
+    dbcSetDirectory(false);
+    const card = $$("#dbcFiles [data-file]").find(node => node.dataset.file === dbcUi.fileId);
+    card?.scrollIntoView({ block: "nearest" });
+    card?.querySelector('select[data-file-act="bus"]')?.focus();
+  });
+  $("#dbcDirectoryBackdrop")?.addEventListener("click", closeDirectory);
+  $("#dbcDirectory")?.addEventListener("keydown", event => {
+    if (event.key === "Escape" && event.target.id !== "dbcSearch") { event.preventDefault(); closeDirectory(); }
+  });
+  $$("#dbcTabs button").forEach(button => {
+    button.id = `dbcTab-${button.dataset.tab}`;
+    button.setAttribute("aria-controls", `dbcPanel-${button.dataset.tab}`);
+    const panel = $(`[data-dbc-panel="${button.dataset.tab}"]`);
+    panel.id = `dbcPanel-${button.dataset.tab}`;
+    panel.setAttribute("aria-labelledby", button.id);
+    panel.tabIndex = 0;
+  });
+  $("#dbcTabs")?.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const index = DBC_TABS.indexOf(dbcUi.tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? DBC_TABS.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + DBC_TABS.length) % DBC_TABS.length;
+    const button = $(`#dbcTabs [data-tab="${DBC_TABS[next]}"]`);
+    button?.click(); button?.focus();
+  });
+  $("#dbcTree")?.addEventListener("keydown", event => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const rows = $$("#dbcTree .dbc-msg");
+    if (!rows.length) return;
+    event.preventDefault();
+    const index = rows.indexOf(event.target.closest(".dbc-msg"));
+    const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1
+      : Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+    dbcSelectMessage(rows[next].dataset.key);
+    $$("#dbcTree .dbc-msg")[next]?.focus();
+  });
   // 拖入窗口的文件由后端接管（pywebview 提供完整路径）；这里只阻止浏览器把它当页面打开。
   for (const type of ["dragover", "drop"]) {
     window.addEventListener(type, event => {
@@ -546,6 +694,7 @@ function bindDbcControls() {
   $("#dbcTabs")?.addEventListener("click", event => {
     const button = event.target.closest("button[data-tab]"); if (!button || !DBC_TABS.includes(button.dataset.tab)) return;
     dbcUi.tab = button.dataset.tab;
+    $(".dbc-content")?.scrollTo(0, 0);
     dbcUi.signatures = {};
     schedulePoll(0);
     renderDbc();
@@ -553,6 +702,9 @@ function bindDbcControls() {
   $("#dbcOpenButton")?.addEventListener("click", dbcOpenDialog);
   $("#dbcNewButton")?.addEventListener("click", dbcNewFile);
   $("#dbcSearch")?.addEventListener("input", event => { dbcUi.filter = event.target.value; renderDbcTree(); });
+  const clearSearch = () => { dbcUi.filter = ""; $("#dbcSearch").value = ""; renderDbcTree(); $("#dbcSearch").focus(); };
+  $("#dbcSearchClear")?.addEventListener("click", clearSearch);
+  $("#dbcSearch")?.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); clearSearch(); } });
   $("#dbcFiles")?.addEventListener("click", dbcFilesClick);
   $("#dbcFiles")?.addEventListener("change", event => {
     const select = event.target.closest('select[data-file-act="bus"]'); if (!select) return;
@@ -563,7 +715,11 @@ function bindDbcControls() {
     });
   });
   $("#dbcTree")?.addEventListener("click", event => {
-    const button = event.target.closest(".dbc-msg"); if (button) dbcSelectMessage(button.dataset.key);
+    const button = event.target.closest(".dbc-msg");
+    if (button) {
+      dbcSelectMessage(button.dataset.key);
+      if (window.matchMedia("(max-width: 800px)").matches) closeDirectory();
+    }
   });
   $("#dbcSignalRows")?.addEventListener("click", event => {
     const button = event.target.closest("button[data-act]"); const row = event.target.closest("tr[data-signal]");
@@ -619,14 +775,14 @@ async function dbcOpenDialog() {
   if (result?.cancelled) return;
   if (!result?.ok) return toast(result?.error || "无法打开 DBC", true);
   if (result.error) toast(result.error, true);
-  if (result.files?.[0]) dbcUi.fileId = result.files[0].id;
+  if (result.files?.[0]) dbcResetFileView(result.files[0].id);
   await dbcSync();
 }
 
 async function dbcOpenPath(path) {
   const result = await state.api.dbc_open(path);
   if (!result?.ok) return toast(result?.error || "无法打开 DBC", true);
-  dbcUi.fileId = result.file.id;
+  dbcResetFileView(result.file.id);
   await dbcSync();
 }
 
@@ -643,7 +799,7 @@ async function dbcNewFile() {
   const result = await state.api.dbc_new(values.name);
   if (!result?.ok) return toast(result?.error || "无法新建 DBC", true);
   await state.api.dbc_set_bus(result.file.id, values.bus);
-  dbcUi.fileId = result.file.id;
+  dbcResetFileView(result.file.id);
   dbcUi.tab = "edit";
   await dbcSync();
 }
@@ -658,7 +814,7 @@ async function dbcCloseFile(id) {
   }
   const result = await state.api.dbc_close(id);
   if (!result?.ok) toast(result?.error || "无法关闭", true);
-  if (dbcUi.fileId === id) dbcUi.fileId = null;
+  if (dbcUi.fileId === id) dbcResetFileView(null);
   await dbcSync();
 }
 

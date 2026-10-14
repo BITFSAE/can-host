@@ -109,6 +109,13 @@ class PageWiringTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "需要 node 运行页面脚本")
 class ScriptTests(unittest.TestCase):
+    def test_navigation_readonly_inspection_and_async_view_isolation(self) -> None:
+        result = subprocess.run(
+            [shutil.which("node"), str(ROOT / "Tests" / "dbc_interaction_smoke.js")],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("dbc interaction smoke ok", result.stdout)
+
     def test_scripts_parse(self) -> None:
         for name in DBC_SCRIPTS:
             result = subprocess.run([shutil.which("node"), "--check", str(JS / name)], capture_output=True, text=True)

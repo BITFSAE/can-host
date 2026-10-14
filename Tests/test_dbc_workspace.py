@@ -65,6 +65,28 @@ class FileTests(WorkspaceCase):
         self.assertEqual(again["file"]["id"], first)
         self.assertEqual(len(self.workspace.files), 1)
 
+    def test_cana_and_canc_open_without_binding_and_decode_after_explicit_binding(self) -> None:
+        for suffix in ("A", "C"):
+            with self.subTest(bus=suffix):
+                path = self.folder / f"Vehicle_Can{suffix}.dbc"
+                shutil.copy(FIXTURE, path)
+                result = self.workspace.open_path(path)
+                self.assertTrue(result["ok"], result)
+                file_id = result["file"]["id"]
+                self.assertEqual(result["file"]["bus"], "none")
+                catalog = self.workspace.detail(file_id)["catalog"]
+                self.assertTrue(any(message["virtual"] for message in catalog["messages"]))
+                frames = [fact(291, ENGINE_OK, 99.99)]
+                self.assertNotIn("s:291", self.workspace.live("can1", frames, 100, ["s:291"])["decoded"])
+                self.workspace.set_bus(file_id, "can1")
+                live = self.workspace.live("can1", frames, 100, ["s:291"])
+                self.assertEqual(live["decoded"]["s:291"]["file"], file_id)
+                speed = next(row for row in live["decoded"]["s:291"]["signals"] if row["name"] == "Speed")
+                self.assertEqual(speed["value"], 50)
+                self.assertNotIn("v", live["decoded"])
+                self.assertFalse(any(message["key"] == "v" for message in live["messages"]))
+                self.workspace.set_bus(file_id, "none")
+
     def test_missing_and_unreadable_files_are_reported(self) -> None:
         result = self.workspace.open_path(self.folder / "missing.dbc")
         self.assertFalse(result["ok"])

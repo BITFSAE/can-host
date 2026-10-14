@@ -23,10 +23,15 @@ function dbcSendTask() {
 async function dbcSendLoadForm() {
   if (!dbcSend.key || dbcSend.loading) return;
   dbcSend.loading = true;
-  const key = dbcSend.key, source = dbcUi.source;
+  clearTimeout(dbcSend.timer);
+  dbcSend.token += 1;
+  dbcSend.payload = null;
+  const key = dbcSend.key, source = dbcUi.source, fileId = dbcUi.fileId;
+  const revision = dbcLiveFor(source)?.revision;
   try {
     const reply = await state.api.dbc_form(source, key);
-    if (key !== dbcSend.key || source !== dbcUi.source) return;
+    if (key !== dbcSend.key || source !== dbcUi.source || fileId !== dbcUi.fileId
+        || revision !== dbcLiveFor(source)?.revision || revision !== dbcUi.revision) return;
     if (!reply?.ok) { dbcSend.form = null; dbcSend.error = reply?.error || "无法读取报文"; }
     else {
       dbcSend.form = reply.message;
@@ -53,10 +58,17 @@ function dbcSendInitialValue(signal, physical) {
 
 function dbcSendEncode() {
   clearTimeout(dbcSend.timer);
+  const token = ++dbcSend.token;
+  const source = dbcUi.source, key = dbcSend.key;
+  const values = structuredClone(dbcSend.values);
+  dbcSend.payload = null;
+  dbcSend.error = "";
+  renderDbcSendPayload();
   dbcSend.timer = setTimeout(async () => {
-    const token = ++dbcSend.token;
-    const reply = await state.api.dbc_encode(dbcUi.source, dbcSend.key, dbcSend.values);
-    if (token !== dbcSend.token) return;
+    let reply;
+    try { reply = await state.api.dbc_encode(source, key, values); }
+    catch (error) { reply = { ok: false, error: `编码失败：${error.message || error}` }; }
+    if (token !== dbcSend.token || source !== dbcUi.source || key !== dbcSend.key) return;
     dbcSend.payload = reply?.ok ? reply : null;
     dbcSend.error = reply?.ok ? "" : (reply?.error || "编码失败");
     dbcUi.signatures.sendPayload = "";
@@ -67,9 +79,13 @@ function dbcSendEncode() {
 function renderDbcSender() {
   const root = $("#dbcSender");
   const live = dbcLiveFor();
-  const messages = (live?.messages || []);
+  const messages = live?.revision === dbcUi.revision && dbcCurrentFile()?.bus !== "none"
+    ? (live?.messages || []).filter(message => message.file === dbcUi.fileId) : [];
   if (!messages.length) {
-    dbcPaint("sender", root, '<div class="empty-state large">当前数据源的总线上没有绑定任何 DBC。在左侧文件卡里把 DBC 绑定到 CAN1 或 CANB 后再来发送。</div>');
+    dbcSend.token += 1;
+    dbcSend.payload = null;
+    dbcSend.form = null;
+    dbcPaint("sender", root, '<div class="empty-state large">当前文件在这个接收数据流中没有可用报文，请核对文件绑定和重复 ID。</div>');
     return;
   }
   if (!dbcSend.key || !messages.some(message => message.key === dbcSend.key)) {
@@ -80,7 +96,7 @@ function renderDbcSender() {
   if ((!dbcSend.form || dbcSend.source !== dbcUi.source || dbcSend.revision !== live.revision) && !dbcSend.loading) {
     dbcSendLoadForm();
   }
-  const form = dbcSend.form;
+  const form = dbcSend.source === dbcUi.source ? dbcSend.form : null;
   const options = [...messages].sort((a, b) => a.id - b.id).map(message =>
     `<option value="${message.key}" ${message.key === dbcSend.key ? "selected" : ""}>${escapeHtml(message.id_text)} · ${escapeHtml(message.name)}</option>`).join("");
   const writable = dbcSendWritable();
@@ -92,7 +108,7 @@ function renderDbcSender() {
       let input;
       if (signal.choices.length) {
         const known = signal.choices.some(choice => choice.label === value);
-        input = `<select data-sig="${escapeHtml(signal.name)}">${known ? "" : `<option value="${escapeHtml(String(value))}" selected>数值 ${escapeHtml(dbcNumber(value))}</option>`}`
+        input = `<select data-sig="${escapeHtml(signal.name)}" aria-label="${escapeHtml(signal.name)}">${known ? "" : `<option value="${escapeHtml(String(value))}" selected>数值 ${escapeHtml(dbcNumber(value))}</option>`}`
           + signal.choices.map(choice => `<option value="${escapeHtml(choice.label)}" ${choice.label === value ? "selected" : ""}>${escapeHtml(choice.label)} (${choice.value})</option>`).join("") + "</select>";
       } else {
         input = `<input data-sig="${escapeHtml(signal.name)}" value="${escapeHtml(dbcNumber(value))}" inputmode="decimal" aria-label="${escapeHtml(signal.name)}">`;
@@ -110,7 +126,7 @@ function renderDbcSender() {
       + `<input id="dbcSendCycle" type="number" min="20" max="60000" value="${dbcSend.cycle}"></label></div>`
       + `<div class="panel-foot"><button class="outline-button" type="button" data-act="send-once" ${writable ? "" : "disabled"}>发送一次</button>`
       + `<button class="action-button" type="button" id="dbcSendPeriodic" data-act="send-periodic" ${writable ? "" : "disabled"}>启用周期发送</button></div>`
-      + `<p class="note" style="margin-top:var(--sp-3)">受保护的命令 ID（BMS 参数、风扇、IVT、充电机请求）会被拒绝，需用对应的专用页面发送。模拟和回放不可写。</p></div></article></div>`;
+      + `<p class="note" style="margin-top:var(--sp-3)">项目命令请用专用页面发送。模拟与回放只读。</p></div></article></div>`;
     dbcUi.signatures.sendPayload = "";
   }
   renderDbcSendPayload();
@@ -125,10 +141,16 @@ function renderDbcSendPayload() {
     ? `<div class="dbc-payload">${escapeHtml(payload.data || "（空）")}</div><div class="dbc-live-meta"><dl class="dbc-fact"><dt>CAN ID</dt><dd>${escapeHtml(dbcIdText(payload.id, payload.extended))} · ${payload.extended ? "扩展" : "标准"}</dd></dl>`
       + `<dl class="dbc-fact"><dt>DLC</dt><dd>${payload.dlc}</dd></dl>`
       + `<dl class="dbc-fact"><dt>周期发送</dt><dd class="${task?.active ? "warn" : ""}">${task?.active ? `运行中 · 已发 ${Number(task.count).toLocaleString()} 帧` : task?.last_error ? escapeHtml(task.last_error) : "未启用"}</dd></dl></div>`
-    : `<div class="panel-body"><span class="tag bad">${escapeHtml(dbcSend.error || "等待编码")}</span></div>`);
+    : `<div class="panel-body"><span class="tag ${dbcSend.error ? "bad" : "neutral"}" role="status">${escapeHtml(dbcSend.error || "等待编码")}</span></div>`);
   if (dbcUi.signatures.sendPayload !== html) { dbcUi.signatures.sendPayload = html; box.innerHTML = html; }
   const periodic = $("#dbcSendPeriodic");
-  if (periodic) periodic.textContent = task?.active ? "停止周期发送" : "启用周期发送";
+  if (periodic) {
+    periodic.textContent = task?.active ? "停止周期发送" : "启用周期发送";
+    periodic.disabled = !task?.active && (!dbcSendWritable() || !payload);
+  }
+  const once = $('#dbcSender [data-act="send-once"]');
+  if (once) once.disabled = !dbcSendWritable() || !payload;
+  $$('#dbcSender [data-sig], #dbcSendCycle, #dbcSender [data-act="send-reset"]').forEach(node => { node.disabled = !!task?.active; });
 }
 
 function dbcSendSpec() {
@@ -160,7 +182,8 @@ function dbcSendConfirm(periodic) {
 }
 
 async function dbcSendStopPeriodic() {
-  const result = await state.api.configure_monitor_periodic(dbcUi.source, dbcSendUid(), dbcSendSpec(), false, true);
+  // Stopping is keyed by task ID; it must remain available even if encoding failed.
+  const result = await state.api.configure_monitor_periodic(dbcUi.source, dbcSendUid(), {}, false, true);
   if (!result?.ok) toast(result?.error || "停止周期发送失败", true); else toast("已停止周期发送");
   schedulePoll(0);
 }
@@ -195,10 +218,12 @@ function bindDbcSendControls() {
 
 /* ---------- 总线对账 ---------- */
 
-const dbcAudit = { running: false, report: null, mode: "live", title: "", busy: false, last: 0, bus: null };
+const dbcAudit = { source: null, running: false, report: null, mode: "live", title: "", busy: false, last: 0, bus: null };
 
 async function dbcAuditCall(action) {
-  const reply = await state.api.dbc_audit(dbcUi.source, action);
+  const source = dbcUi.source;
+  const reply = await state.api.dbc_audit(source, action);
+  if (source !== dbcUi.source) return;
   if (!reply?.ok) { toast(reply?.error || "对账失败", true); return; }
   dbcAudit.running = reply.running;
   dbcAudit.bus = reply.bus;
@@ -257,6 +282,21 @@ function dbcAuditHtml(report) {
 }
 
 function renderDbcAudit() {
+  if (dbcAudit.source !== dbcUi.source) {
+    const source = dbcUi.source;
+    Object.assign(dbcAudit, { source, running: false, report: null, mode: "live", title: "", busy: true, bus: null });
+    state.api.dbc_audit(source, "report").then(reply => {
+      if (source !== dbcAudit.source || !reply?.ok) return;
+      dbcAudit.running = reply.running;
+      dbcAudit.report = reply.report;
+      dbcAudit.bus = reply.bus;
+    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取对账：${error.message || error}`, true); }).finally(() => {
+      if (source !== dbcAudit.source) return;
+      dbcAudit.busy = false;
+      dbcAudit.last = Date.now();
+      if (state.page === "dbc" && dbcUi.tab === "audit") renderDbcAudit();
+    });
+  }
   const report = dbcAudit.report;
   const tag = $("#dbcAuditState");
   if (tag) {
@@ -267,12 +307,13 @@ function renderDbcAudit() {
   if (toggle) toggle.textContent = dbcAudit.running ? "停止对账" : "开始对账";
   text("#dbcAuditStats", report ? `${Number(report.frames).toLocaleString()} 帧 · ${report.ids} 个 ID · 已核对 ${report.clean_messages}/${report.known_messages} 条报文无问题 · 窗口 ${dbcNumber(report.window_s)} s` : "");
   dbcPaint("audit", $("#dbcAudit"), report ? dbcAuditHtml(report)
-    : '<div class="panel"><div class="empty-state">把 DBC 绑定到当前总线，点“开始对账”：上位机会统计总线上的真实情况，并与 DBC 逐项对照。固件与 DBC 不一致时以固件为准，这里给出证据。</div></div>');
+    : '<div class="panel"><div class="empty-state">绑定 DBC 后开始对账，检查缺失报文、DLC、周期和信号取值。</div></div>');
   if (dbcAudit.running && dbcAudit.mode === "live" && !dbcAudit.busy && Date.now() - dbcAudit.last > 900) {
     dbcAudit.busy = true;
-    state.api.dbc_audit(dbcUi.source, "report").then(reply => {
-      if (reply?.ok && dbcAudit.mode === "live") { dbcAudit.report = reply.report; dbcAudit.running = reply.running; }
-    }).finally(() => { dbcAudit.busy = false; dbcAudit.last = Date.now(); });
+    const source = dbcUi.source;
+    state.api.dbc_audit(source, "report").then(reply => {
+      if (reply?.ok && dbcAudit.mode === "live" && source === dbcAudit.source) { dbcAudit.report = reply.report; dbcAudit.running = reply.running; }
+    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取对账：${error.message || error}`, true); }).finally(() => { if (source === dbcAudit.source) { dbcAudit.busy = false; dbcAudit.last = Date.now(); } });
   }
 }
 

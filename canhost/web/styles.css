@@ -430,6 +430,51 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
   50% { transform: scale(1.2); opacity: .75; }
 }
 
+/* Manual navigation preference applies at every window width. */
+.rail { gap: var(--sp-3); }
+.rail-toggle {
+  display: flex; align-items: center; gap: var(--sp-2); flex: none;
+  width: 100%; min-height: 32px; padding: 0 var(--sp-2);
+  border: 1px solid var(--line-soft); border-radius: var(--r-ctl);
+  background: transparent; color: var(--text-2); font-size: var(--fs-label);
+  white-space: nowrap;
+}
+.rail-toggle:hover { background: var(--surface-2); color: var(--text); border-color: var(--line-strong); }
+.rail-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.nav-item, .nav-tools > summary { position: relative; }
+:root[data-rail="collapsed"] .app { grid-template-columns: 68px minmax(0, 1fr); }
+:root[data-rail="collapsed"] .rail { gap: var(--sp-3); padding: var(--sp-3) var(--sp-2) var(--sp-2); align-items: center; }
+:root[data-rail="collapsed"] .brand { width: 100%; flex-direction: column; justify-content: center; gap: var(--sp-1); padding-inline: 0; }
+:root[data-rail="collapsed"] .brand-title { display: none; }
+:root[data-rail="collapsed"] .theme-toggle { width: 30px; height: 30px; margin-left: 0; }
+:root[data-rail="collapsed"] .rail-foot { display: grid; gap: var(--sp-2); width: 100%; padding-top: var(--sp-2); }
+:root[data-rail="collapsed"] .team-signature { display: flex; justify-content: center; padding: 0 0 2px; }
+:root[data-rail="collapsed"] .team-logo { width: 42px; max-width: 100%; }
+:root[data-rail="collapsed"] .rail-facts { width: 100%; padding: var(--sp-2) 0 0; }
+:root[data-rail="collapsed"] .rail-facts > div { display: flex; justify-content: center; padding: 0; }
+:root[data-rail="collapsed"] .rail-facts dt, :root[data-rail="collapsed"] .rail-facts dd > i, :root[data-rail="collapsed"] .rail-facts dd .fact-date { display: none; }
+:root[data-rail="collapsed"] .rail-facts dd { justify-content: center; width: 100%; font-size: var(--fs-unit); }
+:root[data-rail="collapsed"] .rail-fact-button { justify-content: center; font-size: var(--fs-unit); }
+:root[data-rail="collapsed"] .rail-fact-button > i { display: none; }
+:root[data-rail="collapsed"] .nav-item span { display: none; }
+:root[data-rail="collapsed"] .nav-item { grid-template-columns: 20px; justify-content: center; padding: 0; min-height: 44px; }
+:root[data-rail="collapsed"] .nav-item .badge { position: absolute; margin: -14px 0 0 var(--sp-5); }
+
+:root[data-rail="collapsed"] #nav { width: 48px; }
+:root[data-rail="collapsed"] .nav-tools { width: 48px; }
+:root[data-rail="collapsed"] .nav-tools > summary {
+  width: 48px;
+  grid-template-columns: 20px;
+  justify-content: center;
+  padding: 0;
+}
+:root[data-rail="collapsed"] .nav-tools > summary > span, :root[data-rail="collapsed"] .nav-tools > summary > i { display: none; }
+:root[data-rail="collapsed"] .nav-tool-items { margin-top: 3px; padding-left: 0; }
+:root[data-rail="collapsed"] .nav-tool-items .nav-item { width: 48px; min-height: 44px; margin-inline: auto; padding: 0; }
+:root[data-rail="collapsed"] .rail-toggle { justify-content: center; min-height: 36px; padding: 0; }
+:root[data-rail="collapsed"] .rail-toggle span { display: none; }
+:root[data-rail="collapsed"] .rail-toggle svg { transform: rotate(180deg); }
+
 /* ---------- Workspace ---------- */
 
 .workspace {
@@ -1864,24 +1909,6 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 }
 
 @media (max-width: 1260px) {
-  .app { grid-template-columns: 68px minmax(0, 1fr); }
-  .rail { gap: var(--sp-3); padding: var(--sp-3) var(--sp-2) var(--sp-2); align-items: center; }
-  .brand { width: 100%; flex-direction: column; justify-content: center; gap: var(--sp-1); padding-inline: 0; }
-  .brand-title { display: none; }
-  .theme-toggle { width: 30px; height: 30px; margin-left: 0; }
-  .rail-foot { display: grid; gap: var(--sp-2); width: 100%; padding-top: var(--sp-2); }
-  .team-signature { display: flex; justify-content: center; padding: 0 0 2px; }
-  .team-logo { width: 42px; max-width: 100%; }
-  .rail-facts { width: 100%; padding: var(--sp-2) 0 0; }
-  .rail-facts > div { display: flex; justify-content: center; padding: 0; }
-  .rail-facts dt, .rail-facts dd > i, .rail-facts dd .fact-date { display: none; }
-  .rail-facts dd { justify-content: center; width: 100%; font-size: var(--fs-unit); }
-  .rail-fact-button { justify-content: center; font-size: var(--fs-unit); }
-  .rail-fact-button > i { display: none; }
-  .nav-item span { display: none; }
-  .nav-item { grid-template-columns: 20px; justify-content: center; padding: 0; min-height: 44px; }
-  .nav-item .badge { position: absolute; margin: -14px 0 0 var(--sp-5); }
-
    .span-6 { grid-column: span 12; }
 
 }
@@ -2862,24 +2889,6 @@ body.fan-write-locked #page-fan .panel .danger-outline { opacity: .55; filter: s
 .bench-state-panel .panel-body { min-height: 90px; }
 
 .ivt-action-fact small { color: var(--text-2); font-size: var(--fs-unit); line-height: 1.45; }
-
-/* Keep the collapsed rail icon-only. The tool summary must not wrap its label
-   into a vertical column, and tool icons use the same 48px hit area as the
-   primary navigation icons. */
-@media (max-width: 1260px) {
-  #nav { width: 48px; }
-  .nav-tools { width: 48px; }
-  .nav-tools > summary {
-    width: 48px;
-    grid-template-columns: 20px;
-    justify-content: center;
-    padding: 0;
-  }
-  .nav-tools > summary > span,
-  .nav-tools > summary > i { display: none; }
-  .nav-tool-items { margin-top: 3px; padding-left: 0; }
-  .nav-tool-items .nav-item { width: 48px; min-height: 44px; margin-inline: auto; padding: 0; }
-}
 
 /* ---------- Fan tool page & Integrated Tool Header ---------- */
 
@@ -3899,18 +3908,20 @@ select {
 }
 
 .dbc-workspace {
+  position: relative;
   display: grid;
-  grid-template-columns: 296px minmax(0, 1fr);
+  grid-template-columns: clamp(228px, 21%, 288px) minmax(0, 1fr);
   gap: var(--sp-3);
-  align-items: start;
+  flex: 1;
+  min-height: 0;
 }
 .dbc-side {
-  position: sticky;
-  top: 0;
-  max-height: calc(var(--app-height) - 150px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
-.dbc-files { display: grid; gap: var(--sp-2); padding: var(--sp-3); border-bottom: 1px solid var(--line-soft); }
+.dbc-files { display: grid; flex: none; max-height: 35%; overflow: auto; gap: var(--sp-2); padding: var(--sp-2); border-bottom: 1px solid var(--line-soft); }
 .dbc-file {
   display: grid;
   gap: var(--sp-1);
@@ -3948,7 +3959,7 @@ select {
 .dbc-file-empty button { justify-self: start; }
 .dbc-side-bar { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line-soft); }
 .dbc-side-bar .search { width: 100%; }
-.dbc-tree { max-height: calc(var(--app-height) - 360px); min-height: 120px; overflow: auto; }
+.dbc-tree { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .dbc-group {
   position: sticky;
   top: 0;
@@ -4000,9 +4011,9 @@ select {
 .dbc-count.bad { background: var(--fault-dim); color: var(--fault); }
 .dbc-count.warn { background: var(--warn-dim); color: var(--warn); }
 
-.dbc-main { display: grid; gap: var(--sp-3); min-width: 0; }
-.dbc-tabbar { display: flex; align-items: center; gap: var(--sp-3); }
-.dbc-tab-hint { color: var(--text-3); font-size: var(--fs-label); }
+.dbc-main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; container: dbc-main / inline-size; }
+.dbc-tabbar { display: flex; align-items: center; gap: var(--sp-3); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--line-soft); }
+.dbc-tab-hint { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: var(--fs-label); }
 .dbc-panel { display: grid; gap: var(--sp-3); min-width: 0; }
 .dbc-panel.hidden { display: none; }
 
@@ -4045,7 +4056,9 @@ select {
 .dbc-range.out i { background: var(--fault); }
 .dbc-row-actions { display: flex; justify-content: flex-end; gap: var(--sp-1); }
 .dbc-row-actions button, .dbc-mini {
-  min-height: 24px;
+  white-space: nowrap;
+  flex: none;
+  min-height: 28px;
   padding: 0 var(--sp-2);
   border: 1px solid var(--line);
   border-radius: var(--r-ctl);
@@ -4085,7 +4098,7 @@ select {
 
 .dbc-edit-bar .dbc-save-actions { margin-left: auto; }
 .dbc-editor { display: grid; gap: var(--sp-3); min-width: 0; }
-.dbc-edit-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
+.dbc-edit-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
 .dbc-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-2) var(--sp-3); }
 .dbc-form-grid .wide { grid-column: 1 / -1; }
 .dbc-form-grid .field-label small { color: var(--text-3); font-weight: 400; }
@@ -4199,11 +4212,101 @@ select {
 .monitor-dbc-grid .off { color: var(--text-3); }
 .monitor-dbc-name { color: var(--text-3); }
 
-@media (max-width: 1260px) {
-  .dbc-edit-grid, .dbc-send-grid { grid-template-columns: minmax(0, 1fr); }
+.dbc-directory-head, .dbc-directory-backdrop { display: none; }
+
+/* Workbench owns its scroll regions; the quick bar and connection dock stay visible. */
+#page-dbc.active { display: flex; flex-direction: column; height: 100%; max-width: none; padding: var(--sp-3); gap: var(--sp-3); overflow: hidden; }
+#page-dbc .tool-header-bar { flex: none; margin: 0; padding: var(--sp-2) var(--sp-3); min-height: 52px; }
+.dbc-workspace.directory-hidden { grid-template-columns: minmax(0, 1fr); }
+.dbc-workspace.directory-hidden .dbc-side { display: none; }
+.dbc-content { min-height: 0; min-width: 0; overflow: auto; padding-top: var(--sp-3); padding-right: var(--sp-1); scrollbar-gutter: stable; overscroll-behavior: contain; }
+.dbc-directory-toggle { flex: none; min-height: 32px; padding-inline: var(--sp-3); }
+.dbc-directory-toggle[aria-expanded="false"] { border-color: var(--action-border); color: var(--action); }
+#page-dbc button { white-space: nowrap; }
+#page-dbc .panel { min-width: 0; }
+#page-dbc .panel-head { height: auto; min-height: 40px; padding-block: var(--sp-2); flex-wrap: wrap; gap: var(--sp-2); }
+#page-dbc .panel-head h3 { min-width: 0; overflow-wrap: anywhere; }
+#page-dbc .head-actions { flex-wrap: wrap; gap: var(--sp-1); min-width: 0; }
+#page-dbc .head-actions select { max-width: 100%; min-height: 30px; min-width: 0; background-color: var(--surface-2); border: 1px solid var(--line); padding-left: var(--sp-2); }
+#page-dbc .toolbar { margin: 0; gap: var(--sp-2); }
+#page-dbc .toolbar-actions { flex-wrap: wrap; }
+#page-dbc .frame-table { table-layout: auto; }
+#page-dbc .frame-table th:nth-child(n) { width: auto; white-space: nowrap; }
+#page-dbc .frame-table td { padding-block: var(--sp-2); }
+#page-dbc .frame-table td:first-child { white-space: normal; overflow-wrap: anywhere; min-width: 160px; }
+#page-dbc .dbc-signal-table { min-width: 660px; }
+#page-dbc .dbc-signal-table th:first-child { width: 30%; }
+#page-dbc .dbc-signal-table td:last-child { width: 1%; }
+#page-dbc .dbc-signal-table .dbc-name { color: var(--text); }
+#page-dbc .dbc-signal-table .dbc-value { font-size: var(--fs-value); font-weight: 700; }
+#page-dbc .dbc-signal-table tr.waiting .dbc-value,
+#page-dbc .dbc-signal-table tr.inactive .dbc-value,
+#page-dbc .dbc-signal-table tr.missing .dbc-value { font-size: var(--fs-label); font-weight: 400; }
+.dbc-edit-bar { display: grid; grid-template-columns: auto 1fr auto; position: sticky; top: calc(-1 * var(--sp-3)); z-index: 3; }
+.dbc-edit-bar #dbcEditTabs { grid-row: 1; grid-column: 1 / -1; justify-self: start; max-width: 100%; }
+.dbc-edit-bar > .toolbar-actions:first-child { grid-row: 2; grid-column: 1; }
+.dbc-edit-bar #dbcEditState { grid-row: 2; grid-column: 2; justify-self: start; }
+.dbc-edit-bar .dbc-save-actions { grid-row: 2; grid-column: 3; margin: 0; justify-content: flex-end; }
+.dbc-edit-bar button { min-height: 30px; padding-inline: var(--sp-2); }
+.dbc-edit-notice { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-label); }
+.dbc-edit-notice.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-dim); }
+.dbc-message-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: var(--sp-4); align-items: start; }
+.dbc-message-layout > div { min-width: 0; }
+.dbc-message-layout .dbc-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dbc-layout-preview { padding-left: var(--sp-4); border-left: 1px solid var(--line-soft); }
+.dbc-layout-preview .dbc-subhead { flex-wrap: wrap; margin-top: 0; }
+.dbc-bitgrid td { height: 28px; }
+.dbc-signal-list { max-height: 280px; }
+.dbc-signal-list .frame-table { min-width: 560px; }
+.dbc-signal-select { display: inline; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; white-space: normal !important; text-align: left; overflow-wrap: anywhere; }
+.dbc-signal-select:hover { color: var(--action); }
+#page-dbc .dbc-signal-list td:first-child { width: 42%; }
+.dbc-send-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+.dbc-send-row { grid-template-columns: minmax(0, 1fr) minmax(100px, 140px) 40px; }
+.dbc-send-row label { white-space: normal; overflow-wrap: anywhere; }
+.dbc-payload { overflow-wrap: anywhere; }
+.dbc-chips:empty { display: none; }
+.dbc-chip { max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+.dbc-chip button { min-width: 24px; min-height: 24px; }
+.dbc-issue { overflow-wrap: anywhere; }
+#page-dbc .field { gap: var(--sp-1); }
+#page-dbc .field > input, #page-dbc .field > select { height: 32px; min-height: 32px; padding-block: 0; }
+@container dbc-main (min-width: 900px) {
+  .dbc-edit-bar { grid-template-columns: auto auto auto minmax(0, 1fr); }
+  .dbc-edit-bar #dbcEditTabs { grid-row: 1; grid-column: 1; }
+  .dbc-edit-bar > .toolbar-actions:first-child { grid-row: 1; grid-column: 2; }
+  .dbc-edit-bar #dbcEditState { grid-row: 1; grid-column: 3; }
+  .dbc-edit-bar .dbc-save-actions { grid-row: 1; grid-column: 4; }
 }
-@media (max-width: 1080px) {
+@container dbc-main (max-width: 680px) {
+  .dbc-tab-hint { display: none; }
+  .dbc-message-layout { grid-template-columns: minmax(0, 1fr); }
+  .dbc-message-layout .dbc-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dbc-layout-preview { padding: var(--sp-3) 0 0; border-left: 0; border-top: 1px solid var(--line-soft); }
+  .dbc-send-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container dbc-main (max-width: 560px) {
+  .dbc-message-layout .dbc-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dbc-edit-bar { grid-template-columns: auto 1fr; }
+  .dbc-edit-bar .dbc-save-actions { grid-row: 3; grid-column: 1 / -1; }
+  .dbc-send-row { grid-template-columns: minmax(0, 1fr) 100px 32px; }
+}
+@media (max-width: 800px) {
+  #page-dbc .tool-header-bar { flex-wrap: wrap; gap: var(--sp-2); }
+  #page-dbc .tool-header-desc { display: none; }
   .dbc-workspace { grid-template-columns: minmax(0, 1fr); }
-  .dbc-side { position: static; max-height: none; }
-  .dbc-tree { max-height: 260px; }
+  .dbc-side { position: absolute; inset: 0 auto 0 0; width: min(320px, 85%); z-index: 6; box-shadow: var(--shadow); }
+  .dbc-workspace:not(.directory-hidden) .dbc-directory-backdrop { display: block; position: absolute; inset: 0; z-index: 5; padding: 0; border: 0; background: var(--backdrop); }
+  .dbc-side .dbc-directory-head { display: flex; align-items: center; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line-soft); font-weight: 600; }
+  .dbc-tabbar { gap: var(--sp-1); overflow-x: auto; }
+  #dbcTabs button { padding-inline: var(--sp-2); }
 }
+
+.dbc-search-results { flex: none; color: var(--text-2); font-size: var(--fs-label); padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line-soft); }
+.dbc-search-results:empty { display: none; }
+.dbc-side-bar { flex: none; }
+.dbc-side-bar .search input { min-width: 0; }
+
+.dbc-binding-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); border: 1px solid var(--line); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-label); }
+.dbc-binding-notice span { min-width: 0; overflow-wrap: anywhere; }
+.dbc-binding-notice button { min-height: 28px; padding-inline: var(--sp-2); }

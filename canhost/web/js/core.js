@@ -301,6 +301,29 @@ async function reportStartupUpdate() {
 }
 
 function bindNavigation() {
+  let railPreference = null;
+  try { railPreference = localStorage.getItem("canHostRail"); } catch { /* storage may be disabled */ }
+  const narrow = window.matchMedia("(max-width: 1260px)");
+  const syncRail = () => {
+    const collapsed = railPreference === "collapsed" || (railPreference !== "expanded" && narrow.matches);
+    document.documentElement.dataset.rail = collapsed ? "collapsed" : "expanded";
+    const button = $("#railToggle");
+    const label = collapsed ? "展开侧边栏" : "折叠侧边栏";
+    button?.setAttribute("aria-expanded", String(!collapsed));
+    button?.setAttribute("aria-label", label);
+    if (button) button.title = label;
+  };
+  syncRail();
+  narrow.addEventListener("change", syncRail);
+  $("#railToggle")?.addEventListener("click", () => {
+    railPreference = document.documentElement.dataset.rail === "collapsed" ? "expanded" : "collapsed";
+    try { localStorage.setItem("canHostRail", railPreference); } catch { /* storage may be disabled */ }
+    syncRail();
+    window.dispatchEvent(new Event("resize"));
+  });
+  $$(".nav-item").forEach(button => button.setAttribute("aria-label", button.querySelector("span")?.textContent.trim() || button.title));
+  $(".nav-tools > summary")?.setAttribute("aria-label", "工程工具");
+  $(".nav-tools > summary")?.setAttribute("title", "工程工具");
   $("#nav").addEventListener("click", event => {
     const button = event.target.closest(".nav-item");
     if (button) showPage(button.dataset.page);
@@ -313,7 +336,11 @@ function showPage(page) {
   state.page = page;
   const isTool = TOOL_PAGES.includes(page);
   if (isTool) $(".nav-tools")?.setAttribute("open", "");
-  $$(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.page === page));
+  $$(".nav-item").forEach(node => {
+    node.classList.toggle("active", node.dataset.page === page);
+    if (node.dataset.page === page) node.setAttribute("aria-current", "page");
+    else node.removeAttribute("aria-current");
+  });
   $$(".page").forEach(node => node.classList.toggle("active", node.id === `page-${page}`));
   document.body.classList.toggle("is-tool-page", isTool);
   // Every page owns a different information depth. Keeping the previous page's
