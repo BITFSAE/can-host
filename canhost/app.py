@@ -19,6 +19,7 @@ from .pcan_channels import discover_pcan_channels
 from .bms.protocol import switch_catalog
 from .decoders import bms_sampling_rules
 from .display.service import DisplayBenchService, bench_catalog
+from .encoder.service import EncoderService, encoder_catalog
 from .telemetry import TelemetryService
 from .updater import (
     DEFAULT_CNB_REPO,
@@ -106,6 +107,10 @@ class Api(DbcApi):
         # frames, so release packages keep it hardware-only: the no-hardware
         # preview exists only for source runs, like the CAN debug simulation.
         self._display_bench = DisplayBenchService(allow_preview=simulation_available)
+        # The BRT encoder tool owns one PCAN handle as well.  It sends only on request and
+        # reads/rewrites the encoder's own settings; the simulated encoder behind its
+        # no-hardware preview is source-run only, like the other previews.
+        self._encoder = EncoderService(allow_preview=simulation_available)
         # CANB is one physical connection.  Its receive stream feeds both the
         # vehicle protocol and a BMS mirror projection while the independent
         # CAN1 connection remains available for detailed data and commands.
@@ -243,6 +248,9 @@ class Api(DbcApi):
             "display_bench_enabled": True,
             "display_bench_preview": self._display_bench.allow_preview,
             "display_bench": bench_catalog(),
+            "encoder_enabled": True,
+            "encoder_preview": self._encoder.allow_preview,
+            "encoder": encoder_catalog(),
             "ivt_enabled": True,
             "dbc_enabled": True,
             "vehicle_enabled": True,
@@ -500,6 +508,44 @@ class Api(DbcApi):
 
     def display_bench_command(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._display_bench.command(name, args)
+
+    def connect_encoder(self, config: dict[str, Any]) -> dict[str, Any]:
+        return self._encoder.connect(config)
+
+    def disconnect_encoder(self) -> dict[str, Any]:
+        return self._encoder.disconnect()
+
+    def get_encoder_snapshot(self) -> dict[str, Any]:
+        return self._encoder.snapshot()
+
+    def get_encoder_series(self, cursor: int = 0, epoch: int = -1) -> dict[str, Any]:
+        return self._encoder.series(cursor, epoch)
+
+    def encoder_command(self, name: str, args: dict[str, Any] | None = None,
+                        acknowledged: bool = False) -> dict[str, Any]:
+        return self._encoder.command(name, args, acknowledged)
+
+    def choose_export_encoder_csv(self) -> dict[str, Any]:
+        """Save the encoder curves (time, count, angle, accumulated angle, rpm) as CSV."""
+        if not self._window:
+            return {"ok": False, "error": "窗口尚未就绪"}
+        try:
+            import webview
+            exported = self._encoder.export_csv()
+            if not exported.get("ok"):
+                return exported
+            selected = self._window.create_file_dialog(
+                webview.SAVE_DIALOG, save_filename=f"encoder_{datetime.now():%Y%m%d_%H%M%S}.csv",
+                file_types=("CSV 文件 (*.csv)",))
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            path = Path(selected if isinstance(selected, str) else selected[0]).expanduser()
+            if path.suffix.lower() != ".csv":
+                path = path.with_suffix(".csv")
+            path.write_text(exported["data"], encoding="utf-8-sig", newline="")
+            return {"ok": True, "path": str(path), "samples": exported["samples"]}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def connect_ivt(self, config: dict[str, Any]) -> dict[str, Any]:
         bitrate = int(config.get("bitrate") or 500000)
@@ -968,6 +1014,7 @@ class Api(DbcApi):
         self._service.disconnect()
         self._bench_service.disconnect()
         self._display_bench.disconnect()
+        self._encoder.disconnect()
         self._ivt_service.disconnect()
         self._vehicle_service.disconnect()
         self._telemetry_service.disconnect()
@@ -1068,6 +1115,8 @@ def main() -> None:
                 raise SystemExit("打包自检失败：发布包未包含本地遥测模拟器")
             if not bootstrap["display_bench_enabled"] or not bootstrap["display_bench"]["frames"]:
                 raise SystemExit("打包自检失败：发布包未包含车手屏联调")
+            if not bootstrap["encoder_enabled"] or not bootstrap["encoder"]["bitrates"]:
+                raise SystemExit("打包自检失败：发布包未包含 BRT 编码器页面")
             simulator_frame = TelemetryFrameGenerator().generate_frame()
             if not simulator_frame.SerializeToString() or len(simulator_frame.vehicle_state.motors) != 4:
                 raise SystemExit("打包自检失败：本地遥测模拟器未生成完整 TelemetryFrame")
@@ -1082,6 +1131,8 @@ def main() -> None:
                 if bootstrap["display_bench_preview"] or api.connect_display_bench(
                         {"preview": True, "confirmed": True}).get("ok"):
                     raise SystemExit("打包自检失败：硬件专用发布包不应提供车手屏联调的无硬件预览")
+                if bootstrap["encoder_preview"] or api.connect_encoder({"preview": True}).get("ok"):
+                    raise SystemExit("打包自检失败：硬件专用发布包不应提供编码器的无硬件预览")
                 rejected = api.connect_can({"mode": "simulation", "bus_profile": "can1",
                                             "bitrate": 500000})
                 if rejected.get("ok") or "真实 PCAN" not in str(rejected.get("error", "")):

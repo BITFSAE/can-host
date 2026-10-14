@@ -20,6 +20,9 @@
 车手屏联调页不用快照：它的接口转发到本进程里真实的后端（无硬件预览模式），
 点“连接车手屏”并勾选“无硬件预览”即可操作整页，不发送任何 CAN 帧。
 
+BRT 编码器页同样转发到真实后端：勾选“无硬件预览”连接软件模拟的编码器，可以操作整页
+（读取、轮询、自动上报、标定、曲线），不发送任何 CAN 帧。
+
 DBC 工作台同样转发到真实后端：脚本启动时让后端连上内置模拟的 CAN1 与 CANB，
 载入团队 DBC（左侧文件卡里的中央库按钮）后即可看到真实的实时解码、曲线和对账。
 文件对话框在浏览器里不可用，保存请用“另存为”以外的路径验证；设置写入当前
@@ -99,6 +102,8 @@ STUB_JS = """/* 预览桩：代替 pywebview 的 Python 桥。 */
       if (key in target) return target[key];
       // DBC 工作台与它依赖的原始帧发送接口走真实后端。
       if (key.startsWith("dbc_") || key === "send_monitor_frame" || key === "configure_monitor_periodic") return live(key);
+      // 编码器页的接口同样走真实后端（软件模拟的编码器）。
+      if (key.includes("encoder")) return live(key);
       return (key === "then" || key === "catch" || key === "finally") ? undefined : ok;
     },
   }) };
@@ -259,7 +264,8 @@ class PreviewHandler(SimpleHTTPRequestHandler):
     live_api: Api | None = None
     live_extra = {"send_monitor_frame", "configure_monitor_periodic"}
     live_methods = {"connect_display_bench", "disconnect_display_bench", "get_display_bench_snapshot",
-                    "display_bench_set", "display_bench_command"}
+                    "display_bench_set", "display_bench_command", "connect_encoder", "disconnect_encoder",
+                    "get_encoder_snapshot", "get_encoder_series", "encoder_command"}
 
     def do_POST(self) -> None:
         """把车手屏联调的接口调用转给真实后端，其余路径一律拒绝。"""
@@ -271,7 +277,8 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         args = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or "[]")
         if name == "bootstrap_display":
             full = api.bootstrap()
-            result = {key: full[key] for key in ("display_bench_enabled", "display_bench_preview", "display_bench")}
+            result = {key: full[key] for key in ("display_bench_enabled", "display_bench_preview", "display_bench",
+                                                 "encoder_enabled", "encoder_preview", "encoder")}
         elif name in self.live_methods or name.startswith("dbc_") or name in self.live_extra:
             result = getattr(api, name)(*args)
         else:

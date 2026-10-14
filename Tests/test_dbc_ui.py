@@ -47,7 +47,7 @@ class PageWiringTests(unittest.TestCase):
         order = re.search(r"const PAGE_ORDER = \[([^\]]*)\]", CORE).group(1)
         pages = [item.strip().strip('"') for item in order.split(",")]
         self.assertEqual(pages[:9], ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt"])
-        self.assertEqual(pages[-1], "dbc")
+        self.assertIn("dbc", pages[9:])
         self.assertNotIn("dbc", re.search(r"const TOOL_PAGES = \[([^\]]*)\]", CORE).group(1))
 
     def test_polling_and_rendering_hooks_exist(self) -> None:

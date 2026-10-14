@@ -12,7 +12,7 @@ var state = {
   mainSnapshot: null,
   snapshot: null,
   canbBmsSnapshot: null,
-  toolSnapshots: { bench: null, ivt: null, simulator: null, display: null },
+  toolSnapshots: { bench: null, ivt: null, simulator: null, display: null, encoder: null },
   vehicleSnapshot: null,
   telemetrySnapshot: null,
   quickSnapshot: null,
@@ -25,6 +25,7 @@ var state = {
   pollInFlight: false,
   pendingCommand: null,
   pendingIvtAction: null,
+  pendingEncoderAction: null,
   pendingFanCommand: null,
   pendingFanAction: null,
   pendingMonitorAction: null,
@@ -47,8 +48,8 @@ const UI_SCALE_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
 const UI_SCALE_DEFAULT = 1.1;
 
 // 新页面追加在末尾：前 9 项对应 Alt+1..9 快捷键，不能被挤动。
-const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "display", "simulator", "telemetry", "dbc"];
-const TOOL_PAGES = ["bench", "ivt", "display", "simulator"];
+const PAGE_ORDER = ["overview", "cells", "alarms", "control", "vehicle", "fan", "frames", "bench", "ivt", "display", "simulator", "telemetry", "dbc", "encoder"];
+const TOOL_PAGES = ["bench", "ivt", "display", "simulator", "encoder"];
 const DATA_FRESH_MAX_S = 1.5;
 const SLOW_DATA_FRESH_MAX_S = 2.5;
 const CONNECTION_PREFS_KEY = "canHostConnectionPreferences";
@@ -136,6 +137,7 @@ function applyTheme(theme, { persist = true } = {}) {
   syncThemeToggle();
   if (state.page === "overview") requestAnimationFrame(drawTrend);
   if (state.page === "vehicle") requestAnimationFrame(drawVehicleTrend);
+  if (state.page === "encoder" && typeof encPlotsRebuild === "function") requestAnimationFrame(encPlotsRebuild);
 }
 
 async function toggleTheme() {
@@ -242,6 +244,7 @@ async function init() {
   bindTelemetryControls();
   bindTelemetrySimulatorControls();
   bindDisplayBenchControls();
+  bindEncoderControls();
   bindDbcControls();
   buildAlarmMatrix();
   buildVehicleStatics();
@@ -258,6 +261,7 @@ async function init() {
     $("#telemetrySimulatorNav")?.classList.toggle("hidden", state.bootstrap.telemetry_simulator_enabled !== true);
     populateConnectionOptions();
     populateToolChannelOptions();
+    initEncoder();
     buildDisplayBenchStatics();
     populateVehicleOptions();
     await restoreWorkbenchPreferences();
@@ -391,9 +395,11 @@ function bindCoreControls() {
   $("#confirmDialog").addEventListener("close", () => {
     state.pendingCommand = null;
     state.pendingIvtAction = null;
+    state.pendingEncoderAction = null;
     state.pendingFanCommand = null;
     state.pendingFanAction = null;
     state.pendingMonitorAction = null;
+    text("#confirmCheckLabel", "我已核对总线、主控状态和参数，本次操作由我确认。");
     $("#confirmCheck").checked = false;
     $("#doConfirm").disabled = true;
     setConfirmModeBadge("待确认");
@@ -447,7 +453,7 @@ function populateConnectionOptions(fallback) {
 function populateToolChannelOptions(fallback) {
   const data = state.bootstrap || fallback;
   if (!data?.channels) return;
-  ["#benchChannelSelect", "#ivtChannelSelect"]
+  ["#benchChannelSelect", "#ivtChannelSelect", "#encChannelSelect"]
     .forEach(id => populatePcanSelect(id, data));
 }
 
@@ -874,6 +880,10 @@ async function poll() {
       await optionalSnapshot(state.api.get_ivt_snapshot, value => { state.toolSnapshots.ivt = value; });
     } else if (page === "display" && state.api.get_display_bench_snapshot) {
       await optionalSnapshot(state.api.get_display_bench_snapshot, value => { state.toolSnapshots.display = value; });
+    } else if (page === "encoder" && state.api.get_encoder_snapshot) {
+      await optionalSnapshot(state.api.get_encoder_snapshot, value => { state.toolSnapshots.encoder = value; });
+      // 曲线样本由后端逐帧记录，这里只按游标增量取回。
+      await optionalSnapshot(encFetchSeries, () => {});
     } else if (page === "simulator" && state.api.get_telemetry_simulator_snapshot) {
       await optionalSnapshot(state.api.get_telemetry_simulator_snapshot,
         value => { state.toolSnapshots.simulator = value; });
@@ -912,8 +922,8 @@ async function poll() {
   } finally {
     state.pollInFlight = false;
     const detailedPage = state.page !== "overview";
-    // 车手屏联调的读数随行驶循环变化，轮询比其他详情页更密。
-    schedulePoll(document.hidden ? 1000 : state.page === "display" ? 250 : detailedPage ? 500 : 250);
+    // 车手屏联调的读数随行驶循环变化、编码器曲线需要平滑滚动，轮询比其他详情页更密。
+    schedulePoll(document.hidden ? 1000 : state.page === "encoder" ? 150 : state.page === "display" ? 250 : detailedPage ? 500 : 250);
   }
 }
 
@@ -948,6 +958,8 @@ function render() {
     renderIvtConfig();
   } else if (state.page === "display") {
     renderDisplayBench();
+  } else if (state.page === "encoder") {
+    renderEncoder();
   } else if (state.page === "simulator") {
     renderTelemetrySimulator();
   } else if (state.page === "fan") {
@@ -1322,6 +1334,23 @@ async function sendPendingCommand() {
       $("#doConfirm").disabled = false;
       monitorUi.lastTxSignature = "";
       renderMonitorTransmitRows();
+    }
+    return;
+  }
+  if (state.pendingEncoderAction) {
+    // 编码器设置写入：后端要求 acknowledged，并在应答后读回核对；读回偏离时仍关闭弹窗并给出警告。
+    const pending = state.pendingEncoderAction;
+    $("#doConfirm").disabled = true;
+    try {
+      const result = await pending.run();
+      if (!result?.ok) throw new Error(result?.error || "编码器写入失败");
+      $("#confirmDialog").close();
+      state.pendingEncoderAction = null;
+      toast(result.message || "编码器设置已写入", Boolean(result.verify && !result.verify.ok));
+      await poll();
+    } catch (error) {
+      toast(String(error.message || error), true);
+      $("#doConfirm").disabled = false;
     }
     return;
   }

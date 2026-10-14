@@ -1079,3 +1079,149 @@ def decode_drive_mode_request(data: bytes) -> dict[str, Any] | None:
     code = data[0]
     valid = DRIVE_MODE_ASCII_ZERO <= code <= DRIVE_MODE_ASCII_ZERO + 3
     return {"code": code, "mode": code - DRIVE_MODE_ASCII_ZERO if valid else None}
+
+
+# ---------------------------------------------------------------------------
+# BRT25-C0M4096-RT1 single-turn absolute CAN encoder.  Authority: the vendor
+# manual "BRT 单圈绝对值旋转编码器 CAN 总线产品说明书 V2.7" (pages 12-17), not a
+# team firmware.  Data field is [LEN][ADDR][FUNC][DATA...] on a standard frame
+# whose CAN ID equals the node address; multi-byte values are little endian and
+# LEN counts every byte including itself (normally equal to the DLC).
+# ---------------------------------------------------------------------------
+
+BRT_RESOLUTION = 4096
+BRT_DEG_PER_COUNT = 360.0 / BRT_RESOLUTION
+BRT_DEFAULT_ADDRESS = 0x01
+BRT_DEFAULT_BITRATE = 500_000
+BRT_BITRATE_CODES = {500_000: 0x00, 1_000_000: 0x01, 250_000: 0x02, 125_000: 0x03, 100_000: 0x04}
+# The manual allows 50..65535 us, but the vendor warns that the factory firmware cannot keep up below
+# 5 ms: the bus jams and the encoder stops answering every later configuration command.  The host
+# refuses anything shorter, so the lower bound here is the vendor's safe limit, not the manual's.
+BRT_PERIOD_US_RANGE = (5000, 65535)
+
+BRT_FUNC_POSITION = 0x01
+BRT_FUNC_ADDRESS = 0x02
+BRT_FUNC_BITRATE = 0x03
+BRT_FUNC_REPORT = 0x04
+BRT_FUNC_PERIOD = 0x05
+BRT_FUNC_ZERO = 0x06
+BRT_FUNC_DIRECTION = 0x07
+BRT_FUNC_MULTITURN = 0x08
+BRT_FUNC_TURNS = 0x09
+BRT_FUNC_SPEED = 0x0A
+BRT_FUNC_SPEED_TIME = 0x0B
+BRT_FUNC_MIDPOINT = 0x0C
+BRT_FUNC_SET_COUNT = 0x0D
+BRT_REPORT_QUERY = 0x00
+BRT_REPORT_POSITION = 0xAA
+
+BRT_FUNC_NAMES = {
+    BRT_FUNC_POSITION: "单圈位置", BRT_FUNC_ADDRESS: "修改节点地址", BRT_FUNC_BITRATE: "修改位率",
+    BRT_FUNC_REPORT: "自动上报模式", BRT_FUNC_PERIOD: "上报周期", BRT_FUNC_ZERO: "当前位置置零",
+    BRT_FUNC_DIRECTION: "递增方向", BRT_FUNC_MULTITURN: "虚拟多圈位置", BRT_FUNC_TURNS: "虚拟圈数",
+    BRT_FUNC_SPEED: "角速度计数", BRT_FUNC_SPEED_TIME: "角速度采样时间", BRT_FUNC_MIDPOINT: "设为中点",
+    BRT_FUNC_SET_COUNT: "设置当前计数",
+}
+
+
+def brt_angle_deg(count: int) -> float:
+    return count * BRT_DEG_PER_COUNT
+
+
+def brt_speed_rpm(speed_count: int, sample_ms: int) -> float:
+    """Device angular-speed counter to rpm: count x 60000 / (4096 x sample time in ms)."""
+    if sample_ms <= 0:
+        raise ValueError("角速度采样时间必须大于 0 ms")
+    return speed_count * 60000.0 / (BRT_RESOLUTION * sample_ms)
+
+
+def _brt_address(address: int) -> int:
+    if isinstance(address, bool) or not isinstance(address, int) or not 1 <= address <= 0xFF:
+        raise ValueError("编码器节点地址必须是 0x01..0xFF")
+    return address
+
+
+def _brt_frame(address: int, func: int, payload: Sequence[int]) -> bytes:
+    return bytes([3 + len(payload), _brt_address(address), func, *payload])
+
+
+def build_brt_read(address: int, func: int = BRT_FUNC_POSITION) -> bytes:
+    """Query frame ``04 ADDR FUNC 00`` for position (0x01), multi-turn (0x08), turns (0x09) or speed (0x0A)."""
+    if func not in (BRT_FUNC_POSITION, BRT_FUNC_MULTITURN, BRT_FUNC_TURNS, BRT_FUNC_SPEED):
+        raise ValueError(f"功能码 0x{func:02X} 不是读取指令")
+    return _brt_frame(address, func, [0x00])
+
+
+def build_brt_report_mode(address: int, auto_position: bool) -> bytes:
+    """``04 ADDR 04 AA`` starts position auto-report, ``04 ADDR 04 00`` returns to query mode."""
+    return _brt_frame(address, BRT_FUNC_REPORT, [BRT_REPORT_POSITION if auto_position else BRT_REPORT_QUERY])
+
+
+def build_brt_period(address: int, period_us: int) -> bytes:
+    low, high = BRT_PERIOD_US_RANGE
+    if isinstance(period_us, bool) or not isinstance(period_us, int) or not low <= period_us <= high:
+        raise ValueError(f"上报周期必须是 {low}..{high} µs 的整数（{low // 1000} ms 以上；更短会堵塞总线，使编码器不再响应配置指令）")
+    return _brt_frame(address, BRT_FUNC_PERIOD, [period_us & 0xFF, period_us >> 8])
+
+
+def build_brt_zero(address: int) -> bytes:
+    return _brt_frame(address, BRT_FUNC_ZERO, [0x00])
+
+
+def build_brt_midpoint(address: int) -> bytes:
+    return _brt_frame(address, BRT_FUNC_MIDPOINT, [0x01])
+
+
+def build_brt_direction(address: int, counter_clockwise: bool) -> bytes:
+    """``XX`` = 00 clockwise-increasing, 01 counter-clockwise-increasing."""
+    return _brt_frame(address, BRT_FUNC_DIRECTION, [0x01 if counter_clockwise else 0x00])
+
+
+def build_brt_speed_time(address: int, sample_ms: int) -> bytes:
+    if isinstance(sample_ms, bool) or not isinstance(sample_ms, int) or not 1 <= sample_ms <= 0xFFFF:
+        raise ValueError("角速度采样时间必须是 1..65535 ms 的整数")
+    return _brt_frame(address, BRT_FUNC_SPEED_TIME, [sample_ms & 0xFF, sample_ms >> 8])
+
+
+def build_brt_set_count(address: int, count: int) -> bytes:
+    if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count < BRT_RESOLUTION:
+        raise ValueError(f"当前位置计数必须是 0..{BRT_RESOLUTION - 1}")
+    return _brt_frame(address, BRT_FUNC_SET_COUNT, list(count.to_bytes(4, "little")))
+
+
+def build_brt_set_address(address: int, new_address: int) -> bytes:
+    return _brt_frame(address, BRT_FUNC_ADDRESS, [_brt_address(new_address)])
+
+
+def build_brt_set_bitrate(address: int, bitrate: int) -> bytes:
+    if bitrate not in BRT_BITRATE_CODES:
+        raise ValueError("编码器位率只支持 100 / 125 / 250 / 500 kbit/s 和 1 Mbit/s")
+    return _brt_frame(address, BRT_FUNC_BITRATE, [BRT_BITRATE_CODES[bitrate]])
+
+
+def decode_brt_frame(data: bytes, address: int | None = None) -> dict[str, Any] | None:
+    """Classify one encoder frame; ``None`` when it is not a well-formed encoder frame.
+
+    ``kind`` is ``position`` (DLC 7, FUNC 0x01), ``ack`` (DLC 4, status 0 is success),
+    ``value`` (DLC 7 answers to 0x08/0x09/0x0A) or ``unknown`` for other layouts that
+    still carry a consistent LEN/ADDR header.  ``address`` None skips the ADDR check.
+    """
+    if len(data) < 4 or data[0] != len(data):
+        return None
+    if address is not None and data[1] != address:
+        return None
+    func = data[2]
+    base = {"func": func, "address": data[1], "length": len(data)}
+    if len(data) == 4:
+        return {**base, "kind": "ack", "status": data[3], "ok": data[3] == 0}
+    if len(data) == 7:
+        value = int.from_bytes(data[3:7], "little")
+        if func == BRT_FUNC_POSITION:
+            return {**base, "kind": "position", "raw": value, "in_range": value < BRT_RESOLUTION}
+        if func in (BRT_FUNC_MULTITURN, BRT_FUNC_TURNS):
+            return {**base, "kind": "value", "unsigned": value,
+                    "signed": value - (1 << 32) if value >= 1 << 31 else value}
+        if func == BRT_FUNC_SPEED:
+            signed = value - (1 << 32) if value >= 1 << 31 else value
+            return {**base, "kind": "value", "unsigned": value, "signed": signed}
+    return {**base, "kind": "unknown"}

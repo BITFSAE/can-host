@@ -99,6 +99,10 @@
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>
               <span>IVT配置</span>
             </button>
+            <button class="nav-item" type="button" data-page="encoder" title="BRT 编码器：读取、标定、配置与曲线">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.2"/><path d="M12 4v3.2M12 16.8V20M4 12h3.2M16.8 12H20"/><path d="m12 12 4.2-4.2"/></svg>
+              <span>BRT 编码器</span>
+            </button>
             <button class="nav-item" type="button" data-page="display" title="车手屏联调">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="1.8"/><path d="M8 20h8M12 17v3"/><path d="m7 13 2.5-3 2.5 2 3.5-4"/></svg>
               <span>车手屏联调</span>
@@ -648,6 +652,181 @@
               </div>
             </div>
           </details>
+        </section>
+
+        <section class="page" id="page-encoder" aria-label="BRT 编码器">
+          <div class="tool-header-bar">
+            <div class="tool-header-info">
+              <h2>BRT 编码器</h2>
+              <span class="tool-header-desc">单圈绝对值 · 4096 count/rev · 读取、标定、配置与曲线</span>
+            </div>
+            <div class="tool-header-connection">
+              <span id="encStatus" class="tag neutral" role="status" aria-live="polite">未连接</span>
+              <div class="tool-connection-controls">
+                <select id="encChannelSelect" aria-label="PCAN 通道" class="tool-channel-select"></select>
+                <select id="encBitrate" aria-label="CAN 位率" title="CAN 位率；出厂默认 500 kbit/s"></select>
+                <label class="enc-address" title="节点地址，同时是 CAN ID；出厂默认 0x01">
+                  <span>地址</span><input id="encAddress" type="text" value="0x01" inputmode="text" maxlength="5" aria-label="节点地址" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="enc-preview hidden" id="encPreviewWrap" title="用软件模拟的编码器演示页面，不发送任何 CAN 帧"><input id="encPreview" type="checkbox"><span>无硬件预览</span></label>
+                <button class="action-button" type="button" id="encConnectButton">连接</button>
+                <button class="danger-outline hidden" type="button" id="encDisconnectButton">断开</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="encNotice" class="enc-notice hidden" role="alert">
+            <span id="encNoticeText"></span>
+            <button class="outline-button hidden" type="button" id="encNoticeAction"></button>
+          </div>
+
+          <div class="enc-grid">
+            <article class="panel enc-reading">
+              <header class="panel-head"><h3>当前读数</h3><span id="encReadingState" class="tag neutral">等待数据</span></header>
+              <div class="panel-body enc-tiles">
+                <div class="enc-tile enc-tile-main" title="设备单圈角度 = 计数 × 360 / 4096"><span>单圈角度</span><b id="encAngle">—</b><small id="encAngleSub">0–360°</small></div>
+                <div class="enc-tile" title="12 bit 原始计数 0–4095"><span>原始计数</span><b id="encRaw">—</b><small id="encRawSub">/ 4095</small></div>
+                <div class="enc-tile" title="上位机用相邻样本在约 50 ms 窗口内的差分计算，单位 rpm"><span>转速</span><b id="encRpm">—</b><small id="encDps">°/s</small></div>
+                <div class="enc-tile" title="上位机从连接或最近一次改动位置参考起累计的角度，跨圈连续；不是设备的虚拟多圈值"><span>累计角度</span><b id="encAccum">—</b><small id="encTurns">上位机累计</small></div>
+                <div class="enc-tile" title="按最近的转速符号判断；静止时保留最近一次转动方向"><span>转动方向</span><b id="encMotion">—</b><small id="encMotionSub">&nbsp;</small></div>
+                <div class="enc-tile" title="位置帧实测到达速率；间隔为相邻帧时间差"><span>到达速率</span><b id="encRate">—</b><small id="encRateSub">&nbsp;</small></div>
+              </div>
+            </article>
+
+            <article class="panel enc-source">
+              <header class="panel-head"><h3>数据来源</h3><span id="encSourceState" class="tag neutral">未采集</span></header>
+              <div class="panel-body">
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>主机轮询</b><small>主机发读取请求，编码器逐次应答；不改动编码器设置</small></div>
+                  <div class="enc-row-ctl">
+                    <select id="encPollHz" aria-label="轮询频率"></select>
+                    <button class="action-button" type="button" id="encPollToggle">开始</button>
+                  </div>
+                </div>
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>设备自动上报</b><small>编码器按设定周期主动发送位置，无需请求</small></div>
+                  <div class="enc-row-ctl">
+                    <button class="outline-button" type="button" id="encReportStart">开启</button>
+                    <button class="outline-button" type="button" id="encReportStop">关闭</button>
+                  </div>
+                </div>
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>上报周期</b><small id="encPeriodHint">5000–65535 µs，掉电记忆</small></div>
+                  <div class="enc-row-ctl">
+                    <label class="field"><span class="field-input"><input id="encPeriod" type="number" min="5000" max="65535" step="1" value="5000" aria-label="上报周期"><em>µs</em></span></label>
+                    <button class="outline-button" type="button" id="encPeriodWrite">写入</button>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel enc-plot-panel">
+            <header class="panel-head">
+              <h3>曲线</h3>
+              <div class="enc-plot-tools">
+                <div class="segmented small" id="encWindow" role="group" aria-label="时间窗口">
+                  <button type="button" data-window="5">5 s</button><button type="button" data-window="10">10 s</button><button type="button" data-window="30">30 s</button><button type="button" data-window="60">60 s</button>
+                </div>
+                <div class="segmented small" id="encAngleMode" role="group" aria-label="角度曲线">
+                  <button type="button" data-mode="single" title="设备输出的 0–360° 单圈角度，跨圈处断开">0–360°</button><button type="button" data-mode="signed" title="单圈角度折算到 −180°～180°，零位附近不会在 0° 与 360° 间跳变">±180°</button><button type="button" data-mode="accum" title="上位机累计的连续角度">累计</button>
+                </div>
+                <label class="switch" title="冻结曲线显示，后台继续采集"><input id="encPause" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>暂停</span></label>
+                <button class="outline-button" type="button" id="encClearCurves">清空</button>
+                <button class="outline-button" type="button" id="encExport">导出 CSV</button>
+              </div>
+            </header>
+            <div class="panel-body enc-plots">
+              <div id="encPlotEmpty" class="enc-plot-empty">连接编码器后选择数据来源，曲线从这里开始。</div>
+              <div class="enc-plot-block"><div class="enc-plot-title" id="encAngleTitle">角度 °</div><div id="encPlotAngle" class="enc-plot"></div></div>
+              <div class="enc-plot-block"><div class="enc-plot-title">转速 rpm</div><div id="encPlotSpeed" class="enc-plot"></div></div>
+            </div>
+          </article>
+
+          <div class="enc-grid">
+            <article class="panel enc-cal">
+              <header class="panel-head"><h3>标定</h3><span class="panel-context">改写编码器保存的设置，执行前确认</span></header>
+              <div class="panel-body">
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>零位</b><small>转到机械零位后，把当前位置记为 0°</small><em id="encRecZero" class="enc-record">本次连接未执行</em></div>
+                  <div class="enc-row-ctl"><button class="action-button" type="button" id="encZero">当前位置置零</button></div>
+                </div>
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>中点</b><small>把当前位置记为 180°（计数 2048）</small><em id="encRecMidpoint" class="enc-record">本次连接未执行</em></div>
+                  <div class="enc-row-ctl"><button class="outline-button" type="button" id="encMidpoint">设为中点</button></div>
+                </div>
+                <div class="enc-row">
+                  <div class="enc-row-text"><b>递增方向</b><small>读数增大对应的旋转方向，以说明书为准</small><em id="encRecDirection" class="enc-record">本次连接未执行</em></div>
+                  <div class="enc-row-ctl">
+                    <button class="outline-button" type="button" data-enc-direction="cw">顺时针增大</button>
+                    <button class="outline-button" type="button" data-enc-direction="ccw">逆时针增大</button>
+                  </div>
+                </div>
+                <div class="enc-stability" id="encStability">
+                  <div class="enc-stability-head"><b>静态稳定性</b><span id="encStabilityTag" class="tag neutral">等待数据</span></div>
+                  <div class="enc-stability-grid">
+                    <div><span>样本</span><b id="encStabSamples">—</b></div>
+                    <div><span>峰峰值</span><b id="encStabPtp">—</b></div>
+                    <div><span>标准差</span><b id="encStabStd">—</b></div>
+                  </div>
+                  <small>固定转轴后观察近 5 s 的读数离散度，用来检查安装松动和干扰。</small>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel enc-query">
+              <header class="panel-head"><h3>设备查询</h3><button class="outline-button" type="button" id="encReadAll">读取全部</button></header>
+              <div class="panel-body">
+                <table class="enc-table">
+                  <tbody>
+                    <tr><th>单圈位置</th><td id="encQPos">—</td><td><button class="outline-button" type="button" data-enc-read="read_position">读取</button></td></tr>
+                    <tr><th title="设备自上电起累计的虚拟多圈位置，掉电归零">虚拟多圈位置</th><td id="encQMulti">—</td><td><button class="outline-button" type="button" data-enc-read="read_multiturn">读取</button></td></tr>
+                    <tr><th title="设备自上电起累计的虚拟圈数，掉电归零">虚拟圈数</th><td id="encQTurns">—</td><td><button class="outline-button" type="button" data-enc-read="read_turns">读取</button></td></tr>
+                    <tr><th title="设备角速度计数；转速 = 计数 × 60000 / (4096 × 采样时间)">角速度计数</th><td id="encQSpeed">—</td><td><button class="outline-button" type="button" data-enc-read="read_speed">读取</button></td></tr>
+                  </tbody>
+                </table>
+                <p class="enc-hint">说明书只给出读取指令，设备的上报周期、方向、地址和位率没有读回指令；本页只显示实测值和本次写入的应答。</p>
+              </div>
+            </article>
+          </div>
+
+          <details class="panel enc-advanced">
+            <summary>高级：节点地址、位率、角速度采样时间、位置计数</summary>
+            <div class="panel-body enc-advanced-grid">
+              <div class="enc-adv-row">
+                <label class="field"><span class="field-label">节点地址（新）</span><span class="field-input"><input id="encNewAddress" type="text" value="0x02" inputmode="text" maxlength="5" autocomplete="off" spellcheck="false"><em>0x01–0xFF</em></span></label>
+                <button class="outline-button" type="button" id="encAddressWrite">写入地址</button>
+              </div>
+              <div class="enc-adv-row">
+                <label class="field"><span class="field-label">CAN 位率（新）</span><span class="field-input"><select id="encNewBitrate"></select></span></label>
+                <button class="outline-button" type="button" id="encBitrateWrite">写入位率</button>
+              </div>
+              <div class="enc-adv-row">
+                <label class="field"><span class="field-label">角速度采样时间</span><span class="field-input"><input id="encSampleMs" type="number" min="1" max="65535" step="1" value="100"><em>ms</em></span></label>
+                <button class="outline-button" type="button" id="encSampleWrite" title="说明书示例的字节序与通用说明不一致，写入后用“读取角速度计数”核对">写入采样时间</button>
+              </div>
+              <div class="enc-adv-row">
+                <label class="field"><span class="field-label">当前位置设为</span><span class="field-input"><input id="encCount" type="number" min="0" max="4095" step="1" value="0"><em>count</em></span></label>
+                <button class="outline-button" type="button" id="encCountWrite" title="掉电归零；写入后自动读回比较">写入计数</button>
+              </div>
+            </div>
+          </details>
+
+          <div class="enc-grid">
+            <article class="panel enc-applied">
+              <header class="panel-head"><h3>本次写入记录</h3><span class="panel-context">设备应答与读回结果</span></header>
+              <div class="panel-body flush"><div id="encApplied" class="enc-empty">本次连接还没有写入。</div></div>
+            </article>
+            <article class="panel enc-events">
+              <header class="panel-head"><h3>事件记录</h3><button class="outline-button" type="button" id="encClearLog">清空</button></header>
+              <div class="panel-body flush"><div id="encEvents" class="enc-empty">暂无事件。</div></div>
+            </article>
+          </div>
+
+          <article class="panel enc-frames">
+            <header class="panel-head"><h3>收到的帧</h3><span id="encFrameSummary" class="panel-context">—</span></header>
+            <div class="panel-body flush"><div id="encFrames" class="enc-empty">连接后列出总线上收到的帧。</div></div>
+          </article>
         </section>
 
         <section class="page" id="page-simulator" aria-label="本地遥测模拟器">
@@ -1854,6 +2033,7 @@
   <script src="js/telemetry.js"></script>
   <script src="js/telemetry-simulator.js"></script>
   <script src="js/display.js"></script>
+  <script src="js/encoder.js"></script>
   <script src="js/updater.js"></script>
 </body>
 </html>
