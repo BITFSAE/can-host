@@ -154,7 +154,7 @@ class SimulatedEncoder:
 class SimulatedEncoderBus:
     """Minimum python-can Bus surface: ``send``, ``recv`` and ``shutdown``."""
 
-    def __init__(self, device: SimulatedEncoder | None = None, *, clock: Callable[[], float] = time.monotonic,
+    def __init__(self, device: SimulatedEncoder | None = None, *, clock: Callable[[], float] = time.perf_counter,
                  wall_clock: Callable[[], float] = time.time) -> None:
         self.device = device or SimulatedEncoder()
         self._clock = clock

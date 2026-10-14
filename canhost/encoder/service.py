@@ -91,8 +91,10 @@ def _as_int(args: dict[str, Any], key: str, label: str) -> int:
 
 class EncoderService:
     def __init__(self, *, allow_preview: bool = False, bus_factory: Callable[[str, int], Any] | None = None,
-                 clock: Callable[[], float] = time.monotonic, wall_clock: Callable[[], float] = time.time,
+                 clock: Callable[[], float] = time.perf_counter, wall_clock: Callable[[], float] = time.time,
                  ack_timeout_s: float = ACK_TIMEOUT_S) -> None:
+        # perf_counter, not monotonic: on Windows monotonic() ticks every 15.6 ms, which would cap the
+        # poll scheduler near 64 Hz and quantise arrival times.
         self.allow_preview = allow_preview
         self._bus_factory = bus_factory
         self._clock = clock

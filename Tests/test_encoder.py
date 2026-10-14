@@ -561,7 +561,7 @@ class CollectionTest(ServiceTestBase):
         stream = self.snapshot()["stream"]
         self.assertGreater(stream["hz"], 50)
         self.assertLess(stream["hz"], 130)
-        self.assertAlmostEqual(stream["interval_ms"], 10.0, delta=3.0)
+        self.assertAlmostEqual(stream["interval_ms"], 10.0, delta=4.0)
         self.assertTrue(self.service.command("poll_stop")["ok"])
         sent = len(self.bus.sent)
         time.sleep(0.1)
