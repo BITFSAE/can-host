@@ -526,7 +526,7 @@ class Api(DbcApi):
         return self._encoder.command(name, args, acknowledged)
 
     def choose_export_encoder_csv(self) -> dict[str, Any]:
-        """Save the encoder curves (time, count, angle, accumulated angle, rpm) as CSV."""
+        """Save the encoder curves (time, count, angle, accumulated angle, rpm, brake oil columns) as CSV."""
         if not self._window:
             return {"ok": False, "error": "窗口尚未就绪"}
         try:
@@ -544,6 +544,32 @@ class Api(DbcApi):
                 path = path.with_suffix(".csv")
             path.write_text(exported["data"], encoding="utf-8-sig", newline="")
             return {"ok": True, "path": str(path), "samples": exported["samples"]}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def choose_export_encoder_image(self, data_url: str) -> dict[str, Any]:
+        """Save the figure the encoder page rendered (a PNG data URL) to a file the operator picks."""
+        if not self._window:
+            return {"ok": False, "error": "窗口尚未就绪"}
+        prefix = "data:image/png;base64,"
+        if not isinstance(data_url, str) or not data_url.startswith(prefix) or len(data_url) > 48_000_000:
+            return {"ok": False, "error": "图片数据无效"}
+        try:
+            import base64
+            import webview
+            image = base64.b64decode(data_url[len(prefix):], validate=True)
+            if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+                return {"ok": False, "error": "图片数据不是 PNG"}
+            selected = self._window.create_file_dialog(
+                webview.SAVE_DIALOG, save_filename=f"encoder_{datetime.now():%Y%m%d_%H%M%S}.png",
+                file_types=("PNG 图片 (*.png)",))
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            path = Path(selected if isinstance(selected, str) else selected[0]).expanduser()
+            if path.suffix.lower() != ".png":
+                path = path.with_suffix(".png")
+            path.write_bytes(image)
+            return {"ok": True, "path": str(path), "bytes": len(image)}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 

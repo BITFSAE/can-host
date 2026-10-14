@@ -721,24 +721,38 @@
             </article>
           </div>
 
+          <article class="panel enc-brake">
+            <header class="panel-head"><h3>制动油压</h3><span id="encBrakeState" class="tag neutral">未连接</span></header>
+            <div class="panel-body">
+              <div class="enc-brake-tiles">
+                <div class="enc-tile" id="encOilTile" title="CANB 上 ECU 发出的 0x305，字节 4–5，0.001 kPa/LSB；与编码器连接在同一条总线上时才能收到"><span>制动油压</span><b id="encOil">—</b><small id="encOilSub">&nbsp;</small></div>
+                <div class="enc-tile" id="encBrakeTile" title="车手屏由油压推算的刹车条开度，取整数百分比；刹车传感器就绪前的临时算法"><span>油压开度</span><b id="encBrakePct">—</b><small id="encBrakeSub">&nbsp;</small></div>
+                <div class="enc-tile" id="encOilRateTile" title="0x305 帧的实测到达速率"><span>油压帧速率</span><b id="encOilRate">—</b><small id="encOilRateSub">&nbsp;</small></div>
+              </div>
+              <p class="enc-hint" id="encBrakeMap">&nbsp;</p>
+            </div>
+          </article>
+
           <article class="panel enc-plot-panel">
             <header class="panel-head">
               <h3>曲线</h3>
               <div class="enc-plot-tools">
                 <div class="segmented small" id="encWindow" role="group" aria-label="时间窗口">
-                  <button type="button" data-window="5">5 s</button><button type="button" data-window="10">10 s</button><button type="button" data-window="30">30 s</button><button type="button" data-window="60">60 s</button>
+                  <button type="button" data-window="5">5 s</button><button type="button" data-window="10">10 s</button><button type="button" data-window="30">30 s</button><button type="button" data-window="60">60 s</button><button type="button" data-window="0" title="从第一个样本到最新样本，点数过多时抽稀显示；完整数据以 CSV 为准">全部</button>
                 </div>
                 <div class="segmented small" id="encAngleMode" role="group" aria-label="角度曲线">
                   <button type="button" data-mode="single" title="设备输出的 0–360° 单圈角度，跨圈处断开">0–360°</button><button type="button" data-mode="signed" title="单圈角度折算到 −180°～180°，零位附近不会在 0° 与 360° 间跳变">±180°</button><button type="button" data-mode="accum" title="上位机累计的连续角度">累计</button>
                 </div>
                 <label class="switch" title="冻结曲线显示，后台继续采集"><input id="encPause" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>暂停</span></label>
                 <button class="outline-button" type="button" id="encClearCurves">清空</button>
-                <button class="outline-button" type="button" id="encExport">导出 CSV</button>
+                <button class="outline-button" type="button" id="encExport" title="每个编码器样本一行：角度、转速，以及当时保持的制动油压和油压开度">导出 CSV</button>
+                <button class="outline-button" type="button" id="encExportImage" title="把当前窗口内的角度、油压与开度、转速曲线保存为一张 PNG">导出图片</button>
               </div>
             </header>
             <div class="panel-body enc-plots">
               <div id="encPlotEmpty" class="enc-plot-empty">连接编码器后选择数据来源，曲线从这里开始。</div>
               <div class="enc-plot-block"><div class="enc-plot-title" id="encAngleTitle">角度 °</div><div id="encPlotAngle" class="enc-plot"></div></div>
+              <div class="enc-plot-block"><div class="enc-plot-title" id="encOilTitle">制动油压 kPa · 油压开度 %</div><div id="encPlotOil" class="enc-plot"></div></div>
               <div class="enc-plot-block"><div class="enc-plot-title">转速 rpm</div><div id="encPlotSpeed" class="enc-plot"></div></div>
             </div>
           </article>

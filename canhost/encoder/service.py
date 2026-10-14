@@ -2,7 +2,10 @@
 
 One PCAN handle talks to one encoder.  The encoder only answers requests (query mode, the factory
 behaviour) or streams its position (auto-report), so connecting sends nothing; frames leave only when
-the operator asks for data, polls, or changes a setting.  Three tiers protect the device and the bus:
+the operator asks for data, polls, or changes a setting.  The brake pedal sensor and the ECU share
+CANB, so the ECU's 0x305 frames (brake oil pressure) arrive on the same handle: they are only listened
+to, never sent, and each encoder sample keeps the newest oil value next to its angle.  Three tiers
+protect the device and the bus:
 
 * reads and the poll/auto-report switches need no confirmation;
 * anything that rewrites the encoder's stored settings (zero, midpoint, direction, period, address,
@@ -23,10 +26,10 @@ from typing import Any
 
 from .. import decoders as d
 from .model import (
-    DEG_PER_COUNT, RESOLUTION, MotionTracker, SampleSeries, Timebase, circular_distance, max_trackable_rpm,
-    motion_label,
+    DEG_PER_COUNT, OIL_FRESH_S, RESOLUTION, MotionTracker, SampleSeries, Timebase, brake_pct, circular_distance,
+    max_trackable_rpm, motion_label, oil_kpa,
 )
-from .simulator import SimulatedEncoderBus
+from .simulator import PEDAL_PERIOD_S, SimulatedEncoderBus
 
 try:
     import can
@@ -126,6 +129,11 @@ class EncoderService:
         self._tracker = MotionTracker()
         self._timebase = Timebase()
         self._last: dict[str, Any] | None = None
+        self._oil: dict[str, Any] | None = None
+        self._oil_count = 0
+        self._oil_win_start: float | None = None
+        self._oil_win_count = 0
+        self._oil_hz = 0.0
         self._last_direction: tuple[str, float] | None = None
         self._alt_ids: set[int] = set()
         self._waiters: list[_Waiter] = []
@@ -203,7 +211,7 @@ class EncoderService:
                 self._error = None
             try:
                 if settings["preview"]:
-                    bus = SimulatedEncoderBus(self._preview_device(settings["address"]))
+                    bus = SimulatedEncoderBus(self._preview_device(settings["address"]), pedal_period_s=PEDAL_PERIOD_S)
                 else:
                     try:
                         bus = self._open_bus(settings["channel"], settings["bitrate"])
@@ -313,7 +321,8 @@ class EncoderService:
             if len(self._census) >= CENSUS_LIMIT:
                 return
             entry = {"id": can_id, "extended": extended, "dlc": len(data), "func": func, "count": 0,
-                     "mine": mine, "kind": decoded["kind"] if decoded else ("other" if not mine else "invalid")}
+                     "mine": mine, "kind": decoded["kind"] if decoded else (
+                         "invalid" if mine else "pedal" if can_id == d.DATA_LOGGER_ID and not extended else "other")}
             self._census[key] = entry
         entry["count"] += 1
         entry["data"] = _hex(data)
@@ -337,6 +346,8 @@ class EncoderService:
             self._census_add(can_id, extended, data, decoded, arrival, mine)
             if not mine:
                 self._rx_other += 1
+                if can_id == d.DATA_LOGGER_ID and not extended:
+                    self._record_oil(message, data, arrival)
                 return
             if decoded is None:
                 self._reject(f"0x{can_id:03X} 帧头无效（LEN 与 DLC 不符或不足 4 字节）：{_hex(data)}")
@@ -363,6 +374,23 @@ class EncoderService:
             waiter.result = info
             waiter.event.set()
 
+    def _record_oil(self, message: Any, data: bytes, arrival: float) -> None:
+        """Keep the newest 0x305 oil count; frames shorter than the display accepts are ignored."""
+        decoded = d.decode_data_logger(data)
+        if decoded is None:
+            return
+        t = self._timebase.map(getattr(message, "timestamp", None), arrival)
+        self._oil = {"raw": decoded["oil_raw"], "t": t, "arrival": arrival}
+        self._oil_count += 1
+
+    def _oil_for(self, t: float) -> tuple[int | None, float | None]:
+        """The held oil count and its age at sample time ``t``, or (None, None) when none is fresh."""
+        oil = self._oil
+        if oil is None:
+            return None, None
+        age = max(t - oil["t"], 0.0)
+        return (oil["raw"], age) if age <= OIL_FRESH_S else (None, None)
+
     def _record_position(self, message: Any, decoded: dict[str, Any], arrival: float) -> None:
         raw = decoded["raw"]
         if not decoded["in_range"]:
@@ -370,7 +398,8 @@ class EncoderService:
             return
         t = self._timebase.map(getattr(message, "timestamp", None), arrival)
         position, speed = self._tracker.push(t, raw)
-        self._series.append(t, raw, position, speed)
+        oil_raw, oil_age = self._oil_for(t)
+        self._series.append(t, raw, position, speed, oil_raw, oil_age)
         self._last = {"raw": raw, "t": t, "arrival": arrival, "position": position, "speed": speed}
         label = motion_label(speed)
         if label in ("increasing", "decreasing"):
@@ -730,6 +759,11 @@ class EncoderService:
     # -- snapshot and curves ----------------------------------------------
 
     def _roll_rates(self, now: float) -> None:
+        if self._oil_win_start is None:
+            self._oil_win_start, self._oil_win_count = now, self._oil_count
+        elif now - self._oil_win_start >= RATE_WINDOW_S:
+            self._oil_hz = (self._oil_count - self._oil_win_count) / (now - self._oil_win_start)
+            self._oil_win_start, self._oil_win_count = now, self._oil_count
         if self._win_start is None:
             self._win_start, self._win_count = now, self._pos_count
             return
@@ -759,6 +793,12 @@ class EncoderService:
                     "speed_rpm": None if speed is None else round(speed / 6.0, 3),
                     "motion": motion_label(speed), "age": round(now - last["arrival"], 2),
                 }
+            held = self._oil
+            oil = None
+            if held is not None:
+                oil_age = now - held["arrival"]
+                oil = {"raw": held["raw"], "kpa": oil_kpa(held["raw"]), "brake_pct": brake_pct(held["raw"]),
+                       "age": round(oil_age, 2), "hz": round(self._oil_hz, 1)}
             stability = self._series.stability(last["t"], STABILITY_WINDOW_S) if last else None
             interval_ms = self._interval_ms
             direction = None
@@ -778,6 +818,7 @@ class EncoderService:
                     "age": None if self._started_at is None or not running else round(now - self._started_at, 1),
                 },
                 "reading": reading,
+                "oil": oil,
                 "direction": direction,
                 "stream": {
                     "hz": round(self._hz, 1), "interval_ms": None if interval_ms is None else round(interval_ms, 3),
@@ -823,6 +864,8 @@ def encoder_catalog() -> dict[str, Any]:
         "poll_rates_hz": list(POLL_RATES_HZ), "period_us_range": list(d.BRT_PERIOD_US_RANGE),
         "zero_tolerance": ZERO_TOLERANCE, "stability_window_s": STABILITY_WINDOW_S,
         "fresh_max_s": FRESH_MAX_S,
+        "brake_map": {"fresh_s": OIL_FRESH_S, "zero_kpa": d.BRAKE_OIL_ZERO_RAW * d.OIL_KPA_PER_COUNT,
+                      "full_kpa": d.BRAKE_OIL_FULL_RAW * d.OIL_KPA_PER_COUNT, "full_pct": d.BRAKE_OIL_FULL_PCT},
     }
 
 

@@ -18,6 +18,18 @@ SPEED_WINDOW_S = 0.05
 STILL_DPS = 2.0
 SERIES_CAPACITY = 120_000
 SERIES_TRIM_SLACK = 20_000
+# An oil frame older than this (against the encoder sample) is not attached to the sample.  It is the
+# driver display's own 0x305 timeout, so a value shown here would still be shown on the display.
+OIL_FRESH_S = 1.0
+CSV_HEADER = "time_s,raw_count,angle_deg,accumulated_deg,speed_rpm,oil_kpa,brake_pct,oil_age_ms"
+
+
+def oil_kpa(oil_raw: int | None) -> float | None:
+    return None if oil_raw is None else round(oil_raw * decoders.OIL_KPA_PER_COUNT, 3)
+
+
+def brake_pct(oil_raw: int | None) -> int | None:
+    return None if oil_raw is None else decoders.brake_pct_from_oil(oil_raw)
 
 
 def circular_distance(a: int, b: int) -> int:
@@ -121,6 +133,10 @@ class SampleSeries:
     The page asks for everything after its cursor, so the refresh interval never changes the sample
     density.  ``epoch`` changes on clear(); a reader holding another epoch, or a cursor that was
     already trimmed, gets ``reset`` and starts again from what is kept.
+
+    Each sample carries the newest CANB oil-pressure count (0x305) seen no more than ``OIL_FRESH_S``
+    before it, and how old that count was; both are ``None`` when there was no such frame, so a
+    missing pressure is never filled with zero.
     """
 
     def __init__(self, capacity: int = SERIES_CAPACITY, slack: int = SERIES_TRIM_SLACK) -> None:
@@ -135,6 +151,8 @@ class SampleSeries:
         self.raw: list[int] = []
         self.position: list[int] = []
         self.speed: list[float | None] = []
+        self.oil: list[int | None] = []
+        self.oil_age: list[float | None] = []
 
     def clear(self) -> None:
         self.epoch += 1
@@ -147,14 +165,17 @@ class SampleSeries:
     def total(self) -> int:
         return self._base + len(self.t)
 
-    def append(self, t: float, raw: int, position: int, speed: float | None) -> None:
+    def append(self, t: float, raw: int, position: int, speed: float | None,
+               oil: int | None = None, oil_age: float | None = None) -> None:
         self.t.append(t)
         self.raw.append(raw)
         self.position.append(position)
         self.speed.append(speed)
+        self.oil.append(oil)
+        self.oil_age.append(oil_age)
         if len(self.t) > self.capacity + self.slack:
             drop = len(self.t) - self.capacity
-            for column in (self.t, self.raw, self.position, self.speed):
+            for column in (self.t, self.raw, self.position, self.speed, self.oil, self.oil_age):
                 del column[:drop]
             self._base += drop
 
@@ -162,10 +183,12 @@ class SampleSeries:
         reset = epoch != self.epoch or cursor < self._base or cursor > self.total
         start = 0 if reset else cursor - self._base
         end = min(len(self.t), start + limit)
+        oil = self.oil[start:end]
         return {
             "epoch": self.epoch, "reset": reset, "cursor": self._base + end,
             "t": self.t[start:end], "raw": self.raw[start:end],
             "position": self.position[start:end], "speed": self.speed[start:end],
+            "oil_kpa": [oil_kpa(value) for value in oil], "brake_pct": [brake_pct(value) for value in oil],
         }
 
     def stability(self, now_t: float, window_s: float) -> dict[str, Any]:
@@ -189,15 +212,21 @@ class SampleSeries:
         }
 
     def csv(self) -> str:
+        """One row per encoder sample; the three oil columns stay empty where no fresh oil frame was held."""
         if not self.t:
-            return "time_s,raw_count,angle_deg,accumulated_deg,speed_rpm\n"
+            return CSV_HEADER + "\n"
         origin = self.t[0]
-        rows = ["time_s,raw_count,angle_deg,accumulated_deg,speed_rpm"]
-        for t, raw, position, speed in zip(self.t, self.raw, self.position, self.speed):
+        rows = [CSV_HEADER]
+        for t, raw, position, speed, oil, age in zip(self.t, self.raw, self.position, self.speed,
+                                                    self.oil, self.oil_age):
             rows.append(f"{t - origin:.6f},{raw},{raw * DEG_PER_COUNT:.4f},"
-                        f"{position * DEG_PER_COUNT:.4f},{'' if speed is None else f'{speed / 6.0:.3f}'}")
+                        f"{position * DEG_PER_COUNT:.4f},{'' if speed is None else f'{speed / 6.0:.3f}'},"
+                        + (",," if oil is None else
+                           f"{oil * decoders.OIL_KPA_PER_COUNT:.3f},{decoders.brake_pct_from_oil(oil)},"
+                           f"{(age or 0.0) * 1000.0:.1f}"))
         return "\n".join(rows) + "\n"
 
 
-__all__ = ["DEG_PER_COUNT", "MotionTracker", "RESOLUTION", "SPEED_WINDOW_S", "SampleSeries", "STILL_DPS",
-           "Timebase", "circular_distance", "max_trackable_rpm", "motion_label"]
+__all__ = ["CSV_HEADER", "DEG_PER_COUNT", "MotionTracker", "OIL_FRESH_S", "RESOLUTION", "SPEED_WINDOW_S",
+           "SampleSeries", "STILL_DPS", "Timebase", "brake_pct", "circular_distance", "max_trackable_rpm",
+           "motion_label", "oil_kpa"]

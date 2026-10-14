@@ -20,7 +20,8 @@ from ..decoders import (
     ECU_MOTOR_TEMP_ID, ECU_STATUS_ID, ECU_TORQUE_ID, ECU_VELOCITY_ID, PACK_STATUS_ID, PDM_BATTERY_ID,
     PDM_BUS_ID, FAN_STATUS_ID, SOP_POWER_ID, SOP_STATUS_ID, TIRE_TEMP_IDS,
     build_amk_diagnostic, build_data_logger, build_ecu_status, build_ecu_wheels_i16, build_fan_status,
-    build_pack_status, build_pdm_side, build_sop_limits, build_sop_status, build_tire_frame,
+    brake_pct_from_oil, build_pack_status, build_pdm_side, build_sop_limits, build_sop_status,
+    build_tire_frame,
 )
 
 WHEELS = ("fl", "fr", "rl", "rr")
@@ -340,18 +341,9 @@ def frame_period_ms(spec: FrameSpec, controls: Mapping[str, Any]) -> int:
 # Derived readouts (what the display should show for the current values)
 # ---------------------------------------------------------------------------
 
-BRAKE_OIL_ZERO_RAW = 2100
-BRAKE_OIL_FULL_RAW = 4900
-BRAKE_OIL_FULL_PCT = 90
-
-
 def brake_percent(oil_kpa: float) -> int:
-    """Mirror of the display's temporary oil-pressure brake bar (can.c ``can_oil_to_brake_pct``)."""
-    raw = max(0, min(0xFFFF, int(math.floor(oil_kpa / 0.001 + 0.5))))
-    if raw <= BRAKE_OIL_ZERO_RAW:
-        return 0
-    pct = (raw - BRAKE_OIL_ZERO_RAW) * BRAKE_OIL_FULL_PCT // (BRAKE_OIL_FULL_RAW - BRAKE_OIL_ZERO_RAW)
-    return min(100, pct)
+    """What the display's temporary oil-pressure brake bar shows for ``oil_kpa`` (mapping in decoders)."""
+    return brake_pct_from_oil(max(0, min(0xFFFF, int(math.floor(oil_kpa / 0.001 + 0.5)))))
 
 
 def derive(values: Mapping[str, Any]) -> dict[str, Any]:

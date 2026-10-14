@@ -48,7 +48,7 @@ class PageWiringTest(unittest.TestCase):
     def test_every_backend_call_the_page_makes_exists_on_the_api(self) -> None:
         calls = commands(r"state\.api\.([a-z_]+)\(")
         self.assertTrue({"connect_encoder", "disconnect_encoder", "encoder_command", "get_encoder_series",
-                         "choose_export_encoder_csv"} <= calls)
+                         "choose_export_encoder_csv", "choose_export_encoder_image"} <= calls)
         for name in calls:
             self.assertTrue(callable(getattr(Api, name, None)), name)
         self.assertIn("get_encoder_snapshot", CORE)
@@ -86,9 +86,9 @@ class PageWiringTest(unittest.TestCase):
         self.assertEqual(undefined, [])
 
     def test_choices_in_the_page_match_the_backend_limits(self) -> None:
-        self.assertEqual(sorted(int(v) for v in re.findall(r'data-window="(\d+)"', PAGE)), [5, 10, 30, 60])
+        self.assertEqual(sorted(int(v) for v in re.findall(r'data-window="(\d+)"', PAGE)), [0, 5, 10, 30, 60])
         windows = re.search(r"const ENC_WINDOWS = \[([^\]]*)\]", SCRIPT).group(1)
-        self.assertEqual([int(v) for v in windows.split(",")], [5, 10, 30, 60])
+        self.assertEqual(sorted(int(v) for v in windows.split(",")), [0, 5, 10, 30, 60])      # 0 = all samples
         modes = re.search(r"const ENC_ANGLE_MODES = \[([^\]]*)\]", SCRIPT).group(1)
         self.assertEqual(re.findall(r'data-mode="([a-z]+)"', PAGE), [m.strip().strip('"') for m in modes.split(",")])
         default = int(re.search(r"pollHz: (\d+)", SCRIPT).group(1))
@@ -108,6 +108,22 @@ class PageWiringTest(unittest.TestCase):
         self.assertIn("isStaleData(reading.age", SCRIPT)
         self.assertIn("dataAgeText", SCRIPT)
         self.assertRegex(SCRIPT, r'if \(!reading\) \{[^}]*"等待数据"')
+
+    def test_missing_oil_is_waiting_not_zero_and_the_mapping_comes_from_the_backend(self) -> None:
+        self.assertRegex(SCRIPT, r'if \(!oil\) \{[^}]*"等待数据"')
+        self.assertIn("isStaleData(oil.age", SCRIPT)
+        self.assertIn("enc.catalog?.brake_map", SCRIPT)
+        for number in ("2100", "4900", "2.1", "4.9"):
+            self.assertNotIn(number, SCRIPT)              # thresholds are shown from the catalog, never retyped
+        self.assertIn("oil_kpa", SCRIPT)
+        self.assertIn("brake_pct", SCRIPT)
+
+    def test_exported_figure_names_a_preview_encoder_and_both_axes(self) -> None:
+        figure = SCRIPT[SCRIPT.index("function encFigureCanvas"):SCRIPT.index("async function encExportImage")]
+        self.assertIn("模拟编码器（预览，非实测）", figure)
+        self.assertIn("制动油压（左轴）", figure)
+        self.assertIn("油压开度（右轴）", figure)
+        self.assertIn("toDataURL(\"image/png\")", SCRIPT)
 
     def test_encoder_styles_use_only_the_shared_tokens(self) -> None:
         block = CSS[CSS.index("/* ---- BRT 编码器页"):]

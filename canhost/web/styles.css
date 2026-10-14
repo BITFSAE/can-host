@@ -4339,6 +4339,8 @@ select {
 .enc-tile span { color: var(--text-3); font-size: var(--fs-label); }
 .enc-tile b { overflow: hidden; color: var(--text); font: 700 var(--fs-value-lg) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .enc-tile small { overflow: hidden; color: var(--text-3); font: var(--fs-unit) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.enc-brake { margin-bottom: var(--sp-2); }
+.enc-brake-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
 .enc-tile-main { grid-column: span 3; }
 .enc-tile-main b { font-size: var(--fs-kpi); }
 .enc-tile.data-stale b { color: var(--text-2); }
@@ -4421,5 +4423,6 @@ select {
   #page-encoder .tool-connection-controls { flex-wrap: wrap; }
   .enc-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .enc-tile-main { grid-column: span 2; }
+  .enc-brake-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .enc-row { flex-wrap: wrap; }
 }

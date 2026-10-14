@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from collections import deque
 import json
+from pathlib import Path
+import sys
+import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +21,18 @@ from canhost.app import Api
 from canhost.encoder import model
 from canhost.encoder.service import EncoderService, encoder_catalog
 from canhost.encoder.simulator import SimulatedEncoder, SimulatedEncoderBus, default_motion
+
+
+class _SaveWindow:
+    """Stands in for the pywebview window: remembers how often the save dialog was shown."""
+
+    def __init__(self, choice) -> None:
+        self.choice = choice
+        self.dialogs = 0
+
+    def create_file_dialog(self, *args, **kwargs):
+        self.dialogs += 1
+        return self.choice
 
 
 def wait_until(condition, timeout: float = 4.0) -> bool:
@@ -120,6 +137,34 @@ class FrameFormatTest(unittest.TestCase):
         self.assertAlmostEqual(d.brt_speed_rpm(-2048, 100), -2048 * 60000 / (4096 * 100))
         with self.assertRaises(ValueError):
             d.brt_speed_rpm(1, 0)
+
+
+class BrakeOilFrameTest(unittest.TestCase):
+    """0x305 as the ECU sends it (Vehicle_CanB.dbc BO_ 773) and the driver display's brake mapping."""
+
+    def test_data_logger_decoding_inverts_the_builder(self) -> None:
+        decoded = d.decode_data_logger(d.build_data_logger(-12.5, 50.0, 3.5))
+        self.assertEqual(decoded, {"steering_deg": -12.5, "throttle_pct": 50.0, "oil_raw": 3500, "oil_kpa": 3.5})
+
+    def test_oil_is_bytes_four_and_five_little_endian_at_0_001_kpa(self) -> None:
+        decoded = d.decode_data_logger(bytes([0x00, 0x00, 0x00, 0x00, 0x34, 0x12]))
+        self.assertEqual(decoded["oil_raw"], 0x1234)
+        self.assertEqual(decoded["oil_kpa"], 4.66)
+
+    def test_frames_shorter_than_the_display_accepts_are_not_decoded(self) -> None:
+        self.assertIsNone(d.decode_data_logger(bytes(5)))
+        self.assertIsNotNone(d.decode_data_logger(bytes(8)))        # longer frames are fine
+
+    def test_brake_opening_matches_the_display_firmware_table(self) -> None:
+        # HMI_Display tools/tests/firmware_regression.c: raw oil count -> brake percent.
+        for raw, percent in ((0, 0), (2099, 0), (2100, 0), (3500, 45), (4900, 90), (5200, 99),
+                             (5300, 100), (65535, 100)):
+            self.assertEqual(d.brake_pct_from_oil(raw), percent, raw)
+
+    def test_the_opening_is_truncated_like_the_firmware_not_rounded(self) -> None:
+        self.assertEqual(d.brake_pct_from_oil(2131), 0)             # 31 * 90 / 2800 = 0.99
+        self.assertEqual(d.brake_pct_from_oil(2132), 1)
+        self.assertEqual(d.brake_pct_from_oil(5299), 100)           # 3199 * 90 / 2800 = 102.8, clamped
 
 
 class ModelTest(unittest.TestCase):
@@ -241,13 +286,44 @@ class ModelTest(unittest.TestCase):
 
     def test_csv_has_a_header_and_one_row_per_sample(self) -> None:
         series = model.SampleSeries()
-        self.assertEqual(series.csv().strip(), "time_s,raw_count,angle_deg,accumulated_deg,speed_rpm")
+        self.assertEqual(series.csv().strip(),
+                         "time_s,raw_count,angle_deg,accumulated_deg,speed_rpm,oil_kpa,brake_pct,oil_age_ms")
         series.append(10.0, 1024, 1024, None)
         series.append(10.5, 1034, 1034, 60.0)
         lines = series.csv().strip().splitlines()
         self.assertEqual(len(lines), 3)
-        self.assertEqual(lines[1], "0.000000,1024,90.0000,90.0000,")
-        self.assertEqual(lines[2], "0.500000,1034,90.8789,90.8789,10.000")
+        # No oil frame was held: the three oil columns stay empty instead of reading 0.
+        self.assertEqual(lines[1], "0.000000,1024,90.0000,90.0000,,,,")
+        self.assertEqual(lines[2], "0.500000,1034,90.8789,90.8789,10.000,,,")
+
+    def test_csv_carries_angle_pressure_and_opening_together(self) -> None:
+        series = model.SampleSeries()
+        series.append(10.0, 1024, 1024, None, 3500, 0.012)
+        series.append(10.1, 1030, 1030, 5.0, 2000, 0.25)
+        series.append(10.2, 1040, 1040, 5.0, 65535, 0.0)
+        rows = [line.split(",") for line in series.csv().strip().splitlines()[1:]]
+        self.assertEqual([row[5:] for row in rows],
+                         [["3.500", "45", "12.0"], ["2.000", "0", "250.0"], ["65.535", "100", "0.0"]])
+        self.assertTrue(all(len(row) == 8 for row in rows))
+
+    def test_fetch_returns_pressure_and_opening_next_to_the_angle(self) -> None:
+        series = model.SampleSeries()
+        series.append(0.0, 10, 10, None)
+        series.append(0.1, 11, 11, 1.0, 4900, 0.02)
+        reply = series.fetch(0, series.epoch)
+        self.assertEqual(reply["oil_kpa"], [None, 4.9])
+        self.assertEqual(reply["brake_pct"], [None, 90])
+        self.assertEqual(len(reply["oil_kpa"]), len(reply["t"]))
+
+    def test_trimming_keeps_the_oil_columns_aligned_with_the_samples(self) -> None:
+        series = model.SampleSeries(capacity=10, slack=5)
+        for index in range(16):
+            series.append(float(index), index, index, None, 2000 + index, 0.0)
+        self.assertEqual(len(series), 10)
+        self.assertEqual(series.oil, [2006 + index for index in range(10)])
+        reply = series.fetch(series.total - 10, series.epoch)
+        self.assertEqual(reply["raw"][0], 6)
+        self.assertEqual(reply["oil_kpa"][0], 2.006)
 
 
 class SimulatorTest(unittest.TestCase):
@@ -472,7 +548,9 @@ class ConnectionTest(ServiceTestBase):
         self.assertFalse(service.snapshot()["connection"]["connected"])
 
 
-class ReceiveTest(unittest.TestCase):
+class FrameFeedTest(unittest.TestCase):
+    """Runs a service against a scripted list of received frames."""
+
     def run_frames(self, frames) -> tuple[EncoderService, ScriptedBus]:
         bus = ScriptedBus(frames)
         service = EncoderService(bus_factory=lambda channel, bitrate: bus)
@@ -485,6 +563,8 @@ class ReceiveTest(unittest.TestCase):
     def position(self, raw: int, stamp: float | None = None) -> can.Message:
         return message(1, bytes([7, 1, 1]) + raw.to_bytes(4, "little"), stamp=stamp)
 
+
+class ReceiveTest(FrameFeedTest):
     def test_valid_positions_become_samples_with_unwrapping_and_speed(self) -> None:
         base = 5000.0
         frames = [self.position(raw, base + index * 0.01) for index, raw in enumerate([4090, 4094, 3, 10])]
@@ -545,6 +625,103 @@ class ReceiveTest(unittest.TestCase):
         service, _ = self.run_frames([self.position(1), message(9, bytes(3)), message(1, bytes([6, 1, 1, 0, 4, 0]))])
         json.dumps(service.snapshot())
         json.dumps(service.series(0, -1))
+
+
+class BrakeOilReceiveTest(FrameFeedTest):
+    """The ECU's 0x305 shares the encoder's bus: it is listened to and joined onto the encoder samples."""
+
+    def oil(self, raw: int, stamp: float | None = None, dlc: int = 6, extended: bool = False) -> can.Message:
+        data = bytes([0, 0, 0, 0]) + raw.to_bytes(2, "little") + bytes(max(0, dlc - 6))
+        return message(d.DATA_LOGGER_ID, data[:dlc] if dlc < 6 else data, extended=extended, stamp=stamp)
+
+    def test_each_sample_keeps_the_newest_oil_value_and_its_age(self) -> None:
+        base = 7000.0
+        frames = [self.oil(2000, base), self.position(100, base + 0.01), self.oil(4900, base + 0.02),
+                  self.position(110, base + 0.03), self.position(120, base + 0.04)]
+        service, _ = self.run_frames(frames)
+        series = service.series(0, -1)
+        self.assertEqual(series["raw"], [100, 110, 120])
+        self.assertEqual(series["oil_kpa"], [2.0, 4.9, 4.9])
+        self.assertEqual(series["brake_pct"], [0, 90, 90])
+        csv = service.export_csv()["data"].strip().splitlines()
+        self.assertEqual(csv[2].split(",")[5:7], ["4.900", "90"])
+        self.assertAlmostEqual(float(csv[3].split(",")[7]), 20.0, delta=1.0)     # 4900 was sent 20 ms earlier
+
+    def test_samples_without_a_fresh_oil_frame_are_left_empty_not_zero(self) -> None:
+        base = 7100.0
+        service, _ = self.run_frames([self.position(100, base)])               # no 0x305 seen yet
+        self.assertEqual(service.series(0, -1)["oil_kpa"], [None])
+        self.assertIsNone(service.snapshot()["oil"])
+        self.assertTrue(service.export_csv()["data"].strip().splitlines()[1].endswith(",,,"))
+
+    def test_an_oil_value_older_than_the_display_timeout_is_not_attached(self) -> None:
+        base = 7200.0
+        with patch("canhost.encoder.service.OIL_FRESH_S", 0.5):
+            service, _ = self.run_frames([self.oil(4000, base), self.position(1, base + 0.4),
+                                          self.position(2, base + 0.9)])
+        self.assertEqual(service.series(0, -1)["oil_kpa"], [4.0, None])
+
+    def test_snapshot_reports_pressure_opening_age_and_rate(self) -> None:
+        service, _ = self.run_frames([self.oil(3500)])
+        oil = service.snapshot()["oil"]
+        self.assertEqual((oil["raw"], oil["kpa"], oil["brake_pct"]), (3500, 3.5, 45))
+        self.assertLess(oil["age"], 1.0)
+        json.dumps(service.snapshot())
+        time.sleep(1.2)                                                         # stale values keep their age
+        stale = service.snapshot()["oil"]
+        self.assertEqual(stale["raw"], 3500)
+        self.assertGreater(stale["age"], 1.0)
+
+    def test_short_or_extended_0x305_frames_do_not_count_as_oil(self) -> None:
+        service, _ = self.run_frames([self.oil(4000, dlc=5), self.oil(4000, extended=True)])
+        self.assertIsNone(service.snapshot()["oil"])
+
+    def test_oil_frames_are_not_rejected_and_are_named_in_the_frame_list(self) -> None:
+        service, _ = self.run_frames([self.oil(3000), self.oil(3100), self.position(5)])
+        snapshot = service.snapshot()
+        self.assertEqual(snapshot["stream"]["rejected"], 0)
+        census = {(item["id"], item["extended"]): item for item in snapshot["frames"]}
+        self.assertEqual(census[(d.DATA_LOGGER_ID, False)]["kind"], "pedal")
+        self.assertEqual(census[(d.DATA_LOGGER_ID, False)]["count"], 2)
+        self.assertFalse(census[(d.DATA_LOGGER_ID, False)]["mine"])
+
+    def test_the_page_never_sends_anything_because_of_oil_frames(self) -> None:
+        _, bus = self.run_frames([self.oil(3000), self.oil(3100)])
+        self.assertEqual(bus.sent, [])
+
+    def test_the_catalog_gives_the_page_the_mapping_to_show(self) -> None:
+        brake = encoder_catalog()["brake_map"]
+        self.assertEqual((brake["zero_kpa"], brake["full_kpa"], brake["full_pct"], brake["fresh_s"]), (2.1, 4.9, 90, 1.0))
+
+
+class SimulatedEcuTest(unittest.TestCase):
+    def test_the_preview_bus_plays_an_ecu_whose_pressure_follows_the_shaft(self) -> None:
+        released = SimulatedEncoder(1, motion=still(0.0), noise_counts=0)
+        pressed = SimulatedEncoder(1, motion=still(3000.0), noise_counts=0)
+        self.assertEqual(released.pedal_oil_kpa(1.0), 1.0)
+        self.assertGreater(pressed.pedal_oil_kpa(1.0), 5.0)
+        released.offset = 500.0                                                 # zeroing does not move the pedal
+        self.assertEqual(released.pedal_oil_kpa(1.0), 1.0)
+
+    def test_pedal_frames_appear_only_when_the_bus_is_asked_to_play_the_ecu(self) -> None:
+        quiet = SimulatedEncoderBus(SimulatedEncoder(1, motion=still(1000.0), noise_counts=0))
+        self.assertIsNone(quiet.recv(timeout=0.12))
+        loud = SimulatedEncoderBus(SimulatedEncoder(1, motion=still(1000.0), noise_counts=0), pedal_period_s=0.02)
+        frame = loud.recv(timeout=0.2)
+        self.assertEqual(frame.arbitration_id, d.DATA_LOGGER_ID)
+        self.assertIsNotNone(d.decode_data_logger(bytes(frame.data)))
+
+    def test_preview_connection_shows_pressure_and_opening(self) -> None:
+        service = EncoderService(allow_preview=True)
+        self.addCleanup(service.disconnect)
+        self.assertTrue(service.connect({"preview": True, "address": 1})["ok"])
+        self.assertTrue(service.command("poll_start", {"hz": 50})["ok"])
+        self.assertTrue(wait_until(lambda: service.snapshot()["oil"] is not None
+                                   and service.snapshot()["stream"]["samples"] > 5))
+        oil = service.snapshot()["oil"]
+        self.assertGreaterEqual(oil["kpa"], 1.0)
+        self.assertIn(oil["brake_pct"], range(0, 101))
+        self.assertTrue(wait_until(lambda: any(value is not None for value in service.series(0, -1)["oil_kpa"])))
 
 
 class CollectionTest(ServiceTestBase):
@@ -643,7 +820,7 @@ class CollectionTest(ServiceTestBase):
         exported = self.service.export_csv()
         self.assertTrue(exported["ok"])
         lines = exported["data"].strip().splitlines()
-        self.assertEqual(lines[0], "time_s,raw_count,angle_deg,accumulated_deg,speed_rpm")
+        self.assertEqual(lines[0], model.CSV_HEADER)
         self.assertEqual(len(lines) - 1, exported["samples"])
 
 
@@ -928,6 +1105,37 @@ class ApiTest(unittest.TestCase):
             self.assertFalse(api.choose_export_encoder_csv()["ok"])
         finally:
             api.close()
+
+    def test_image_export_needs_a_window_and_a_png(self) -> None:
+        api = Api()
+        try:
+            self.assertFalse(api.choose_export_encoder_image("data:image/png;base64,AAAA")["ok"])
+            api._window = _SaveWindow(None)
+            for bad in (None, "", "data:text/html;base64,AAAA", "data:image/png;base64,!!!",
+                        "data:image/png;base64," + base64.b64encode(b"GIF89a....").decode()):
+                result = api.choose_export_encoder_image(bad)
+                self.assertFalse(result["ok"], bad)
+                self.assertNotIn("cancelled", result)
+            self.assertEqual(api._window.dialogs, 0)               # nothing invalid ever reaches the dialog
+        finally:
+            api.close()
+
+    def test_image_export_writes_the_png_where_the_operator_chose(self) -> None:
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(64))
+        url = "data:image/png;base64," + base64.b64encode(png).decode()
+        with tempfile.TemporaryDirectory() as folder, patch.dict(sys.modules, {"webview": types.SimpleNamespace(SAVE_DIALOG=2)}):
+            target = Path(folder) / "figure"
+            api = Api()
+            try:
+                api._window = _SaveWindow(str(target))
+                result = api.choose_export_encoder_image(url)
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(Path(result["path"]), target.with_suffix(".png"))
+                self.assertEqual(target.with_suffix(".png").read_bytes(), png)
+                api._window = _SaveWindow(None)                       # dialog dismissed
+                self.assertEqual(api.choose_export_encoder_image(url), {"ok": False, "cancelled": True})
+            finally:
+                api.close()
 
 
 class ConcurrencyTest(ServiceTestBase):

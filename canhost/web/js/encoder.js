@@ -2,24 +2,26 @@
  * 协议、应答核对和曲线样本由后端 canhost/encoder/ 提供，本模块只负责渲染与发起操作。 */
 
 const ENC_PREFS_KEY = "canHostEncoderPreferences";
-const ENC_WINDOWS = [5, 10, 30, 60];
+const ENC_WINDOWS = [5, 10, 30, 60, 0];   // 秒；0 = 全部样本
 const ENC_ANGLE_MODES = ["single", "signed", "accum"];
 const ENC_PLOT_POINTS = 5000;        // 一次绘制的点数上限，超过则抽稀；完整数据以 CSV 导出为准
 const ENC_STORE_CAP = 150000;        // 前端最多保留的样本数
 const ENC_FRAME_BITS = 115;          // 7 字节标准帧含位填充的典型位数，只用于估算总线占用
 const ENC_KIND_NAMES = {
   position: "单圈位置", ack: "应答", value: "数值应答", unknown: "未识别布局", invalid: "帧头无效", other: "其他节点",
+  pedal: "ECU 踏板与油压",
 };
+const ENC_SERIES_VARS = { angle: "--series-1", speed: "--series-2", pct: "--series-3", kpa: "--series-4" };
 const ENC_MOTION_NAMES = { increasing: "角度增大", decreasing: "角度减小", still: "静止" };
 
 const enc = {
   prefs: { channel: "", bitrate: 500000, address: "0x01", pollHz: 50, windowSec: 10, angleMode: "single", sampleMs: 100 },
   catalog: null,
-  data: { epoch: -1, cursor: 0, t: [], raw: [], pos: [], spd: [] },
+  data: { epoch: -1, cursor: 0, t: [], raw: [], pos: [], spd: [], oil: [], brk: [] },
   origin: null,
   markers: [],
   view: { min: 0, max: 10 },
-  plots: { angle: null, speed: null },
+  plots: { angle: null, oil: null, speed: null },
   plotKey: "",
   drawKey: "",
   paused: false,
@@ -182,6 +184,7 @@ function bindEncoderControls() {
     encResetData();
   });
   $("#encExport")?.addEventListener("click", encExport);
+  $("#encExportImage")?.addEventListener("click", encExportImage);
   $("#encClearLog")?.addEventListener("click", () => encRun("clear_log"));
   $("#encNoticeAction")?.addEventListener("click", () => enc.noticeAction?.());
   $("#encChannelSelect")?.addEventListener("change", () => { enc.prefs.channel = $("#encChannelSelect").value; encSavePrefs(); });
@@ -312,13 +315,96 @@ async function encExport() {
   toast(`已导出 ${Number(result.samples).toLocaleString()} 个样本：${result.path}`);
 }
 
+/** 把窗口内的三张曲线拼成一张图：uPlot 的图例是 DOM，不在画布里，所以标题和油压图例由这里重画。 */
+function encFigureCanvas() {
+  const blocks = [
+    { plot: enc.plots.angle, title: $("#encAngleTitle").textContent },
+    { plot: enc.plots.oil, title: $("#encOilTitle").textContent, legend: true },
+    { plot: enc.plots.speed, title: "转速 rpm" },
+  ];
+  if (blocks.some(block => !block.plot)) return null;
+  const ratio = blocks[0].plot.ctx.canvas.width / blocks[0].plot.width;
+  const pad = 16 * ratio, head = 84 * ratio, titleHeight = 26 * ratio;
+  const width = Math.max(...blocks.map(block => block.plot.ctx.canvas.width)) + pad * 2;
+  const height = head + blocks.reduce((sum, block) => sum + titleHeight + block.plot.ctx.canvas.height, 0) + pad;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width);
+  canvas.height = Math.round(height);
+  const ctx = canvas.getContext("2d");
+  const textColor = cssVar("--text", "#e6ecef");
+  const mutedColor = cssVar("--text-3", "#87969c");
+  ctx.fillStyle = cssVar("--surface-1", "#151719");
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textBaseline = "alphabetic";
+
+  const connection = encSnapshot()?.connection || {};
+  const source = connection.mode === "preview" ? "模拟编码器（预览，非实测）" : `节点 ${encHex(connection.address ?? 1)}`;
+  const span = enc.prefs.windowSec > 0 ? `最近 ${enc.prefs.windowSec} s` : "全部样本";
+  const map = enc.catalog?.brake_map;
+  ctx.fillStyle = textColor;
+  ctx.font = `600 ${16 * ratio}px sans-serif`;
+  ctx.fillText("BRT 编码器 · 制动踏板转角与制动油压", pad, pad + 14 * ratio);
+  ctx.fillStyle = mutedColor;
+  ctx.font = `${12 * ratio}px sans-serif`;
+  const stamp = new Date().toLocaleString("sv-SE").replace("T", " ");
+  ctx.fillText(`${source} · ${span}（${fmt(enc.view.min, 1)}–${fmt(enc.view.max, 1)} s，相对首个样本）· ${stamp}`, pad, pad + 33 * ratio);
+  if (map) {
+    ctx.fillText(`油压开度按车手屏刹车条算法：${fmt(map.zero_kpa, 1)} kPa → 0 %，${fmt(map.full_kpa, 1)} kPa → ${map.full_pct} %，线性并限幅到 100 %`,
+      pad, pad + 49 * ratio);
+  }
+
+  let y = head;
+  for (const block of blocks) {
+    ctx.fillStyle = textColor;
+    ctx.font = `600 ${13 * ratio}px sans-serif`;
+    const titleWidth = ctx.measureText(block.title).width;
+    ctx.fillText(block.title, pad, y + 17 * ratio);
+    if (block.legend) {
+      const kpa = cssVar(ENC_SERIES_VARS.kpa, "#b392f0");
+      const pct = cssVar(ENC_SERIES_VARS.pct, "#3ecf8e");
+      let x = pad + titleWidth + 24 * ratio;
+      ctx.font = `${12 * ratio}px sans-serif`;
+      for (const [color, dash, label] of [[kpa, [], "制动油压（左轴）"], [pct, [6 * ratio, 4 * ratio], "油压开度（右轴）"]]) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2 * ratio;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        ctx.moveTo(x, y + 13 * ratio);
+        ctx.lineTo(x + 26 * ratio, y + 13 * ratio);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = mutedColor;
+        ctx.fillText(label, x + 32 * ratio, y + 17 * ratio);
+        x += 32 * ratio + ctx.measureText(label).width + 20 * ratio;
+      }
+    }
+    ctx.drawImage(block.plot.ctx.canvas, pad, y + titleHeight);
+    y += titleHeight + block.plot.ctx.canvas.height;
+  }
+  return canvas;
+}
+
+async function encExportImage() {
+  if (!state.api?.choose_export_encoder_image) return;
+  const canvas = encFigureCanvas();
+  if (!canvas) return toast("曲线里还没有数据可导出", true);
+  const result = await state.api.choose_export_encoder_image(canvas.toDataURL("image/png"));
+  if (result?.cancelled) return;
+  if (!result?.ok) return toast(result?.error || "导出失败", true);
+  toast(`已导出曲线图：${result.path}`);
+}
+
 /* ---------------- 曲线数据 ---------------- */
+
+function encClearColumns(data) {
+  data.t = []; data.raw = []; data.pos = []; data.spd = []; data.oil = []; data.brk = [];
+}
 
 function encResetData() {
   const data = enc.data;
   data.epoch = -1;
   data.cursor = 0;
-  data.t = []; data.raw = []; data.pos = []; data.spd = [];
+  encClearColumns(data);
   enc.origin = null;
   enc.drawKey = "";
 }
@@ -332,7 +418,7 @@ async function encFetchSeries() {
     const reply = await state.api.get_encoder_series(data.cursor, data.epoch);
     if (!reply?.ok) return;
     if (reply.reset || reply.epoch !== data.epoch) {
-      data.t = []; data.raw = []; data.pos = []; data.spd = [];
+      encClearColumns(data);
       enc.origin = null;
     }
     data.epoch = reply.epoch;
@@ -342,11 +428,13 @@ async function encFetchSeries() {
       data.raw.push(reply.raw[index]);
       data.pos.push(reply.position[index]);
       data.spd.push(reply.speed[index]);
+      data.oil.push(reply.oil_kpa[index]);
+      data.brk.push(reply.brake_pct[index]);
     }
     if (enc.origin === null && data.t.length) enc.origin = data.t[0];
     if (data.t.length > ENC_STORE_CAP) {
       const drop = data.t.length - ENC_STORE_CAP;
-      data.t.splice(0, drop); data.raw.splice(0, drop); data.pos.splice(0, drop); data.spd.splice(0, drop);
+      for (const column of [data.t, data.raw, data.pos, data.spd, data.oil, data.brk]) column.splice(0, drop);
     }
   } finally {
     enc.fetching = false;
@@ -368,14 +456,15 @@ function encPlotTables() {
   const count = data.t.length;
   if (!count) return null;
   const latest = data.t[count - 1];
-  const from = latest - enc.prefs.windowSec;
+  const from = enc.prefs.windowSec > 0 ? latest - enc.prefs.windowSec : data.t[0];
   const start = encBisect(data.t, from);
   const stride = Math.max(1, Math.ceil((count - start) / ENC_PLOT_POINTS));
   const origin = enc.origin ?? data.t[0];
   const mode = enc.prefs.angleMode;
   const wrapped = mode !== "accum";
   const degrees = 360 / 4096;
-  const angleX = [], angleY = [], speedX = [], speedY = [];
+  const angleX = [], angleY = [], speedX = [], speedY = [], oilY = [], brakeY = [];
+  let oilCount = 0;
   let previousAngle = null, previousX = null;
   for (let index = start; index < count; index += stride) {
     const x = data.t[index] - origin;
@@ -389,12 +478,20 @@ function encPlotTables() {
     previousAngle = angle; previousX = x;
     speedX.push(x);
     speedY.push(data.spd[index] == null ? null : data.spd[index] / 6);
+    // 没有新鲜油压的样本留空，不用 0 或旧值补。
+    const oil = data.oil[index] ?? null;
+    oilY.push(oil);
+    brakeY.push(data.brk[index] ?? null);
+    if (oil !== null) oilCount += 1;
   }
-  return { angle: [angleX, angleY], speed: [speedX, speedY], from: Math.max(from - origin, 0), latest: latest - origin };
+  return {
+    angle: [angleX, angleY], speed: [speedX, speedY], oil: [speedX, oilY, brakeY], oilCount,
+    from: Math.max(from - origin, 0), latest: latest - origin,
+  };
 }
 
 function encPlotDestroy() {
-  for (const key of ["angle", "speed"]) {
+  for (const key of ["angle", "oil", "speed"]) {
     if (enc.plots[key]) { enc.plots[key].destroy(); enc.plots[key] = null; }
   }
   enc.plotKey = "";
@@ -426,7 +523,7 @@ function encDrawMarkers(plot) {
 function encPlotOptions(kind, width) {
   const axisColor = cssVar("--chart-axis", "#87969c");
   const gridColor = cssVar("--chart-grid", "#2d2f31");
-  const color = cssVar(kind === "angle" ? "--series-1" : "--series-2", "#4ad6ec");
+  const color = cssVar(ENC_SERIES_VARS[kind], "#4ad6ec");
   const mode = kind === "angle" ? enc.prefs.angleMode : "";
   const span = mode === "single" ? [0, 360] : mode === "signed" ? [-180, 180] : null;
   const number = (value, digits) => (value == null ? "—" : Number(value).toFixed(digits));
@@ -456,22 +553,60 @@ function encPlotOptions(kind, width) {
   };
 }
 
+/** 油压与开度共用一张图：左轴 kPa，右轴 %。 */
+function encOilPlotOptions(width) {
+  const axisColor = cssVar("--chart-axis", "#87969c");
+  const gridColor = cssVar("--chart-grid", "#2d2f31");
+  const number = (value, digits) => (value == null ? "—" : Number(value).toFixed(digits));
+  const axis = extra => ({ stroke: axisColor, grid: { stroke: gridColor, width: 1 }, ticks: { stroke: gridColor }, font: "11px monospace", ...extra });
+  return {
+    width, height: 190,
+    scales: {
+      x: { time: false, range: () => [enc.view.min, enc.view.max] },
+      kpa: { range: (_u, low, high) => {
+        if (low == null || high == null) return [0, 6];
+        const pad = Math.max((high - low) * 0.08, 0.2);
+        return [Math.max(0, low - pad), high + pad];
+      } },
+      pct: { range: [-4, 104] },
+    },
+    axes: [
+      axis({ values: (_u, splits) => splits.map(value => Number(value.toFixed(2))) }),
+      axis({ scale: "kpa", size: 56 }),
+      axis({ scale: "pct", side: 1, size: 48, grid: { show: false }, values: (_u, splits) => splits.map(value => (value >= 0 && value <= 100 ? value : "")) }),
+    ],
+    legend: { show: true },
+    cursor: { drag: { x: false, y: false }, points: { size: 6 }, sync: { key: "enc-plots" } },
+    series: [
+      { label: "时间 s", value: (_u, value) => number(value, 3) },
+      { label: "制动油压 kPa", scale: "kpa", stroke: cssVar(ENC_SERIES_VARS.kpa, "#b392f0"), width: 1.6, spanGaps: false,
+        points: { show: false }, value: (_u, value) => number(value, 3) },
+      { label: "油压开度 %", scale: "pct", stroke: cssVar(ENC_SERIES_VARS.pct, "#3ecf8e"), width: 1.6, dash: [6, 4], spanGaps: false,
+        points: { show: false }, value: (_u, value) => number(value, 0) },
+    ],
+    hooks: { draw: [encDrawMarkers] },
+  };
+}
+
 function encDrawPlots() {
   const hostAngle = $("#encPlotAngle");
+  const hostOil = $("#encPlotOil");
   const hostSpeed = $("#encPlotSpeed");
-  if (!hostAngle || !hostSpeed || hostAngle.clientWidth < 50) return;
+  if (!hostAngle || !hostOil || !hostSpeed || hostAngle.clientWidth < 50) return;
   const tables = encPlotTables();
   if (!tables) { encPlotDestroy(); return; }
   const width = Math.max(320, hostAngle.clientWidth);
   const structure = JSON.stringify([document.documentElement.dataset.theme, width, enc.prefs.angleMode]);
+  text("#encOilTitle", tables.oilCount ? "制动油压 kPa · 油压开度 %" : "制动油压 kPa · 油压开度 % · 窗口内没有油压数据");
   const lastSample = enc.data.t.length;
   const drawKey = `${lastSample}|${enc.prefs.windowSec}|${enc.prefs.angleMode}|${enc.markers.length}`;
   enc.view.min = tables.from;
   enc.view.max = Math.max(tables.latest, tables.from + 1);
   if (structure !== enc.plotKey || !enc.plots.angle) {
     encPlotDestroy();
-    hostAngle.innerHTML = ""; hostSpeed.innerHTML = "";
+    hostAngle.innerHTML = ""; hostOil.innerHTML = ""; hostSpeed.innerHTML = "";
     enc.plots.angle = new uPlot(encPlotOptions("angle", width), tables.angle, hostAngle);
+    enc.plots.oil = new uPlot(encOilPlotOptions(width), tables.oil, hostOil);
     enc.plots.speed = new uPlot(encPlotOptions("speed", width), tables.speed, hostSpeed);
     enc.plotKey = structure;
     enc.drawKey = drawKey;
@@ -480,6 +615,7 @@ function encDrawPlots() {
   if (drawKey === enc.drawKey) return;
   enc.drawKey = drawKey;
   enc.plots.angle.setData(tables.angle);
+  enc.plots.oil.setData(tables.oil);
   enc.plots.speed.setData(tables.speed);
 }
 
@@ -502,6 +638,7 @@ function renderEncoder() {
   renderEncoderConnection(connection, connected);
   renderEncoderReading(reading, stream, snapshot?.direction, connected);
   renderEncoderSource(stream, connected);
+  renderEncoderBrake(snapshot?.oil || null, connected);
   renderEncoderNotice(connection, stream, reading, connected);
   renderEncoderCalibration(snapshot, connected);
   renderEncoderQueries(snapshot);
@@ -578,6 +715,36 @@ function renderEncoderReading(reading, stream, direction, connected) {
     text("#encRate", "—");
     text("#encRateSub", "没有新的位置帧");
   }
+}
+
+function renderEncoderBrake(oil, connected) {
+  const tag = $("#encBrakeState");
+  const tiles = ["#encOilTile", "#encBrakeTile", "#encOilRateTile"].map(id => $(id));
+  const map = enc.catalog?.brake_map;
+  const limit = map?.fresh_s ?? 1;
+  text("#encBrakeMap", map
+    ? `油压开度沿用车手屏刹车条算法：${fmt(map.zero_kpa, 1)} kPa 及以下为 0 %，${fmt(map.full_kpa, 1)} kPa 为 ${map.full_pct} %，线性并限幅到 100 %`
+    : "\u00a0");
+  if (!oil) {
+    tag.className = "tag neutral";
+    tag.textContent = connected ? "等待数据" : "未连接";
+    for (const id of ["#encOil", "#encBrakePct", "#encOilRate"]) text(id, "—");
+    text("#encOilSub", connected ? "没有收到 CANB 0x305" : "\u00a0");
+    text("#encBrakeSub", "\u00a0");
+    text("#encOilRateSub", "\u00a0");
+    tiles.forEach(node => node.classList.remove("data-stale"));
+    return;
+  }
+  const stale = isStaleData(oil.age, limit);
+  tag.className = "tag " + (stale ? "warn" : "ok");
+  tag.textContent = stale ? dataAgeText(oil.age, limit) : "实时";
+  tiles.forEach(node => node.classList.toggle("data-stale", stale));
+  text("#encOil", fmt(oil.kpa, 3) + " kPa");
+  text("#encOilSub", `原始 ${oil.raw} · 0.001 kPa/LSB`);
+  text("#encBrakePct", `${oil.brake_pct} %`);
+  text("#encBrakeSub", "车手屏刹车条");
+  text("#encOilRate", oil.hz > 0 ? `${fmt(oil.hz, oil.hz >= 100 ? 0 : 1)} Hz` : "—");
+  text("#encOilRateSub", `距今 ${fmt(oil.age, 1)} s`);
 }
 
 function renderEncoderSource(stream, connected) {
@@ -747,6 +914,7 @@ function renderEncoderPlots(connected, stream) {
   $$("#encAngleMode button").forEach(button => button.classList.toggle("active", button.dataset.mode === enc.prefs.angleMode));
   text("#encAngleTitle", { single: "单圈角度 °", signed: "单圈角度 °（−180～180）", accum: "累计角度 °（上位机累计）" }[enc.prefs.angleMode]);
   $("#encExport").disabled = !hasData;
+  $("#encExportImage").disabled = !hasData || !enc.plots.angle;
   $("#encClearCurves").disabled = !hasData;
   if (hasData && !(enc.paused && enc.plots.angle)) encDrawPlots();
 }

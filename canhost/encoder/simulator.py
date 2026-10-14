@@ -4,6 +4,9 @@
 the small slice of the python-can ``Bus`` interface the service uses.  It reproduces the manual's
 examples, not the vendor firmware: details the manual leaves open (what the position does when the
 direction flips, the layout of auto-report frames beyond the query-answer layout) are assumptions.
+
+With ``pedal_period_s`` the bus also plays the ECU of CANB: it sends 0x305 whose oil pressure follows
+the shaft, so the preview shows the brake columns the way a car on the same bus would.
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ except ImportError:  # pragma: no cover - python-can ships with every supported 
     can = None  # type: ignore[assignment]
 
 RES = d.BRT_RESOLUTION
+PEDAL_STROKE_COUNTS = 3072.0          # the demo motion advances one 270 degree stroke per cycle
+PEDAL_PERIOD_S = 0.05                 # ECU 0x305 period used by the driver display bench
 
 
 def default_motion(now: float) -> float:
@@ -74,6 +79,15 @@ class SimulatedEncoder:
     def raw(self, now: float) -> int:
         noise = self._random.uniform(-self.noise_counts, self.noise_counts) if self.noise_counts else 0.0
         return int(round(self.accumulated(now) + noise)) % RES
+
+    def pedal_oil_kpa(self, now: float) -> float:
+        """Brake line pressure of the demo: 1.0 kPa released up to 5.4 kPa, rising faster toward full travel.
+
+        It follows the physical shaft, not the zero reference, because zeroing the encoder does not
+        move the pedal.  The range covers the display mapping's dead band and its saturation.
+        """
+        stroke = (self._shaft(now) % PEDAL_STROKE_COUNTS) / PEDAL_STROKE_COUNTS
+        return round(1.0 + 4.4 * stroke * stroke, 3)
 
     def _speed_counts(self, now: float) -> int:
         step = 1e-3
@@ -155,8 +169,10 @@ class SimulatedEncoderBus:
     """Minimum python-can Bus surface: ``send``, ``recv`` and ``shutdown``."""
 
     def __init__(self, device: SimulatedEncoder | None = None, *, clock: Callable[[], float] = time.perf_counter,
-                 wall_clock: Callable[[], float] = time.time) -> None:
+                 wall_clock: Callable[[], float] = time.time, pedal_period_s: float | None = None) -> None:
         self.device = device or SimulatedEncoder()
+        self._pedal_period = pedal_period_s
+        self._next_pedal = 0.0
         self._clock = clock
         self._wall = wall_clock
         self._origin = clock()
@@ -177,11 +193,26 @@ class SimulatedEncoderBus:
             for can_id, data in self.device.handle(int(message.arbitration_id), bytes(message.data), now):
                 self._queue.append(self._message(can_id, data, now))
 
+    def _due_pedal(self, now: float, limit: int = 16) -> list[float]:
+        if self._pedal_period is None:
+            return []
+        due: list[float] = []
+        while self._next_pedal <= now and len(due) < limit:
+            due.append(self._next_pedal)
+            self._next_pedal += self._pedal_period
+        if self._next_pedal < now - 0.5:            # fell far behind: resume instead of replaying
+            self._next_pedal = now
+        return due
+
     def recv(self, timeout: float | None = None) -> Any:
         deadline = self._clock() + (timeout if timeout is not None else 0.1)
         while True:
             with self._lock:
-                for stamp, data in self.device.due_reports(self._now()):
+                now = self._now()
+                for stamp in self._due_pedal(now):
+                    self._queue.append(self._message(
+                        d.DATA_LOGGER_ID, d.build_data_logger(0.0, 0.0, self.device.pedal_oil_kpa(stamp)), stamp))
+                for stamp, data in self.device.due_reports(now):
                     self._queue.append(self._message(self.device.address, data, stamp))
                 if self._queue:
                     return self._queue.popleft()

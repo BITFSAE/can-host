@@ -917,6 +917,42 @@ def build_data_logger(steering_deg: float, throttle_pct: float, oil_kpa: float) 
             + _u16(_scaled(oil_kpa, 0.001, 0, 0xFFFF), "little"))
 
 
+DATA_LOGGER_MIN_DLC = 6
+OIL_KPA_PER_COUNT = 0.001
+# Temporary brake bar of the driver display (HMI_Display ``can_oil_to_brake_pct``, see its
+# docs/configuration.md): below 2.1 kPa the pedal counts as released, 4.9 kPa is 90 %, the rest
+# follows the same line and saturates at 100 %.  The display derives it with unsigned integer
+# arithmetic, so the percentage is truncated; keep that when comparing against the display.
+BRAKE_OIL_ZERO_RAW = 2100
+BRAKE_OIL_FULL_RAW = 4900
+BRAKE_OIL_FULL_PCT = 90
+
+
+def decode_data_logger(data: bytes) -> dict[str, Any] | None:
+    """ECU 0x305 (little endian, at least 6 bytes); inverse of :func:`build_data_logger`.
+
+    Returns ``None`` below the display's minimum DLC.  ``oil_raw`` is the 0.001 kPa count the
+    brake mapping works on; ``oil_kpa`` is the same value in kPa.
+    """
+    if len(data) < DATA_LOGGER_MIN_DLC:
+        return None
+    oil_raw = int.from_bytes(data[4:6], "little")
+    return {
+        "steering_deg": round(int.from_bytes(data[0:2], "little", signed=True) * 0.1, 1),
+        "throttle_pct": round(int.from_bytes(data[2:4], "little") * 0.1, 1),
+        "oil_raw": oil_raw,
+        "oil_kpa": round(oil_raw * OIL_KPA_PER_COUNT, 3),
+    }
+
+
+def brake_pct_from_oil(oil_raw: int) -> int:
+    """Brake opening in whole percent the driver display derives from the 0x305 oil count."""
+    if oil_raw <= BRAKE_OIL_ZERO_RAW:
+        return 0
+    pct = (int(oil_raw) - BRAKE_OIL_ZERO_RAW) * BRAKE_OIL_FULL_PCT // (BRAKE_OIL_FULL_RAW - BRAKE_OIL_ZERO_RAW)
+    return min(100, pct)
+
+
 def build_ecu_wheels_i16(values: Sequence[float], scale: float) -> bytes:
     """ECU 0x502/0x505..0x508; ``values`` in display order FL, FR, RL, RR (inverse of decode_ecu_wheels_i16)."""
     return b"".join(_i16(_scaled(values[index], scale, -32768, 32767), "little")

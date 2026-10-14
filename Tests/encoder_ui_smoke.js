@@ -53,10 +53,12 @@ assert.equal(run("encBitrateText(500000)"), "500 kbit/s");
 assert.equal(run("encBitrateText(1000000)"), "1 Mbit/s");
 
 // ---- 曲线取数
-const fill = (times, raws, positions, speeds) => {
+const fill = (times, raws, positions, speeds, oil = null, brake = null) => {
   vm.runInContext(`encResetData();
     enc.data.t = ${JSON.stringify(times)}; enc.data.raw = ${JSON.stringify(raws)};
     enc.data.pos = ${JSON.stringify(positions)}; enc.data.spd = ${JSON.stringify(speeds)};
+    enc.data.oil = ${JSON.stringify(oil ?? times.map(() => null))};
+    enc.data.brk = ${JSON.stringify(brake ?? times.map(() => null))};
     enc.origin = enc.data.t[0];`, context);
 };
 vm.runInContext("encResetData()", context);
@@ -86,6 +88,23 @@ tables = run("encPlotTables()");
 assert.equal(tables.angle[1].filter(value => value === null).length, 0);
 assert.ok(Math.abs(tables.angle[1][3] - 4106 * 360 / 4096) < 1e-9);
 
+// 油压与开度：与样本一一对应；没有新鲜油压的样本保持空值，不补 0。
+fill([100, 100.01, 100.02, 100.03], [10, 11, 12, 13], [10, 11, 12, 13], [null, 1, 1, 1],
+  [null, 2.5, 4.9, null], [null, 4, 90, null]);
+vm.runInContext('enc.prefs.windowSec = 10; enc.prefs.angleMode = "accum";', context);
+tables = run("encPlotTables()");
+assert.deepEqual(tables.oil[0], tables.speed[0]);                 // 与样本同一条时间轴
+assert.deepEqual(tables.oil[1], [null, 2.5, 4.9, null]);
+assert.deepEqual(tables.oil[2], [null, 4, 90, null]);
+assert.equal(tables.oilCount, 2);
+fill([100, 100.01], [10, 11], [10, 11], [null, 1]);                 // 整个窗口没有油压
+tables = run("encPlotTables()");
+assert.equal(tables.oilCount, 0);
+assert.deepEqual(tables.oil[1], [null, null]);
+// 旧版取数结果没有油压列时不会抛错。
+vm.runInContext("encResetData(); enc.data.t = [1, 2]; enc.data.raw = [1, 2]; enc.data.pos = [1, 2]; enc.data.spd = [null, null]; enc.data.oil = []; enc.data.brk = []; enc.origin = 1;", context);
+assert.equal(run("encPlotTables()").oilCount, 0);
+
 // 窗口：只取最近 5 s；起点与最新时间相对首个样本。
 const times = Array.from({ length: 2001 }, (_, index) => 50 + index * 0.01);     // 20 s，100 Hz
 fill(times, times.map(() => 100), times.map(() => 100), times.map(() => 0));
@@ -99,6 +118,13 @@ vm.runInContext("enc.prefs.windowSec = 60;", context);
 tables = run("encPlotTables()");
 assert.equal(tables.from, 0);                                // 窗口没填满时从 0 开始
 
+// “全部”窗口（0）：从第一个样本画到最新样本。
+vm.runInContext("enc.prefs.windowSec = 0;", context);
+tables = run("encPlotTables()");
+assert.equal(tables.from, 0);
+assert.ok(Math.abs(tables.latest - 20) < 1e-9);
+assert.equal(tables.angle[0].length, 2001);                          // 20 s 的 100 Hz 样本一个不少
+
 // 抽稀：一次绘制不超过上限，且保留最新样本所在的时间范围。
 const many = Array.from({ length: 40000 }, (_, index) => index * 0.001);
 fill(many, many.map((_, i) => i % 4096), many.map((_, i) => i), many.map(() => 6));
@@ -106,6 +132,27 @@ vm.runInContext('enc.prefs.windowSec = 60; enc.prefs.angleMode = "accum";', cont
 tables = run("encPlotTables()");
 assert.ok(tables.angle[0].length <= 5000, `点数 ${tables.angle[0].length}`);
 assert.ok(tables.latest > 39);
+
+// ---- 油压读数：等待、实时、过期
+const catalogText = '({ brake_map: { zero_kpa: 2.1, full_kpa: 4.9, full_pct: 90, fresh_s: 1 } })';
+vm.runInContext(`enc.catalog = ${catalogText};`, context);
+const brakeText = id => context.document.querySelector(id).textContent;
+vm.runInContext("renderEncoderBrake(null, true)", context);
+assert.equal(brakeText("#encBrakeState"), "等待数据");
+assert.equal(brakeText("#encOil"), "—");                          // 没数据不显示 0
+assert.equal(brakeText("#encBrakePct"), "—");
+assert.match(brakeText("#encOilSub"), /没有收到 CANB 0x305/);
+assert.match(brakeText("#encBrakeMap"), /2\.1 kPa 及以下为 0 %，4\.9 kPa 为 90 %/);
+vm.runInContext("renderEncoderBrake(null, false)", context);
+assert.equal(brakeText("#encBrakeState"), "未连接");
+vm.runInContext("renderEncoderBrake({ raw: 3500, kpa: 3.5, brake_pct: 45, age: 0.1, hz: 20 }, true)", context);
+assert.equal(brakeText("#encBrakeState"), "实时");
+assert.equal(brakeText("#encOil"), "3.500 kPa");
+assert.equal(brakeText("#encBrakePct"), "45 %");
+assert.equal(brakeText("#encOilRate"), "20.0 Hz");
+vm.runInContext("renderEncoderBrake({ raw: 3500, kpa: 3.5, brake_pct: 45, age: 3.2, hz: 0 }, true)", context);
+assert.match(brakeText("#encBrakeState"), /已过期/);                // 过期时仍标明年龄
+assert.equal(brakeText("#encOilRate"), "—");
 
 // ---- 二分查找
 assert.equal(run("encBisect([1, 2, 3, 4], 2.5)"), 2);
