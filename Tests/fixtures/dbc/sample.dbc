@@ -1,0 +1,63 @@
+VERSION "fixture 1.0"
+
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	SIG_VALTYPE_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: ECU Display Gateway
+
+
+BO_ 291 EngineData: 8 ECU
+ SG_ Speed : 0|16@1+ (0.01,0) [0|655.35] "km/h" Display,Gateway
+ SG_ Temp : 16|8@1- (1,-40) [-128|127] "degC" Display
+ SG_ Gear : 24|4@1+ (1,0) [0|15] "" Display
+ SG_ Throttle : 32|8@1+ (0.4,0) [0|100] "%" Display
+
+BO_ 512 MotorolaMsg: 8 ECU
+ SG_ Torque : 7|16@0- (0.1,0) [-3276.8|3276.7] "Nm" Display
+ SG_ Flags : 23|8@0+ (1,0) [0|255] "" Display
+
+BO_ 1288 Reversed: 8 ECU
+ SG_ Hi : 48|16@1- (0.1,0) [-3276.8|3276.7] "degC" Display
+ SG_ Lo : 0|16@1- (0.1,0) [-3276.8|3276.7] "degC" Display
+
+BO_ 768 MuxMsg: 8 ECU
+ SG_ Sel M : 0|8@1+ (1,0) [0|3] "" Display
+ SG_ Ana m0 : 8|16@1+ (1,0) [0|65535] "mV" Display
+ SG_ Cur m1 : 8|16@1+ (0.1,0) [0|6553.5] "A" Display
+ SG_ Common : 24|8@1+ (1,0) [0|255] "" Display
+
+BO_ 1024 FloatMsg: 8 ECU
+ SG_ Ratio : 0|32@1+ (1,0) [0|0] "" Display
+
+BO_ 2550588916 ExtStatus: 8 Gateway
+ SG_ Voltage : 0|16@1+ (0.1,0) [0|6553.5] "V" ECU
+ SG_ VeryLongSignalNameForTestingTheS : 16|8@1+ (1,0) [0|255] "" ECU
+
+BO_ 3221225472 VECTOR__INDEPENDENT_SIG_MSG: 0 Vector__XXX
+ SG_ Orphan : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_TX_BU_ 291 : ECU,Gateway;
+
+CM_ BU_ ECU "发动机控制单元";
+CM_ BO_ 291 "Engine data
+second line";
+CM_ SG_ 291 Speed "车速";
+CM_ SG_ 512 Torque "Motor torque";
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 65535;
+BA_DEF_ SG_  "SystemSignalLongSymbol" STRING ;
+BA_DEF_DEF_  "GenMsgCycleTime" 0;
+BA_DEF_DEF_  "SystemSignalLongSymbol" "";
+BA_ "GenMsgCycleTime" BO_ 291 10;
+BA_ "GenMsgCycleTime" BO_ 512 20;
+BA_ "SystemSignalLongSymbol" SG_ 2550588916 VeryLongSignalNameForTestingTheS "VeryLongSignalNameForTestingTheShortSymbol";
+VAL_ 291 Gear 0 "P" 1 "R" 2 "N" 3 "D" ;
+SIG_VALTYPE_ 1024 Ratio : 1;

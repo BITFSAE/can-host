@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Any
+from typing import Any, Callable
 
 from .ivt import (BMS_CAN1_CMD_ID, BMS_CAN1_RSP_ID, BITRATE_PRESETS, DEFAULT_CMD_ID,
                   DEFAULT_RSP_ID, IVT_RESPONSE_MUXES, IvtClient, IvtFrame,
@@ -97,6 +97,10 @@ class CanService:
             BmsProtocol() if self.protocol_kind == "vehicle" else None
         )
         self.monitor = CanMonitor(self._monitor_frame_name)
+        # Read-only consumers of every accepted frame (the DBC page's signal
+        # recorder and bus audit).  They run under the service lock and must be
+        # cheap; a failing observer never disturbs reception.
+        self.frame_observers: list[Callable[[CanFrame], None]] = []
         # 疑似接反判定只统计“对侧独有帧”的接收：CAN1 档案收到整车 CANB 节点帧，
         # 或 CANB 档案收到 F405 / 从控 CAN1 专属帧。模拟 / 回放 / 台架模式不参与。
         self._bus_evidence: dict[str, Any] = {"can1_count": 0, "can1_last": None,
@@ -752,6 +756,26 @@ class CanService:
         return {"expected": expected, "detected": detected,
                 "evidence_count": count,
                 "evidence_age": round(time.monotonic() - last, 2)}
+
+    def monitor_latest(self) -> dict[str, Any]:
+        """Latest frame per ID plus the clock their timestamps are measured on.
+
+        During a replay the frames carry their recorded times, so "now" is the
+        replay position rather than the wall clock."""
+        with self.lock:
+            replaying = self.connection.get("mode") == "replay"
+            return {
+                "frames": self.monitor.latest(),
+                "clock": self.replay_first_timestamp + self.replay_position if replaying else time.time(),
+                "connection": {key: self.connection.get(key) for key in
+                               ("connected", "mode", "channel", "bitrate", "bus_profile", "status")},
+            }
+
+    def dbc_bus(self) -> str:
+        """Which DBC bus binding applies to this service's stream."""
+        if self.protocol_kind == "vehicle":
+            return "canb"
+        return "canb" if self.connection.get("bus_profile") == "canb" else "can1"
 
     def _monitor_snapshot_locked(self) -> dict[str, Any]:
         snapshot = self.monitor.snapshot()
@@ -1590,6 +1614,11 @@ class CanService:
         if self.canb_bms_protocol is not None:
             self.canb_bms_protocol.ingest(frame)
         self.monitor.ingest(frame)
+        for observer in self.frame_observers:
+            try:
+                observer(frame)
+            except Exception:
+                pass
         if record:
             self._record(frame)
 

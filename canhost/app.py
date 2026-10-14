@@ -14,6 +14,7 @@ from typing import Any
 
 from . import __version__, __version_date__
 from .transport import CanService
+from .dbc.api import DbcApi
 from .pcan_channels import discover_pcan_channels
 from .bms.protocol import switch_catalog
 from .decoders import bms_sampling_rules
@@ -87,7 +88,7 @@ def _simulation_available() -> bool:
     return not getattr(sys, "frozen", False)
 
 
-class Api:
+class Api(DbcApi):
     def __init__(self, update_health_path: Path | None = None) -> None:
         # PyWebView exposes every public member of js_api to JavaScript. Native
         # Window/WinForms objects must remain private; walking AccessibilityObject
@@ -125,6 +126,9 @@ class Api:
         from .telemetry.simulator import TelemetrySimulatorService, available_serial_ports
         self._telemetry_simulator: Any = TelemetrySimulatorService()
         self._serial_port_provider: Any = available_serial_ports
+        # DBC workspace: decodes and records frames the connections above already receive;
+        # it owns no bus and sends only through the guarded raw-frame API.
+        self._init_dbc()
         self._updater = HostUpdater(current_version=__version__, token_provider=self._read_update_token,
                                     cnb_repo=DEFAULT_CNB_REPO)
         self._updater_auto_checked = False
@@ -240,6 +244,7 @@ class Api:
             "display_bench_preview": self._display_bench.allow_preview,
             "display_bench": bench_catalog(),
             "ivt_enabled": True,
+            "dbc_enabled": True,
             "vehicle_enabled": True,
             "vehicle_simulation_enabled": self._vehicle_service.allow_simulation,
             "telemetry_enabled": True,
@@ -959,6 +964,7 @@ class Api:
         return self._service.replay_control(action, value)
 
     def close(self) -> None:
+        self._dbc_close()
         self._service.disconnect()
         self._bench_service.disconnect()
         self._display_bench.disconnect()
@@ -1044,9 +1050,18 @@ def main() -> None:
                 f"打包自检失败：随包更新说明为空（版本 {__version__}）；"
                 f"请检查 CHANGELOG.md 是否有该版本小节"
             )
+        # DBC 工作台的解码依赖 cantools；冻结包里必须真的能解出一帧。
+        from .dbc.decode import DecodeDb
+        probe = DecodeDb('VERSION ""\n\nBS_:\n\nBU_: A\n\nBO_ 291 Probe: 2 A\n'
+                         ' SG_ S : 0|16@1+ (0.5,0) [0|0] "" A\n')
+        probe_values = probe.decode(probe.message(291, False), bytes([4, 0]))["values"]
+        if probe_values.get("S", {}).get("value") != 2.0:
+            raise SystemExit("打包自检失败：DBC 解码（cantools）不可用")
         api = Api()
         try:
             bootstrap = api.bootstrap()
+            if not bootstrap.get("dbc_enabled"):
+                raise SystemExit("打包自检失败：发布包未包含 DBC 工作台")
             if not isinstance(bootstrap.get("pcan_scan"), dict):
                 raise SystemExit("打包自检失败：缺少 PCAN 通道枚举接口")
             if not bootstrap["telemetry_simulator_enabled"]:
@@ -1109,6 +1124,7 @@ def main() -> None:
         zoomable=True,
     )
     api._window = window
+    window.events.loaded += api._register_file_drop
     debug = "--debug" in sys.argv
     try:
         webview.start(debug=debug)

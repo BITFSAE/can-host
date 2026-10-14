@@ -12,6 +12,10 @@ a = Analysis(
     hiddenimports=[
         "can.interfaces.pcan",
         "cli.pcan_bms_bench",
+        # DBC 工作台：cantools 负责解析与解码，bitstruct / textparser 是它的核心依赖。
+        "cantools",
+        "bitstruct",
+        "textparser",
         "paho.mqtt.client",
         "canhost.telemetry.fsae_telemetry_pb2",
         # 本地遥测模拟器是两个平台都发布的工程工具：串口输出要 pyserial，

@@ -146,6 +146,7 @@ class _Group:
     rx_intervals_ms: deque[float] = field(default_factory=lambda: deque(maxlen=32))
     tx_intervals_ms: deque[float] = field(default_factory=lambda: deque(maxlen=32))
     data: bytes = b""
+    last_direction: str = "rx"
     changed_indices: list[int] = field(default_factory=list)
     variants: OrderedDict[tuple[str, bytes], _Variant] = field(default_factory=OrderedDict)
 
@@ -156,6 +157,7 @@ class _Group:
                                 if (self.data[index] if index < len(self.data) else None)
                                 != (frame.data[index] if index < len(frame.data) else None)]
         self.data = bytes(frame.data)
+        self.last_direction = frame.direction
         self.last_timestamp = frame.timestamp
         if frame.direction == "tx":
             self.tx_count += 1
@@ -224,6 +226,20 @@ class CanMonitor:
             self.groups.popitem(last=False)
         self.total_count += 1
         self.recent_observed.append(time.monotonic())
+
+    def latest(self) -> list[dict[str, Any]]:
+        """Per-ID facts for consumers that decode the payload themselves (the DBC page)."""
+        facts = []
+        for group in self.groups.values():
+            intervals = group.rx_intervals_ms if group.rx_count else group.tx_intervals_ms
+            facts.append({
+                "id": group.arbitration_id, "extended": group.extended, "data": group.data,
+                "last_ts": group.last_timestamp or 0.0, "count": group.count,
+                "rx_count": group.rx_count, "tx_count": group.tx_count,
+                "cycle_ms": round(sum(intervals) / len(intervals), 2) if intervals else None,
+                "direction": group.last_direction,
+            })
+        return facts
 
     def snapshot(self) -> dict[str, Any]:
         observed_now = time.monotonic()
