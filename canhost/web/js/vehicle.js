@@ -100,14 +100,14 @@ function buildVehicleStatics() {
     + `<span data-field="torque_pct">—</span><span data-field="velocity_rpm">—</span>`
     + `<span data-field="motor_temp_c">—</span><span data-field="inverter_temp_c">—</span>`
     + `<span data-field="igbt_temp_c">—</span></div>`).join("");
-  $("#vehEcuTable").innerHTML = `<div class="veh-ecu-head"><b>轮位</b><span>扭矩 %Mn</span><span>转速 rpm</span>`
+  $("#vehEcuTable").innerHTML = `<div class="veh-ecu-head"><b>轮位</b><span>扭矩 %</span><span>转速 rpm</span>`
     + `<span>电机 °C</span><span>逆变器 °C</span><span>IGBT °C</span></div>` + wheelRows;
 
   const tireGroups = ["0x071", "0x072", "0x073", "0x074"].map((frameId, group) =>
     `<div class="veh-tire-group" data-frame="${frameId}"><div class="sub-head veh-tire-head">`
-    + `<b>${frameId} · 测点 ${group * 4 + 1}–${group * 4 + 4}</b><span class="veh-tire-state">未收到</span></div>`
+    + `<b>${frameId} · 测点 ${group * 4 + 1}–${group * 4 + 4} · °C</b><span class="veh-tire-state">未收到</span></div>`
     + `<div class="readout-grid cols-2 veh-tire-points">` + [0, 1, 2, 3].map(point =>
-      `<div class="veh-tire-point" data-point="${point}"><small>${group * 4 + point + 1}</small><b>—</b><em>°C</em></div>`).join("")
+      `<div class="veh-tire-point" data-point="${point}"><small>${group * 4 + point + 1}</small><b>—</b></div>`).join("")
     + `</div></div>`).join("");
   $("#vehTireGrid").innerHTML = tireGroups;
 }
@@ -126,8 +126,8 @@ function setVehChannel(gridId, channels, data, freshLimit) {
     const stateNode = node.querySelector(".veh-channel-state");
     const status = entry.status;
     stateNode.textContent = !known ? "未收到" : stale
-      ? `${dataAgeText(entry.age, freshLimit)}${status === 0 ? "" : " · 上次结果异常"}`
-      : status === 0 ? `${fmt(entry.age, 1)} s 前` : "结果异常";
+      ? `${dataAgeText(entry.age, freshLimit)}${status === 0 ? "" : " · 上次表计异常"}`
+      : status === 0 ? `${fmt(entry.age, 1)} s 前` : "表计异常";
     stateNode.className = `veh-channel-state${fresh ? (status === 0 ? " ok" : " bad") : stale ? " data-stale" : ""}`;
     node.classList.toggle("stale", stale);
   });
@@ -249,11 +249,23 @@ function renderVehicle() {
   const ecuStatus = ecu.status || {};
   const statusKnownEcu = hasDataAge(ecu.age?.status) && Object.keys(ecuStatus).length > 0;
   const statusFreshEcu = isFresh(ecu.age?.status);
-  const wheelFlagText = flags => ["FR", "FL", "RR", "RL"].map(wheel => `${wheel}${flags?.[wheel] ? "✓" : "—"}`).join(" ");
-  text("#vehEcuReady", statusKnownEcu ? wheelFlagText(ecuStatus.system_ready) : "—");
-  text("#vehEcuEnable", statusKnownEcu ? wheelFlagText(ecuStatus.enable) : "—");
-  text("#vehEcuError", statusKnownEcu ? wheelFlagText(ecuStatus.error) : "—");
-  setClass("#vehEcuError", "bad", statusFreshEcu && Object.values(ecuStatus.error || {}).some(Boolean));
+  // 只报结论和出问题的轮位：四轮正常时显示“四轮就绪”，避免四个 ✓ 或 — 连在一起难读。
+  const wheelList = flags => ["FR", "FL", "RR", "RL"].filter(wheel => flags?.[wheel]);
+  const allWheels = ["FR", "FL", "RR", "RL"];
+  const flagSet = flags => flags && typeof flags === "object";
+  const readyOff = allWheels.filter(wheel => !ecuStatus.system_ready?.[wheel]);
+  const enableOff = allWheels.filter(wheel => !ecuStatus.enable?.[wheel]);
+  const errorOn = wheelList(ecuStatus.error);
+  text("#vehEcuReady", statusKnownEcu && flagSet(ecuStatus.system_ready)
+    ? (readyOff.length ? `${readyOff.join("、")} 未就绪` : "四轮就绪") : "—");
+  text("#vehEcuEnable", statusKnownEcu && flagSet(ecuStatus.enable)
+    ? (enableOff.length ? `${enableOff.join("、")} 未使能` : "四轮使能") : "—");
+  text("#vehEcuError", statusKnownEcu && flagSet(ecuStatus.error)
+    ? (errorOn.length ? `${errorOn.join("、")} 故障` : "无故障") : "—");
+  setClass("#vehEcuReady", "warn", statusFreshEcu && flagSet(ecuStatus.system_ready) && readyOff.length > 0);
+  setClass("#vehEcuEnable", "warn", statusFreshEcu && flagSet(ecuStatus.enable) && enableOff.length > 0);
+  setClass("#vehEcuError", "bad", statusFreshEcu && flagSet(ecuStatus.error) && errorOn.length > 0);
+  setClass("#vehEcuError", "ok", statusFreshEcu && flagSet(ecuStatus.error) && errorOn.length === 0);
   ["#vehEcuReady", "#vehEcuEnable", "#vehEcuError"].forEach(id => markStaleData(id, statusKnownEcu && !statusFreshEcu));
   text("#vehEcuNote", !ecuAges.length ? "等待数据"
     : ecuStale ? `部分已过期 · 最旧 ${fmt(Math.max(...ecuAges), 1)} s 前`
@@ -280,7 +292,7 @@ function renderVehicle() {
     group.classList.toggle("data-stale", !tireFresh);
     group.querySelectorAll(".veh-tire-point").forEach(point => {
       const value = values[+point.dataset.point];
-      point.querySelector("b").textContent = value == null ? "—" : fmt(value, 2);
+      point.querySelector("b").textContent = value == null ? "—" : fmt(value, 1);
     });
   });
   text("#vehTireNote", tireKnown
@@ -320,9 +332,9 @@ function drawVehicleTrend() {
   text("#vehTrendHvV", Number.isFinite(latest.hv_voltage) ? `${fmt(latest.hv_voltage, 1)} V · ${Number.isFinite(latest.hv_current) ? fmt(latest.hv_current, 1) + " A" : "—"}` : "等待数据");
   text("#vehTrendLvV", Number.isFinite(latest.lv_voltage) ? `${fmt(latest.lv_voltage, 1)} V · ${Number.isFinite(latest.lv_current) ? fmt(latest.lv_current, 1) + " A" : "—"}` : "等待数据");
 
-  const pad = { left: 52, right: 52, top: 12, bottom: 24 };
+  const pad = { left: 56, right: 56, top: 24, bottom: 24 };
   const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
-  const axisFont = '10px "SF Mono", "Cascadia Mono", Consolas, monospace';
+  const axisFont = '10.5px "SF Mono", "Cascadia Mono", Consolas, monospace';
   const colors = vehicleTrendColors();
   const labelColor = cssVar("--chart-label", "#7c7f7d");
   const gridColor = cssVar("--chart-grid", "#2d2f31");
@@ -338,17 +350,16 @@ function drawVehicleTrend() {
       ctx.fillStyle = labelColor;
       if (left) {
         ctx.textAlign = "right";
-        ctx.fillText(`${(left.max - (left.max - left.min) * row / 4).toFixed(1)}`, pad.left - 7, y + 3);
+        const value = (left.max - (left.max - left.min) * row / 4).toFixed(1);
+        ctx.fillText(row === 0 ? `${value} V` : value, pad.left - 7, y + 3);
       }
       if (right) {
         ctx.textAlign = "left";
-        ctx.fillText(`${(right.max - (right.max - right.min) * row / 4).toFixed(1)}`, width - pad.right + 7, y + 3);
+        const value = (right.max - (right.max - right.min) * row / 4).toFixed(1);
+        ctx.fillText(row === 0 ? `${value} V` : value, width - pad.right + 7, y + 3);
       }
     }
   }
-  ctx.fillStyle = labelColor; ctx.textAlign = "left"; ctx.font = axisFont;
-  ctx.fillText("HV V", 2, pad.top + 3);
-  ctx.textAlign = "right"; ctx.fillText("LV V", width - 2, pad.top + 3);
 
   if (trends.length < 2) {
     ctx.fillStyle = cssVar("--chart-axis", "#87969c");

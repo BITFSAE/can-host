@@ -36,12 +36,10 @@
           <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v2M12 19.5v2M4.5 4.5l1.4 1.4M18.1 18.1l1.4 1.4M2.5 12h2M19.5 12h2M4.5 19.5l1.4-1.4M18.1 5.9l1.4-1.4"/></svg>
           <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.3A8.4 8.4 0 0 1 8.7 4a8.4 8.4 0 1 0 11.3 11.3z"/></svg>
         </button>
+        <button id="railToggle" class="rail-toggle" type="button" aria-controls="nav" aria-expanded="true" aria-label="折叠侧边栏" title="折叠侧边栏">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16m7-11-3 3 3 3"/></svg>
+        </button>
       </div>
-
-      <button id="railToggle" class="rail-toggle" type="button" aria-controls="nav" aria-expanded="true" aria-label="折叠侧边栏" title="折叠侧边栏">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16m7-11-3 3 3 3"/></svg>
-        <span>折叠导航</span>
-      </button>
       <nav id="nav" aria-label="主导航">
         <span class="nav-group">BMS</span>
         <button class="nav-item active" type="button" data-page="overview" title="运行总览（Alt+1）">
@@ -156,6 +154,7 @@
           <div class="overview-layout">
             <article class="data-section hv-section">
               <header><h3>高压输出</h3><span id="hvOutput" class="state-text">—</span></header>
+              <div id="hvUnavailable" class="section-note hidden">继电器与 HV_ACC 状态尚未收到：这些信号只在 CAN1 广播。</div>
               <div class="relay-tiles" aria-label="三路继电器控制命令">
                 <div id="positiveRelay"><span>主正继电器</span><em>—</em></div>
                 <div id="negativeRelay"><span>主负继电器</span><em>—</em></div>
@@ -284,12 +283,13 @@
             <div class="fault-readout"><span>统一故障码</span><b id="faultCode">等待数据</b><button class="link-button" type="button" id="copyFaultCode">复制</button></div>
             <dl><div><dt>当前等级</dt><dd id="alarmPageLevel">—</dd></div><div><dt>活动告警</dt><dd id="alarmActiveCount">—</dd></div></dl>
             <label class="switch"><input id="onlyActiveAlarms" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>只看活动项</span></label>
+            <label class="switch"><input id="showAlarmRules" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>显示判定条件</span></label>
           </div>
 
           <div id="alarmMatrix" class="alarm-matrix"></div>
 
           <article class="data-section protection-status">
-            <header><h3>保护开关</h3><span class="head-actions"><b id="switchStatusSummary">—</b><small id="switchVersion">回报 V—</small></span></header>
+            <header><h3>保护开关</h3><span class="head-actions"><b id="switchStatusSummary">—</b><small id="switchVersion">配置版本 V—</small></span></header>
             <div id="switchStatusList" class="switch-status-list"></div>
           </article>
 
@@ -315,8 +315,8 @@
               <h3>命令发送条件</h3>
               <span class="head-actions">
                 <span id="lockConnected" class="lock"><i aria-hidden="true"></i><span id="lockConnectedText">CAN1 未连接</span></span>
-                <span id="lockState" class="lock"><i aria-hidden="true"></i>主控处于允许状态</span>
-                <span id="lockFresh" class="lock"><i aria-hidden="true"></i>状态帧未超时</span>
+                <span id="lockState" class="lock"><i aria-hidden="true"></i><span id="lockStateText">主控状态未知</span></span>
+                <span id="lockFresh" class="lock"><i aria-hidden="true"></i><span id="lockFreshText">状态帧未超时</span></span>
                 <span id="saveStatus" class="tag neutral" title="等待主控回报 Flash 保存状态">等待保存状态</span>
               </span>
             </header>
@@ -357,7 +357,7 @@
                 </div>
                 <div class="panel-foot"><button class="action-button" type="button" id="sendChargeConfig">写入充电请求</button></div>
                 <dl class="mini-facts charge-feedback-facts">
-                  <div title="主控保存并下发的充电请求值">
+                  <div title="主控保存并发送的充电请求值">
                     <dt>请求值</dt>
                     <dd id="chargeRequestEcho">— V / — A</dd>
                   </div>
@@ -366,7 +366,7 @@
                     <dd id="chargeFeedbackEcho">等待反馈</dd>
                   </div>
                   <div class="charge-end-fact">
-                    <dt>正常充电结束</dt>
+                    <dt>充电结束状态</dt>
                     <dd id="legacyChargeEnd" role="status" aria-atomic="true">等待数据</dd>
                   </div>
                 </dl>
@@ -410,12 +410,12 @@
               <div class="panel-body flush">
                 <ul class="action-list">
                   <li>
-                    <span class="action-text"><b>清除 Flash 故障日志</b><small>只清历史日志，不消除实时故障，也不解除故障保持</small></span>
+                    <span class="action-text"><b>清除 Flash 故障日志</b><small>只清除历史记录，不影响当前故障与锁存状态</small></span>
                     <span class="action-controls"><button class="danger-outline" type="button" id="clearFaultLog">清除日志</button></span>
                   </li>
                   <li>
-                    <span class="action-text"><b>故障保持复位</b><small>要求实时一级、二级告警已清除且 HV_ACC 已释放</small></span>
-                    <span class="action-controls"><button class="danger-outline" type="button" id="faultReset">复位保持</button></span>
+                    <span class="action-text"><b>复位故障</b><small>解除主控故障锁存；需一级、二级告警已清除且 HV_ACC 已释放</small></span>
+                    <span class="action-controls"><button class="danger-outline" type="button" id="faultReset">复位故障</button></span>
                   </li>
                 </ul>
               </div>
@@ -440,7 +440,7 @@
                 <div><span>放电功率上限</span><b id="vehSopDisKw">等待数据</b><em>kW</em></div>
                 <div><span>充电功率上限</span><b id="vehSopChgKw">等待数据</b><em>kW</em></div>
               </div>
-              <dl class="readout-grid rows vehicle-flag-list">
+              <dl class="readout-grid rows vehicle-flag-list vehicle-sop-flags">
                 <div><dt>限值有效</dt><dd id="vehSopLimitsValid">—</dd></div>
                 <div><dt>允许行驶</dt><dd id="vehSopDrive">—</dd></div>
                 <div><dt>允许回收</dt><dd id="vehSopRegen">—</dd></div>
@@ -460,7 +460,7 @@
                 <div><span>SOC</span><b id="vehPackSoc">等待数据</b><em>%</em></div>
                 <div><span>状态机</span><b id="vehPackState" class="veh-state-text">等待数据</b><em></em></div>
               </div>
-              <dl class="readout-grid rows vehicle-flag-list">
+              <dl class="readout-grid rows vehicle-flag-list vehicle-pack-flags">
                 <div><dt>告警等级</dt><dd id="vehPackAlarm">—</dd></div>
                 <div><dt>故障码</dt><dd id="vehFaultCode">等待数据</dd></div>
               </dl>
@@ -522,7 +522,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>台架模拟从控</h2>
-              <span class="tool-header-desc">CAN1 · 500 kbit/s · 六模组从控数据注入</span>
+              <span class="tool-header-desc">向 CAN1 注入六模组从控数据，用于台架联调</span>
             </div>
             <div class="tool-header-connection">
               <span id="benchStatus" class="tag neutral">未连接</span>
@@ -551,7 +551,7 @@
                   <button class="outline-button" type="button" data-bench-command="scenario openwire on 1">单体 1 断线</button>
                 </div>
                 <div class="bench-command-row">
-                  <input id="benchCommand" type="text" placeholder="例如：cell 1 3900 或 slave 2 online off" aria-label="台架命令">
+                  <input id="benchCommand" type="text" placeholder="输入台架命令，例如 cell 1 3900" title="命令语法见台架模拟从控文档" aria-label="台架命令">
                   <button class="action-button" type="button" id="sendBenchCommand">发送</button>
                 </div>
                 <pre id="benchResult" class="bench-result">等待命令。</pre>
@@ -569,7 +569,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>IVT 能量计配置</h2>
-              <span class="tool-header-desc">CAN1 · 0x410/0x51A · 结果 0x512–0x519</span>
+              <span class="tool-header-desc">通过 CAN1 读取并配置 IVT 能量计</span>
             </div>
             <div class="tool-header-connection">
               <span id="ivtConfigStatus" class="tag neutral">未读取</span>
@@ -658,7 +658,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>BRT 编码器</h2>
-              <span class="tool-header-desc">单圈绝对值 · 4096 count/rev · 读取、标定、配置与曲线</span>
+              <span class="tool-header-desc">读取角度、标定零位与方向、配置上报</span>
             </div>
             <div class="tool-header-connection">
               <span id="encStatus" class="tag neutral" role="status" aria-live="polite">未连接</span>
@@ -706,15 +706,15 @@
                 <div class="enc-row">
                   <div class="enc-row-text"><b>设备自动上报</b><small>编码器按设定周期主动发送位置，无需请求</small></div>
                   <div class="enc-row-ctl">
-                    <button class="outline-button" type="button" id="encReportStart">开启</button>
-                    <button class="outline-button" type="button" id="encReportStop">关闭</button>
+                    <button class="outline-button" type="button" id="encReportStart">开启上报</button>
+                    <button class="outline-button" type="button" id="encReportStop">停止上报</button>
                   </div>
                 </div>
                 <div class="enc-row">
                   <div class="enc-row-text"><b>上报周期</b><small id="encPeriodHint">5000–65535 µs，掉电记忆</small></div>
                   <div class="enc-row-ctl">
                     <label class="field"><span class="field-input"><input id="encPeriod" type="number" min="5000" max="65535" step="1" value="5000" aria-label="上报周期"><em>µs</em></span></label>
-                    <button class="outline-button" type="button" id="encPeriodWrite">写入</button>
+                    <button class="outline-button" type="button" id="encPeriodWrite">写入周期</button>
                   </div>
                 </div>
               </div>
@@ -744,7 +744,7 @@
                   <button type="button" data-mode="single" title="设备输出的 0–360° 单圈角度，跨圈处断开">0–360°</button><button type="button" data-mode="signed" title="单圈角度折算到 −180°～180°，零位附近不会在 0° 与 360° 间跳变">±180°</button><button type="button" data-mode="accum" title="上位机累计的连续角度">累计</button>
                 </div>
                 <label class="switch" title="冻结曲线显示，后台继续采集"><input id="encPause" type="checkbox"><i class="switch-track" aria-hidden="true"></i><span>暂停</span></label>
-                <button class="outline-button" type="button" id="encClearCurves">清空</button>
+                <button class="outline-button" type="button" id="encClearCurves">清空曲线</button>
                 <button class="outline-button" type="button" id="encExport" title="每个编码器样本一行：角度、转速，以及当时保持的制动油压和油压开度">导出 CSV</button>
                 <button class="outline-button" type="button" id="encExportImage" title="把当前窗口内的角度、油压与开度、转速曲线保存为一张 PNG">导出图片</button>
               </div>
@@ -847,7 +847,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>本地遥测模拟器</h2>
-              <span class="tool-header-desc">TelemetryFrame 10 Hz · BMS 明细 2 Hz · MQTT / 串口 / PCAN</span>
+              <span class="tool-header-desc">把模拟遥测输出到 MQTT、串口或 PCAN；不控制实车节点</span>
             </div>
             <div class="tool-header-connection">
               <span id="simulatorStatus" class="tag neutral" role="status" aria-live="polite">已停止</span>
@@ -897,7 +897,7 @@
           <div class="tool-header-bar">
             <div class="tool-header-info">
               <h2>车手屏联调</h2>
-              <span class="tool-header-desc">模拟 CANB 节点与方向盘 · 500 kbit/s · 发送给 HMI_Display</span>
+              <span class="tool-header-desc">代替车手屏所在 CANB 节点，联调显示与方向盘输入</span>
             </div>
             <div class="tool-header-connection">
               <span id="dbStatus" class="tag neutral" role="status" aria-live="polite">未连接</span>
@@ -989,7 +989,7 @@
                       <div class="db-chip-row" id="dbWheelButtons">
                         <button type="button" class="outline-button" data-db-command="wheel_lap" title="0x701：车手屏开始或停止圈速/冲刺计时，与触摸顶栏相同">圈速计时键（开始/停止计时）</button>
                         <button type="button" class="outline-button" data-db-command="wheel_clear" title="0x702：车手屏清除界面上的全部告警">消错键（清除告警）</button>
-                        <button type="button" class="outline-button" data-db-command="wheel_powerup" title="像方向盘上电那样补发当前滑级和驾驶模式">上电补发</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_powerup" title="像方向盘上电那样补发当前滑级和驾驶模式">补发当前状态</button>
                       </div>
                     </div>
                     <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">异常输入</span><small>车手屏应丢弃、不转发的坏帧</small></div>
@@ -1128,26 +1128,29 @@
                     <label class="field"><span class="field-label">请求档位</span><span class="field-input"><select id="fanProfileSelect"><option value="0">保守</option><option value="1" selected>默认</option><option value="2">激进</option></select></span></label>
                     <label class="field"><span class="field-label">有效时间</span><span class="field-input"><input id="fanProfileLease" type="number" min="1" max="60" value="10"><em>s</em></span></label>
                   </div>
-                  <p id="fanEffectiveReport">PWM1 / PWM2：等待数据</p>
-                  <p id="fanProtectionReport" role="status">保护状态：等待数据</p>
-                  <p id="fanDerateReport" role="status"></p>
-                  <div class="panel-foot"><button class="action-button" id="sendFanProfile" type="button" disabled>下发档位</button><button class="outline-button" id="clearFanFaults" type="button" disabled>清除停转锁存</button></div>
+                  <dl class="fan-report">
+                    <div><dt>实际策略</dt><dd id="fanEffectiveReport">PWM1 / PWM2：等待数据</dd></div>
+                    <div><dt>保护</dt><dd id="fanProtectionReport" role="status">等待数据</dd></div>
+                    <div><dt>降功率</dt><dd id="fanDerateReport" role="status"></dd></div>
+                  </dl>
+                  <div class="panel-foot"><button class="action-button" id="sendFanProfile" type="button" disabled>应用档位</button><button class="outline-button" id="clearFanFaults" type="button" disabled>解除停转锁定</button></div>
                 </div>
               </article>
 
               <article class="panel fan-control-panel">
                 <header class="panel-head">
-                  <h3>运行模式设定</h3>
+                  <h3>运行模式</h3>
                   <span id="fanModeStatusTag" class="tag neutral">—</span>
                 </header>
                 <div class="panel-body">
+                  <p class="panel-note">手动与停机为临时状态，到期后回到自动温控。</p>
                   <div class="field-grid cols-2 fan-mode-fields">
                     <label class="field"><span class="field-label">目标模式</span><span class="field-input"><select id="fanModeSelect" title="自动温控：按电机与逆变器温度计算目标占空比；手动调速：固定占空比；强制停机：关闭两路输出。后两种模式到期自动回到温控"><option value="0">自动温控</option><option value="1">手动调速</option><option value="2">强制停机</option></select></span></label>
-                    <label class="field"><span class="field-label">有效时间</span><span class="field-input"><input id="fanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
-                    <label class="field"><span class="field-label">PWM1 目标</span><span class="field-input"><input id="fanDuty1Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
-                    <label class="field"><span class="field-label">PWM2 目标</span><span class="field-input"><input id="fanDuty2Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
+                    <label class="field fan-lease-field"><span class="field-label">有效时间</span><span class="field-input"><input id="fanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                    <label class="field fan-duty-field"><span class="field-label">PWM1 目标</span><span class="field-input"><input id="fanDuty1Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
+                    <label class="field fan-duty-field"><span class="field-label">PWM2 目标</span><span class="field-input"><input id="fanDuty2Input" type="number" min="0" max="100" placeholder="0"><em>%</em></span></label>
                   </div>
-                  <div class="panel-foot"><button class="action-button" type="button" id="sendFanControl">下发模式命令</button></div>
+                  <div class="panel-foot"><button class="action-button" type="button" id="sendFanControl">应用模式</button></div>
                 </div>
               </article>
 
@@ -1161,7 +1164,7 @@
                 <div class="panel-body">
                   <div class="panel-foot">
                     <button class="outline-button" type="button" id="fanQueryButton">查询当前状态</button>
-                    <button class="danger-outline" type="button" id="fanRestoreButton">恢复默认档</button>
+                    <button class="danger-outline" type="button" id="fanRestoreButton">恢复默认档位</button>
                   </div>
                   <div class="sub-head"><b title="来源 0x5A5 · 命令应答">命令应答记录</b></div>
                   <div id="fanAckList" class="fan-ack-list"><div class="empty-state">尚未收到应答。</div></div>
@@ -1188,95 +1191,100 @@
                 <div class="panel-body">
                   <div class="field-grid cols-3 fan-mode-fields">
                     <label class="field"><span class="field-label">目标模式</span><span class="field-input"><select id="batteryFanModeSelect" title="手动调速到期后自动回到温控"><option value="0">自动温控</option><option value="1">手动调速</option><option value="2">强制停机</option></select></span></label>
-                    <label class="field"><span class="field-label">占空比</span><span class="field-input"><input id="batteryFanDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
-                    <label class="field"><span class="field-label">租约</span><span class="field-input"><input id="batteryFanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                    <label class="field battery-fan-duty-field"><span class="field-label">占空比</span><span class="field-input"><input id="batteryFanDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
+                    <label class="field battery-fan-lease-field"><span class="field-label">有效时间</span><span class="field-input"><input id="batteryFanLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
                   </div>
                   <div class="panel-foot">
-                    <button class="action-button" type="button" id="batteryFanControlButton">下发控制</button>
+                    <button class="action-button" type="button" id="batteryFanControlButton">应用电池箱设置</button>
                   </div>
                 </div>
               </article>
 
 
             </div>
-            <article class="panel fan-calib-panel">
-              <header class="panel-head"><h3>整车风扇标定</h3><span class="panel-context">更换风扇后重新测量</span></header>
-              <div class="panel-body">
-                <div class="field-grid cols-4">
-                  <label class="field"><span class="field-label">回路</span><span class="field-input"><select id="vehicleCalibChannel"><option value="1">PWM1 · 电机水套双风扇</option><option value="2">PWM2 · 逆变器风扇</option></select></span></label>
-                  <label class="field"><span class="field-label">供电档位</span><span class="field-input"><select id="vehicleCalibTier"><option value="dcdc">DCDC</option><option value="battery">电池</option></select></span></label>
-                  <label class="field"><span class="field-label">测点保持</span><span class="field-input"><input id="vehicleCalibHold" type="number" min="3" max="10" step="0.5" value="6"><em>s</em></span></label>
-                  <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="vehicleCalibCurrent" type="number" min="5" max="20" step="0.5" value="18"><em>A</em></span></label>
-                </div>
-                <div class="panel-foot">
-                  <button class="action-button" type="button" id="vehicleCalibStart">开始双向扫频</button>
-                  <button class="danger-outline" type="button" id="vehicleCalibStop">安全中止</button>
-                  <button class="outline-button" type="button" id="vehicleCalibCsv">导出 CSV</button>
-                  <button class="outline-button" type="button" id="vehicleCalibJson">导出 JSON</button>
-                </div>
-                <p id="vehicleCalibProgress" role="status" aria-live="polite">等待支持标定的固件状态</p>
-                <div class="fan-calib-table-wrap"><table class="data-table fan-calib-table" aria-label="整车风扇标定记录">
-                  <thead><tr><th>步骤</th><th>方向</th><th>PWM1 / PWM2</th><th>三路 RPM</th><th>总线电流</th><th>增量功率</th><th>测点质量</th></tr></thead>
-                  <tbody id="vehicleCalibRecords"><tr><td colspan="7" class="empty-state">尚未运行标定。</td></tr></tbody>
-                </table></div>
-              </div>
-            </article>
-            <!-- F405 电池箱风扇功率标定。 -->
-            <article class="panel fan-calib-panel fan-battery-calib-panel">
-                <header class="panel-head">
-                  <h3>电池箱风扇标定</h3>
-                  <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非充电高压状态可扫频；供电变化时中止">等待数据</span>
-                </header>
-                <div class="panel-body">
-                  <div class="sub-head fan-step-head">
-                    <b title="自动逐档提高占空比，每档稳定后记录一组功率与转速"><span class="step-badge">1</span>自动阶梯扫频</b>
-                    <span id="batteryFanCalibProgress">尚未运行自动扫频</span>
-                  </div>
-                  <div class="field-grid cols-2 fan-mode-fields">
-                    <label class="field"><span class="field-label">稳态保持</span><span class="field-input"><input id="batteryFanAutoHoldInput" type="number" min="3" max="10" step="0.1" value="5"><em>s</em></span></label>
-                    <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="batteryFanAutoCurrentInput" type="number" min="5" max="20" step="0.1" value="18"><em>A</em></span></label>
-                  </div>
-                  <div class="panel-foot fan-battery-calib-actions">
-                    <button class="action-button" type="button" id="batteryFanAutoStartButton" disabled>自动阶梯扫频</button>
-                    <button class="danger-button" type="button" id="batteryFanAutoStopButton" disabled>安全中止</button>
-                    <button class="outline-button" type="button" id="batteryFanExportButton" disabled>导出 CSV</button>
-                    <button class="outline-button" type="button" id="batteryFanExportJsonButton" disabled>导出 JSON</button>
-                  </div>
-                  <div class="fan-calib-progress-row">
-                    <div class="progress-track" role="progressbar" aria-label="电池箱风扇扫频进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="batteryFanCalibProgressBar"><i></i></div>
-                    <span class="fan-calib-progress-label" id="batteryFanCalibProgressLabel" role="status" aria-atomic="true">尚未开始扫描</span>
-                  </div>
-
-                  <div class="sub-head fan-step-head">
-                    <b title="由 PDM 功率读数扣除 0% 基线后给出；停止扫频会话后再提交"><span class="step-badge">2</span>保存上限</b>
-                  </div>
-                  <div class="field-grid cols-2 fan-mode-fields">
-                    <label class="field"><span class="field-label">35W 充电车 上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
-                    <label class="field"><span class="field-label">70W 高压上限</span><span class="field-input"><input id="batteryFanHvCapInput" type="number" min="5" max="100" value="55" title="待机低压扫频得到的建议值需在高压供电下复核"><em>%</em></span></label>
-                  </div>
-                  <div class="panel-foot">
-                    <button class="action-button" type="button" id="batteryFanCommitButton" disabled>提交 35W/70W 上限</button>
-                    <button class="danger-outline" type="button" id="batteryFanClearButton">清除标定</button>
-                  </div>
-
-                  <div class="fan-calib-table-wrap">
-                    <table class="data-table fan-calib-table" aria-label="电池箱风扇标定记录">
-                      <thead><tr><th>步骤</th><th>PWM</th><th>RPM</th><th>总线电压</th><th>总线电流</th><th>总线功率</th><th>ΔI (A)</th><th>ΔP (W)</th></tr></thead>
-                      <tbody id="batteryFanCalibTableBody"><tr><td colspan="8" class="empty-state">尚未运行标定。</td></tr></tbody>
-                    </table>
-                  </div>
-                  <details class="fan-manual-step">
-                    <summary>手动单步标定</summary>
-                    <div class="field-grid cols-4 fan-calib-fields">
-                      <label class="field"><span class="field-label">动作</span><span class="field-input"><select id="batteryFanCalibAction"><option value="1">开始</option><option value="2">更新/续租</option><option value="3">停止</option></select></span></label>
-                      <label class="field"><span class="field-label">步骤</span><span class="field-input"><input id="batteryFanStepInput" type="number" min="0" max="255" value="0"></span></label>
-                      <label class="field"><span class="field-label">标定占空比</span><span class="field-input"><input id="batteryFanCalibDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
-                      <label class="field"><span class="field-label">租约</span><span class="field-input"><input id="batteryFanCalibLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+            <details class="fan-calib-block">
+              <summary><b>风扇标定</b><span>更换风扇或支架后重新测量，日常运行不需要</span></summary>
+              <div class="fan-calib-inner">
+                <article class="panel fan-calib-panel">
+                  <header class="panel-head"><h3>整车风扇标定</h3><span class="panel-context">更换风扇后重新测量</span></header>
+                  <div class="panel-body">
+                    <div class="field-grid cols-4">
+                      <label class="field"><span class="field-label">回路</span><span class="field-input"><select id="vehicleCalibChannel"><option value="1">PWM1 · 电机水套双风扇</option><option value="2">PWM2 · 逆变器风扇</option></select></span></label>
+                      <label class="field"><span class="field-label">供电档位</span><span class="field-input"><select id="vehicleCalibTier"><option value="dcdc">DCDC</option><option value="battery">电池</option></select></span></label>
+                      <label class="field"><span class="field-label">测点保持</span><span class="field-input"><input id="vehicleCalibHold" type="number" min="3" max="10" step="0.5" value="6"><em>s</em></span></label>
+                      <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="vehicleCalibCurrent" type="number" min="5" max="20" step="0.5" value="18"><em>A</em></span></label>
                     </div>
-                    <div class="panel-foot"><button class="action-button" type="button" id="batteryFanCalibButton">发送标定步骤</button></div>
-                  </details>
-                </div>
-            </article>
+                    <div class="panel-foot">
+                      <button class="action-button" type="button" id="vehicleCalibStart">开始双向扫频</button>
+                      <button class="danger-outline" type="button" id="vehicleCalibStop">安全中止</button>
+                      <button class="outline-button" type="button" id="vehicleCalibCsv">导出 CSV</button>
+                      <button class="outline-button" type="button" id="vehicleCalibJson">导出 JSON</button>
+                    </div>
+                    <p id="vehicleCalibProgress" role="status" aria-live="polite">等待支持标定的固件状态</p>
+                    <div class="fan-calib-table-wrap"><table class="data-table fan-calib-table" aria-label="整车风扇标定记录">
+                      <thead><tr><th>步骤</th><th>方向</th><th>PWM1 / PWM2</th><th>三路 RPM</th><th>总线电流</th><th>增量功率</th><th>测点质量</th></tr></thead>
+                      <tbody id="vehicleCalibRecords"><tr><td colspan="7" class="empty-state">尚未运行标定。</td></tr></tbody>
+                    </table></div>
+                  </div>
+                </article>
+                <!-- F405 电池箱风扇功率标定。 -->
+                <article class="panel fan-calib-panel fan-battery-calib-panel">
+                    <header class="panel-head">
+                      <h3>电池箱风扇标定</h3>
+                      <span id="batteryFanCalibSourceTag" class="panel-context" title="待机低压或非充电高压状态可扫频；供电变化时中止">等待数据</span>
+                    </header>
+                    <div class="panel-body">
+                      <div class="sub-head fan-step-head">
+                        <b title="自动逐档提高占空比，每档稳定后记录一组功率与转速"><span class="step-badge">1</span>自动阶梯扫频</b>
+                        <span id="batteryFanCalibProgress">尚未运行自动扫频</span>
+                      </div>
+                      <div class="field-grid cols-2 fan-mode-fields">
+                        <label class="field"><span class="field-label">稳态保持</span><span class="field-input"><input id="batteryFanAutoHoldInput" type="number" min="3" max="10" step="0.1" value="5"><em>s</em></span></label>
+                        <label class="field"><span class="field-label">总线电流保护</span><span class="field-input"><input id="batteryFanAutoCurrentInput" type="number" min="5" max="20" step="0.1" value="18"><em>A</em></span></label>
+                      </div>
+                      <div class="panel-foot fan-battery-calib-actions">
+                        <button class="action-button" type="button" id="batteryFanAutoStartButton" disabled>自动阶梯扫频</button>
+                        <button class="danger-button" type="button" id="batteryFanAutoStopButton" disabled>安全中止</button>
+                        <button class="outline-button" type="button" id="batteryFanExportButton" disabled>导出 CSV</button>
+                        <button class="outline-button" type="button" id="batteryFanExportJsonButton" disabled>导出 JSON</button>
+                      </div>
+                      <div class="fan-calib-progress-row">
+                        <div class="progress-track" role="progressbar" aria-label="电池箱风扇扫频进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="batteryFanCalibProgressBar"><i></i></div>
+                        <span class="fan-calib-progress-label" id="batteryFanCalibProgressLabel" role="status" aria-atomic="true">尚未开始扫描</span>
+                      </div>
+
+                      <div class="sub-head fan-step-head">
+                        <b title="由 PDM 功率读数扣除 0% 基线后给出；停止扫频会话后再提交"><span class="step-badge">2</span>保存上限</b>
+                      </div>
+                      <div class="field-grid cols-2 fan-mode-fields">
+                        <label class="field"><span class="field-label">35W 充电车 上限</span><span class="field-input"><input id="batteryFanChromaCapInput" type="number" min="5" max="100" value="55"><em>%</em></span></label>
+                        <label class="field"><span class="field-label">70W 高压上限</span><span class="field-input"><input id="batteryFanHvCapInput" type="number" min="5" max="100" value="55" title="待机低压扫频得到的建议值需在高压供电下复核"><em>%</em></span></label>
+                      </div>
+                      <div class="panel-foot">
+                        <button class="action-button" type="button" id="batteryFanCommitButton" disabled>保存上限</button>
+                        <button class="danger-outline" type="button" id="batteryFanClearButton">清除标定</button>
+                      </div>
+
+                      <div class="fan-calib-table-wrap">
+                        <table class="data-table fan-calib-table" aria-label="电池箱风扇标定记录">
+                          <thead><tr><th>步骤</th><th>PWM</th><th>RPM</th><th>总线电压</th><th>总线电流</th><th>总线功率</th><th>ΔI (A)</th><th>ΔP (W)</th></tr></thead>
+                          <tbody id="batteryFanCalibTableBody"><tr><td colspan="8" class="empty-state">尚未运行标定。</td></tr></tbody>
+                        </table>
+                      </div>
+                      <details class="fan-manual-step">
+                        <summary>手动单步标定</summary>
+                        <div class="field-grid cols-4 fan-calib-fields">
+                          <label class="field"><span class="field-label">动作</span><span class="field-input"><select id="batteryFanCalibAction"><option value="1">开始</option><option value="2">更新/续租</option><option value="3">停止</option></select></span></label>
+                          <label class="field"><span class="field-label">步骤</span><span class="field-input"><input id="batteryFanStepInput" type="number" min="0" max="255" value="0"></span></label>
+                          <label class="field"><span class="field-label">标定占空比</span><span class="field-input"><input id="batteryFanCalibDutyInput" type="number" min="0" max="100" value="0"><em>%</em></span></label>
+                          <label class="field"><span class="field-label">有效时间</span><span class="field-input"><input id="batteryFanCalibLeaseInput" type="number" min="1" max="60" value="10"><em>s</em></span></label>
+                        </div>
+                        <div class="panel-foot"><button class="action-button" type="button" id="batteryFanCalibButton">发送标定步骤</button></div>
+                      </details>
+                    </div>
+                </article>
+              </div>
+            </details>
 
           </div>
         </section>
@@ -1313,7 +1321,7 @@
             <label class="switch monitor-auto-record" title="真实 PCAN 连接成功后自动保存原始帧">
               <input id="monitorAutoRecord" type="checkbox" checked>
               <i class="switch-track" aria-hidden="true"></i>
-              <span>自动留档</span>
+              <span>自动保存</span>
             </label>
             <span class="toolbar-actions">
               <button class="outline-button" type="button" id="replayButton">历史</button>
@@ -1323,7 +1331,7 @@
           </div>
 
           <div id="replayBar" class="replay-bar hidden">
-            <button id="replayPlay" type="button" aria-label="播放或暂停">Ⅱ</button>
+            <button id="replayPlay" type="button" aria-label="暂停回放">暂停</button>
             <span id="replayFile">历史记录</span>
             <b id="replayPosition">00:00 / 00:00</b>
             <input id="replaySeek" type="range" min="0" max="1000" value="0" aria-label="回放位置">
@@ -1402,7 +1410,7 @@
                   <button type="button" role="tab" data-tab="plot">曲线</button>
                   <button type="button" role="tab" data-tab="edit">编辑</button>
                   <button type="button" role="tab" data-tab="send">发送</button>
-                  <button type="button" role="tab" data-tab="audit">对账</button>
+                  <button type="button" role="tab" data-tab="audit">比对</button>
                 </div>
                 <span id="dbcTabHint" class="dbc-tab-hint"></span>
               </div>
@@ -1517,9 +1525,9 @@
                   <span id="dbcAuditState" class="tag neutral">未开始</span>
                   <span class="monitor-inline-stats" id="dbcAuditStats"></span>
                   <span class="toolbar-actions">
-                    <button class="action-button" type="button" id="dbcAuditToggle">开始对账</button>
+                    <button class="action-button" type="button" id="dbcAuditToggle">开始比对</button>
                     <button class="outline-button" type="button" id="dbcAuditReset">重新统计</button>
-                    <button class="outline-button" type="button" id="dbcAuditTrace">对账记录文件</button>
+                    <button class="outline-button" type="button" id="dbcAuditTrace">比对记录</button>
                   </span>
                 </div>
                 <div id="dbcAudit" class="dbc-audit"></div>
@@ -1608,7 +1616,8 @@
             <i class="bus-dot" aria-hidden="true"></i><b>调试模拟</b>
           </button>
           <button class="connection-settings-button" id="connectionSettingsButton" type="button" aria-label="CAN 连接设置" title="CAN 连接设置">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M4 12h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="17" r="2"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v6M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0V9Z"/><path d="M12 18v3"/></svg>
+            <span>连接设置</span>
           </button>
         </div>
         <div class="statusbar-meta" aria-label="CAN 运行信息">
@@ -1836,7 +1845,7 @@
 
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
-      <header><h2 id="confirmTitle">确认发送</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2 id="confirmTitle">确认操作</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <span class="confirm-mode-badge" id="confirmModeBadge">待确认</span>
         <p class="confirm-text" id="confirmMessage"></p>
@@ -1848,7 +1857,7 @@
       </div>
       <footer>
         <button value="cancel" class="outline-button" type="submit">取消</button>
-        <button type="button" class="danger-button" id="doConfirm" disabled>确认发送</button>
+        <button type="button" class="danger-button" id="doConfirm" disabled>确认执行</button>
       </footer>
     </form>
   </dialog>
@@ -1871,7 +1880,6 @@
     <form method="dialog">
       <header>
         <div class="modal-heading">
-          <span class="modal-eyebrow">RELEASE CHANNEL</span>
           <h2>软件内更新</h2>
         </div>
         <button value="cancel" class="close" type="submit" aria-label="关闭"></button>
@@ -1880,7 +1888,7 @@
         <section class="updater-hero" aria-live="polite">
           <div class="updater-hero-copy">
             <span class="updater-kicker">BITFSAE CAN HOST</span>
-            <strong id="updaterHeadline">检查官方 Release</strong>
+            <strong id="updaterHeadline">检查官方发布</strong>
             <p id="updaterMessage" class="updater-status-line">尚未检查更新</p>
           </div>
           <span id="updaterStateBadge" class="updater-state-badge">未检查</span>
@@ -1903,7 +1911,6 @@
         <section class="updater-release-panel">
           <div class="updater-section-heading">
             <div>
-              <span class="updater-notes-label">RELEASE NOTES</span>
               <strong>版本说明</strong>
             </div>
             <dl class="updater-release-meta">
@@ -1913,7 +1920,7 @@
           </div>
           <ul id="updaterNotes" class="release-notes"><li class="release-notes-empty">检查完成后会在这里显示本版本的更新内容。</li></ul>
           <details id="updaterNotesRawPanel" class="updater-notes-raw hidden">
-            <summary>Release 原文</summary>
+            <summary>更新原文</summary>
             <pre id="updaterNotesRaw"></pre>
           </details>
         </section>
@@ -2014,7 +2021,6 @@
     <form method="dialog">
       <header>
         <div class="modal-heading">
-          <span class="modal-eyebrow">RELEASE HISTORY</span>
           <h2>版本历史</h2>
         </div>
         <button value="cancel" class="close" type="submit" aria-label="关闭"></button>

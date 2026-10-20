@@ -112,7 +112,7 @@ function buildDisplayBenchStatics() {
         + dbSlider({ label: "SOC", key: "bms.soc_pct", unit: "%", title: "大于 100 时车手屏判无效" })
         + `<div class="db-flags">${dbSwitch({ label: "电压有效", key: "bms.voltage_valid" })}`
         + dbSwitch({ label: "电流有效", key: "bms.current_valid" }) + dbSwitch({ label: "SOC 有效", key: "bms.soc_valid" })
-        + `</div><p class="db-hint">有效位是 BMS 给每项标的“可信”标志，关闭后车手屏该项显示 --。</p>`
+        + `</div><p class="db-hint">关闭有效位后，车手屏对应读数显示 --。</p>`
         + `<p class="db-hint">车手屏 PWR（放电功率）<b data-derived="hv_power_kw">—</b> kW</p>`,
     }),
     dbCard({
@@ -123,7 +123,7 @@ function buildDisplayBenchStatics() {
         + dbField({ label: "允许回充电流", key: "sop.regen_a", unit: "A", step: 0.1 }) + `</div>`
         + `<div class="db-flags">${dbSwitch({ label: "功率限值有效", key: "sop.limits_valid", title: "0x4A0 的 LimitsValid 位" })}`
         + dbSwitch({ label: "电流限值有效", key: "sop.inputs_valid", title: "0x4A3 的 InputHealth 最高位" }) + `</div>`
-        + `<p class="db-hint">SOP 是电池此刻允许的最大放电/回收功率与电流。关闭有效位后车手屏对应数值显示 --；放电上限为 0 时 DISCH 行变红。</p>`,
+        + `<p class="db-hint">关闭有效位后显示 --；放电上限为 0 时 DISCH 行变红。</p>`,
     }),
     dbCard({
       title: "ECU 踏板与油压", context: "车手屏中栏：油门条、刹车条", ids: ["0x305"],
@@ -131,7 +131,7 @@ function buildDisplayBenchStatics() {
         + dbSlider({ label: "刹车油压", key: "pedal.oil_kpa", unit: "kPa", step: 0.1,
           extra: `<small class="db-slider-note">刹车条 <b data-derived="brake_pct">—</b> %</small>` })
         + `<div class="db-fields">${dbField({ label: "转向角", key: "pedal.steering_deg", unit: "°", step: 0.1, title: "车手屏收下但界面不使用" })}</div>`
-        + `<p class="db-hint">刹车条暂由油压推算：2.1 kPa 为 0%，4.9 kPa 为 90%</p>`,
+        + `<p class="db-hint">刹车条：2.1 kPa 为 0%，4.9 kPa 为 90%。</p>`,
     }),
     dbCard({
       title: "PDM 低压", context: "车手屏右栏：LV 低压电压 / 电流 / 功率", ids: ["0x5A0", "0x5A1"], node: "pdm",
@@ -141,7 +141,7 @@ function buildDisplayBenchStatics() {
         + dbField({ label: "累计电量", key: "pdm.energy_wh", unit: "Wh", step: 0.01 }) + `</div>`
         + `<div class="db-flags">${dbSwitch({ label: "功率按 V×I", key: "pdm.power_auto" })}`
         + dbSwitch({ label: "电流传感器离线", key: "pdm.offline", title: "PDM 读不到 INA226 时，四个字段同时发无效占位值" }) + `</div>`
-        + `<p class="db-hint">传感器离线时车手屏低压行显示 --；功率勾选“按 V×I”时由电压乘电流算出。</p>`,
+        + `<p class="db-hint">传感器离线时，车手屏低压行显示 --。</p>`,
     }),
     dbCard({
       title: "风扇控制器", context: "车手屏右栏：三路风扇转速与占空比", ids: ["0x5A2"], wide: true,
@@ -165,7 +165,7 @@ function buildDisplayBenchStatics() {
       title: "胎温模块", context: "车手屏左栏：四轮胎面温度图", ids: ["0x071", "0x072", "0x073", "0x074"], node: "tire", wide: true,
       body: `<div class="db-tires">${dbTireBlock("fl", "左前 FL", "0x072", "内→外")}${dbTireBlock("fr", "右前 FR", "0x071", "外→内")}`
         + `${dbTireBlock("rl", "左后 RL", "0x073", "外→内")}${dbTireBlock("rr", "右后 RR", "0x074", "内→外")}</div>`
-        + `<p class="db-hint">每个轮胎 4 个测点，测点次序按帧内排列（标注的是胎面从外到内或从内到外）；车手屏最高显示 200 ℃。</p>`,
+        + `<p class="db-hint">每轮 4 个测点，按帧内顺序；车手屏上限 200 ℃。</p>`,
     }),
   ].join("");
 

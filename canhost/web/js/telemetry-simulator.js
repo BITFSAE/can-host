@@ -174,8 +174,10 @@ function renderTelemetrySimulator() {
   text("#simulatorOutputSummary", outputNames.length ? outputNames.join(" + ") : "等待配置");
   const setOutput = (name, enabled, detail) => {
     const card = $(`#simulator${name}Card`);
-    card.classList.toggle("active", enabled && running);
-    card.classList.toggle("failed", enabled && failed);
+    // classList.toggle 的第二参数为 undefined 时会退化成“翻转”，未配置时就
+    // 会在每次轮询里来回切换；这里显式收成布尔值。
+    card.classList.toggle("active", enabled === true && running);
+    card.classList.toggle("failed", enabled === true && failed);
     text(`#simulator${name}State`, enabled ? failed ? "已停止" : running ? "正在输出" : "已配置" : "未启用");
     text(`#simulator${name}Detail`, enabled ? detail : "—");
   };

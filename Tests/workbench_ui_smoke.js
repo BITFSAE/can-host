@@ -77,7 +77,7 @@ async function main() {
   assert.match(view(complete).text, /释放 PA0/);
   assert.equal(view({...complete, age: 1.501}).text, "等待数据");
   assert.equal(view({...complete, age: null}).complete, false);
-  assert.equal(view({...complete, legacy_end_version: 0}).text, "固件未提供");
+  assert.equal(view({...complete, legacy_end_version: 0}).text, "固件未提供该状态");
   assert.equal(view({...complete, legacy_end_version: 3}).text, "状态版本未知");
   assert.equal(view(complete, 1).complete, false);
   assert.equal(view(complete, null).text, "等待数据");

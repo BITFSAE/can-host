@@ -1,11 +1,11 @@
 # DBC 工作台
 
-本文说明“监视 → DBC 工作台”：载入 DBC 后实时解码总线、画曲线、编辑并保存 DBC、按信号发送，以及把 DBC 与总线实际情况对账。连接、记录和原始帧发送见 [`CAN上位机与工具使用.md`](CAN上位机与工具使用.md)；开发、测试和打包见 [`开发与发布.md`](开发与发布.md)。
+本文说明“监视 → DBC 工作台”：载入 DBC 后实时解码总线、画曲线、编辑并保存 DBC、按信号发送，以及把 DBC 与总线实际情况比对。连接、记录和原始帧发送见 [`CAN上位机与工具使用.md`](CAN上位机与工具使用.md)；开发、测试和打包见 [`开发与发布.md`](开发与发布.md)。
 
 ## 1. 职责与边界
 
 - DBC 工作台只用于查看和调试，不驱动任何页面状态机，也不进入底栏常看值。BMS、整车、风扇和台架页面仍只认 `canhost/decoders.py`，两处定义不得互相替代。
-- 它不拥有 CAN 连接，也不打开总线：解码读的是 CAN 监视器已经收到的帧，曲线与对账由接收线程上的只读观察者记录。发送只生成数据，真正下发沿用监视器的原始帧发送，确认弹窗、受保护 ID 拒绝和“模拟与回放不可写”全部照旧。
+- 它不拥有 CAN 连接，也不打开总线：解码读的是 CAN 监视器已经收到的帧，曲线与比对由接收线程上的只读观察者记录。发送只生成数据，真正下发沿用监视器的原始帧发送，确认弹窗、受保护 ID 拒绝和“模拟与回放不可写”全部照旧。
 - 整车 DBC 的权威位置在 `../vehicle-interfaces/can/`，固件与 DBC 不一致时以固件为准。位于 `vehicle-interfaces` 目录下的 DBC 默认只读，要改动中央库本身，走该仓库的校验与提交流程；在上位机里改动时先“另存为”副本。
 
 ## 2. 文件与总线绑定
@@ -84,9 +84,9 @@ Vector 的 `VECTOR__INDEPENDENT_SIG_MSG` 显示为“未使用信号”，保留
 
 修改信号值后，旧编码预览立即失效，编码完成前禁用发送。快速连续输入、切换报文或数据源时，过时的编码结果会被忽略。
 
-## 7. 对账
+## 7. 比对
 
-“对账”页把 DBC 与总线实际情况逐项对照，实时统计或对账一个记录文件：
+“比对”页把 DBC 与总线实际情况逐项对照，实时统计或比对一个记录文件：
 
 | 项目 | 判定 |
 |---|---|
@@ -114,9 +114,9 @@ Vector 的 `VECTOR__INDEPENDENT_SIG_MSG` 显示为“未使用信号”，保留
 | `dbc_save_review` / `dbc_save` / `dbc_choose_save` / `dbc_compare` | 评审、保存、另存为和两个已打开 DBC 的差异对比 |
 | `dbc_live` | 最新帧解码、报文摘要、未识别帧和重复 ID |
 | `dbc_series_set` / `dbc_series_fetch` / `dbc_series_clear` | 实时曲线订阅与增量取回 |
-| `dbc_audit` | 实时对账：开始、停止、重置、取报告 |
+| `dbc_audit` | 实时比对：开始、停止、重置、取报告 |
 | `dbc_form` / `dbc_encode` | 按信号发送的初值和编码；发送仍走原始帧接口 |
-| `dbc_trace_choose` / `dbc_trace_series` / `dbc_trace_audit` / `dbc_trace_export` / `dbc_trace_close` | 记录文件曲线、对账和导出 |
+| `dbc_trace_choose` / `dbc_trace_series` / `dbc_trace_audit` / `dbc_trace_export` / `dbc_trace_close` | 记录文件曲线、比对和导出 |
 | `dbc_save_text` | 保存页面生成的文本（曲线 CSV） |
 
 编辑操作是 JSON：`add_message`、`set_message`、`delete_message`、`duplicate_message`、`move_message`、`add_signal`、`set_signal`、`delete_signal`、`duplicate_signal`、`move_signal`、`set_choices`、`add_node`、`rename_node`、`delete_node`、`set_comment`、`set_value_table`、`set_attr_def`、`delete_attr_def`、`set_attr_value`、`set_version`。多条操作一起提交时任一条失败则全部回退。
@@ -127,24 +127,24 @@ Vector 的 `VECTOR__INDEPENDENT_SIG_MSG` 显示为“未使用信号”，保留
 |---|---|
 | 报文一直“等待数据” | 该 DBC 是否绑定到当前数据源的总线；数据源对应的连接是否在线；ID 的标准/扩展类型是否与 DBC 一致 |
 | 文件卡显示“非当前总线” | 在文件卡下拉里选当前总线，或切换页面顶部的 CAN1/CANB |
-| “DLC 不符” | 固件实际发送长度与 DBC 不同；到“对账”页确认，以固件为准修 DBC |
+| “DLC 不符” | 固件实际发送长度与 DBC 不同；到“比对”页确认，以固件为准修 DBC |
 | 保存被拒绝并跳到“校验” | 修正列出的错误；重叠的信号可拖到空位 |
 | 保存提示字符无法用 GBK 保存 | 改用 UTF-8，或去掉该字符 |
 | CANdb++ 打不开 | 用“CANdb++ 规整保存”（GBK + 段落顺序）；打开新保存的文件而不是刷新旧窗口 |
 | 编辑被拒绝“只读” | 中央库 DBC：另存为副本后编辑 |
 | 曲线没有数据 | 先在“实时”页确认信号有值；记录文件曲线要选对 CAN1/CANB 绑定 |
-| 对账报“周期不一致”但硬件正常 | 核对 DBC 的 `GenMsgCycleTime`；0 表示非周期，不参与对账 |
+| 比对报“周期不一致”但硬件正常 | 核对 DBC 的 `GenMsgCycleTime`；0 表示非周期，不参与比对 |
 
 ## 10. 调试与验证
 
-- 单元测试：`Tests/test_dbc_document.py`（保真读写、编辑操作、CANdb++ 文本）、`test_dbc_decode.py`（解码、位布局对照 cantools 编码器）、`test_dbc_workspace.py`（文件、历史、保存、实时、曲线、对账、记录文件）、`test_dbc_api.py`（接口与接收链路）、`test_dbc_ui.py` 与 `Tests/dbc_ui_smoke.js`（页面接线、位布局与后端逐位一致、显示规则）。存在同级 `vehicle-interfaces` 时，另有四份团队 DBC 的字节级往返与解码测试。
-- 交互回归：`Tests/dbc_interaction_smoke.js` 验证导航状态记忆、存储不可用时的导航、只读位图选择、编码请求过时失效、对账数据源隔离、文件切换与请求乱序、未使用信号呈现和发送表单文件隔离，由 `test_dbc_ui.py` 执行。
-- 无硬件看界面：`scripts/ui_preview.py` 把 DBC 接口转发到连着内置模拟通道的真实后端，载入中央库 DBC 即可看到真实的解码、曲线、编辑和对账；预览时用 `XDG_CONFIG_HOME` 指向临时目录，避免改动真实用户设置。
-- 实体验证：把中央库 DBC 绑定到对应总线，在实车或台架上先看“对账”，再逐条核对关键信号；本页的解码不能替代对固件的核对。
+- 单元测试：`Tests/test_dbc_document.py`（保真读写、编辑操作、CANdb++ 文本）、`test_dbc_decode.py`（解码、位布局对照 cantools 编码器）、`test_dbc_workspace.py`（文件、历史、保存、实时、曲线、比对、记录文件）、`test_dbc_api.py`（接口与接收链路）、`test_dbc_ui.py` 与 `Tests/dbc_ui_smoke.js`（页面接线、位布局与后端逐位一致、显示规则）。存在同级 `vehicle-interfaces` 时，另有四份团队 DBC 的字节级往返与解码测试。
+- 交互回归：`Tests/dbc_interaction_smoke.js` 验证导航状态记忆、存储不可用时的导航、只读位图选择、编码请求过时失效、比对数据源隔离、文件切换与请求乱序、未使用信号呈现和发送表单文件隔离，由 `test_dbc_ui.py` 执行。
+- 无硬件看界面：`scripts/ui_preview.py` 把 DBC 接口转发到连着内置模拟通道的真实后端，载入中央库 DBC 即可看到真实的解码、曲线、编辑和比对；预览时用 `XDG_CONFIG_HOME` 指向临时目录，避免改动真实用户设置。
+- 实体验证：把中央库 DBC 绑定到对应总线，在实车或台架上先看“比对”，再逐条核对关键信号；本页的解码不能替代对固件的核对。
 
 ## 11. 待确认与已知不足
 
 - 拖入文件和系统文件对话框在 Windows WebView2 与 macOS WKWebView 的表现尚待实机核对；打开按钮始终可用。
 - 只支持经典 CAN（DLC 0..8）；含 CAN FD 报文的 DBC 可载入和解码，校验会提示。
 - 环境变量、信号组、关系属性等语句被保留但没有编辑界面；J1939 / GMLAN 匹配、KCD/SYM/ARXML 导入未实现。
-- 尚未做“DBC 与 `decoders.py` 逐帧一致性检查”，固件、DBC 与上位机三方的一致性目前靠对账页和既有协议测试分别保证。
+- 尚未做“DBC 与 `decoders.py` 逐帧一致性检查”，固件、DBC 与上位机三方的一致性目前靠比对页和既有协议测试分别保证。

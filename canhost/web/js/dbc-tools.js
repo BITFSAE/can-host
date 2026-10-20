@@ -224,7 +224,7 @@ async function dbcAuditCall(action) {
   const source = dbcUi.source;
   const reply = await state.api.dbc_audit(source, action);
   if (source !== dbcUi.source) return;
-  if (!reply?.ok) { toast(reply?.error || "对账失败", true); return; }
+  if (!reply?.ok) { toast(reply?.error || "比对失败", true); return; }
   dbcAudit.running = reply.running;
   dbcAudit.bus = reply.bus;
   dbcAudit.report = reply.report;
@@ -243,7 +243,7 @@ async function dbcAuditTraceRun() {
     if (!trace) return;
   }
   const reply = await state.api.dbc_trace_audit(trace.summary.id, trace.bus);
-  if (!reply?.ok) return toast(reply?.error || "记录文件对账失败", true);
+  if (!reply?.ok) return toast(reply?.error || "记录文件比对失败", true);
   dbcAudit.report = reply.report;
   dbcAudit.mode = "trace";
   dbcAudit.title = trace.summary.name;
@@ -276,7 +276,7 @@ function dbcAuditHtml(report) {
   ].join("");
   const clean = !sections && report.frames > 0 && report.window_ok
     ? '<div class="panel"><div class="dbc-audit-ok">统计窗口内 DBC 与总线一致：没有未识别 ID、DLC 或周期偏差，数值都在声明范围内。</div></div>' : "";
-  const wait = !report.frames ? '<div class="panel"><div class="empty-state">还没有统计到帧。连接 CAN（或载入记录文件）后点“开始对账”，窗口越长，“没出现的报文”越可信。</div></div>'
+  const wait = !report.frames ? '<div class="panel"><div class="empty-state">还没有统计到帧。连接 CAN（或载入记录文件）后点“开始比对”，窗口越长，“没出现的报文”越可信。</div></div>'
     : !report.window_ok ? '<div class="note">统计窗口不足 3 秒，“没出现的报文”暂不判断。</div>' : "";
   return wait + sections + clean + (report.overflow ? '<div class="note">不同 ID 超过上限，部分帧未统计。</div>' : "");
 }
@@ -290,7 +290,7 @@ function renderDbcAudit() {
       dbcAudit.running = reply.running;
       dbcAudit.report = reply.report;
       dbcAudit.bus = reply.bus;
-    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取对账：${error.message || error}`, true); }).finally(() => {
+    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取比对：${error.message || error}`, true); }).finally(() => {
       if (source !== dbcAudit.source) return;
       dbcAudit.busy = false;
       dbcAudit.last = Date.now();
@@ -304,16 +304,16 @@ function renderDbcAudit() {
     tag.className = `tag ${dbcAudit.running ? "ok" : "neutral"}`;
   }
   const toggle = $("#dbcAuditToggle");
-  if (toggle) toggle.textContent = dbcAudit.running ? "停止对账" : "开始对账";
+  if (toggle) toggle.textContent = dbcAudit.running ? "停止比对" : "开始比对";
   text("#dbcAuditStats", report ? `${Number(report.frames).toLocaleString()} 帧 · ${report.ids} 个 ID · 已核对 ${report.clean_messages}/${report.known_messages} 条报文无问题 · 窗口 ${dbcNumber(report.window_s)} s` : "");
   dbcPaint("audit", $("#dbcAudit"), report ? dbcAuditHtml(report)
-    : '<div class="panel"><div class="empty-state">绑定 DBC 后开始对账，检查缺失报文、DLC、周期和信号取值。</div></div>');
+    : '<div class="panel"><div class="empty-state">绑定 DBC 后开始比对，检查缺失报文、DLC、周期和信号取值。</div></div>');
   if (dbcAudit.running && dbcAudit.mode === "live" && !dbcAudit.busy && Date.now() - dbcAudit.last > 900) {
     dbcAudit.busy = true;
     const source = dbcUi.source;
     state.api.dbc_audit(source, "report").then(reply => {
       if (reply?.ok && dbcAudit.mode === "live" && source === dbcAudit.source) { dbcAudit.report = reply.report; dbcAudit.running = reply.running; }
-    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取对账：${error.message || error}`, true); }).finally(() => { if (source === dbcAudit.source) { dbcAudit.busy = false; dbcAudit.last = Date.now(); } });
+    }).catch(error => { if (source === dbcAudit.source) toast(`无法读取比对：${error.message || error}`, true); }).finally(() => { if (source === dbcAudit.source) { dbcAudit.busy = false; dbcAudit.last = Date.now(); } });
   }
 }
 

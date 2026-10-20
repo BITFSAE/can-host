@@ -78,7 +78,13 @@ function markStaleData(idOrNode, stale) {
   const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
   if (node) node.classList.toggle("data-stale", !!stale);
 }
-function text(id, value) { const node = $(id); if (node) node.textContent = value; }
+function text(id, value) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = value;
+  // 占位文字沿用读数尺寸会把“等待数据”喊得比真实读数还响，统一降级显示。
+  node.classList.toggle("is-waiting", value === "等待数据");
+}
 function setClass(idOrNode, className, enabled) {
   const node = typeof idOrNode === "string" ? $(idOrNode) : idOrNode;
   if (node) node.classList.toggle(className, !!enabled);

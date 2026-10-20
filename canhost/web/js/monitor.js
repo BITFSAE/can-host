@@ -302,7 +302,8 @@ function renderReplay() {
   text("#replayFile", connection.channel);
   text("#replayPosition", `${timeLabel(replay.position)} / ${timeLabel(replay.duration)}`);
   $("#replaySeek").value = replay.duration ? Math.round(replay.position / replay.duration * 1000) : 0;
-  $("#replayPlay").textContent = replay.paused ? "▶" : "Ⅱ";
+  $("#replayPlay").textContent = replay.paused ? "播放" : "暂停";
+  $("#replayPlay").setAttribute("aria-label", replay.paused ? "继续回放" : "暂停回放");
   $("#replaySpeed").value = String(replay.speed);
 }
 

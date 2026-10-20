@@ -83,10 +83,13 @@ function bindBmsControls() {
     toast(`已读取 ${result.records.length} / ${result.count} 条重要故障日志`);
     await poll();
   });
-  $("#faultReset").addEventListener("click", () => confirmCommand("fault_reset", {}, "故障保持复位", "只有实时一级、二级告警已清除且 HV_ACC 释放时，主控才会执行复位。", true));
+  $("#faultReset").addEventListener("click", () => confirmCommand("fault_reset", {}, "复位故障", "解除主控故障锁存。需一级、二级告警已清除且 HV_ACC 已释放。", true));
   $("#onlyActiveAlarms").addEventListener("change", event => {
     state.onlyActiveAlarms = event.target.checked;
     renderAlarms();
+  });
+  $("#showAlarmRules").addEventListener("change", event => {
+    $("#alarmMatrix").classList.toggle("show-rules", event.target.checked);
   });
   $("#copyFaultCode").addEventListener("click", async () => {
     const code = $("#faultCode").textContent;
@@ -140,9 +143,9 @@ function renderOverview() {
   $("#socBar").style.width = socFresh ? `${Math.max(0, Math.min(100, o.soc_pct))}%` : "0%";
   const delta = cellExtremesFresh && o.max_cell_mv != null && o.min_cell_mv != null ? o.max_cell_mv - o.min_cell_mv : null;
   text("#cellDelta", delta == null ? "等待数据" : fmt(delta, 0));
-  text("#cellExtremes", delta == null ? "最高 / 最低 —" : `${o.max_cell_mv} / ${o.min_cell_mv} mV`);
+  text("#cellExtremes", delta == null ? "最高 / 最低 —" : `最高 ${o.max_cell_mv} / 最低 ${o.min_cell_mv} mV`);
   const sumDelta = voltageFresh && cellSumFresh && o.cell_sum_v != null ? o.voltage_v - o.cell_sum_v : null;
-  text("#cellSumDelta", sumDelta == null ? "单体累加 —" : `单体累加 ${fmt(o.cell_sum_v, 1)} V · 差 ${fmt(sumDelta, 1)} V`);
+  text("#cellSumDelta", sumDelta == null ? "单体累加 —" : `单体累加 ${fmt(o.cell_sum_v, 1)} V · 与总压差 ${fmt(sumDelta, 1)} V`);
   const relayFresh = relay.command_age != null && relay.command_age <= 1.5;
   const hvFresh = hv.age != null && hv.age <= 1.5;
   text("#prechargeVoltage", relayFresh ? fmt(relay.precharge_voltage_v, 1) : "等待数据");
@@ -154,6 +157,7 @@ function renderOverview() {
   const precharge = hvFresh && hv.precharge != null ? hv.precharge : relayFresh ? relay.precharge : null;
   setClass("#prechargeRelay", "closed", precharge);
   text("#prechargeRelay em", precharge == null ? "—" : precharge ? "闭合" : "断开");
+  $("#hvUnavailable")?.classList.toggle("hidden", hvFresh || relayFresh);
   const hvOutputName = !overviewFresh ? "等待数据" : o.state === 4 ? "预充中" : o.state === 5 || (positive && negative) ? "已接通"
     : o.state === 7 ? "故障保持" : hvFresh ? "已断开" : "等待数据";
   text("#hvOutput", hvOutputName);
@@ -194,7 +198,7 @@ function renderThermal(overview, relay, overviewFresh) {
   text("#tempDelta", spread == null ? "等待数据" : `${spread} °C`);
   text("#fanDuty", !thermalFresh || relay.fan_duty_pct == null ? "等待数据" : `${relay.fan_duty_pct} %`);
   text("#fanRpm", !thermalFresh || relay.fan_rpm == null ? "—" : `${relay.fan_rpm} rpm`);
-  text("#coolingTag", !thermalFresh ? "等待数据" : relay.cooling == null ? "目标 —" : relay.cooling ? "目标：请求" : "目标：关闭");
+  text("#coolingTag", !thermalFresh ? "等待数据" : relay.cooling == null ? "风扇目标 —" : relay.cooling ? "风扇目标：开启" : "风扇目标：关闭");
   $("#coolingTag").className = `state-text ${thermalFresh && relay.cooling ? "ok" : ""}`;
   const fanFlags = relay.fan_flags;
   let fanStatus = "等待数据";
@@ -230,8 +234,8 @@ function renderImd(imd) {
 
 function renderModules() {
   if (state.snapshot.raw_cell_data_available !== true) {
-    $("#moduleAverages").innerHTML = "";
-    text("#moduleSummary", "CANB 无单体原始数据");
+    $("#moduleAverages").innerHTML = '<div class="module-empty">模组明细只在 CAN1 广播；连接 CAN1 后显示六个模组的平均电压、温度与压差。</div>';
+    text("#moduleSummary", "CAN1 未连接");
     $("#moduleSummary").className = "state-text";
     return;
   }
@@ -316,7 +320,7 @@ function renderChargeTiming(overview, connection, fault) {
   if (!currentFresh) {
     timing.lastTickMs = null;
     text("#chargeTimingState", chargeActive ? "等待数据" : timing.elapsedMs ? "本次已停止" : "未充电");
-    text("#chargeElapsed", durationLabel(timing.elapsedMs / 1000));
+    text("#chargeElapsed", timing.elapsedMs || chargeActive ? durationLabel(timing.elapsedMs / 1000) : "—");
     text("#chargeRemaining", "—");
     return;
   }
@@ -332,7 +336,7 @@ function renderChargeTiming(overview, connection, fault) {
   }
 
   text("#chargeTimingState", chargeActive ? "充电计时中" : timing.elapsedMs ? "本次已停止" : "未充电");
-  text("#chargeElapsed", durationLabel(timing.elapsedMs / 1000));
+  text("#chargeElapsed", timing.elapsedMs || chargeActive ? durationLabel(timing.elapsedMs / 1000) : "—");
 
   const soc = Number(overview.soc_pct);
   const estimateCurrent = timing.averageCurrentA;
@@ -384,9 +388,9 @@ function drawTrend() {
   text("#trendCurrent", Number.isFinite(latestCurrent) ? `${fmt(latestCurrent, 1)} A` : "等待数据");
   text("#trendPrecharge", Number.isFinite(latestPrecharge) ? `${fmt(latestPrecharge, 1)} V` : "等待数据");
 
-  const pad = { left: 48, right: 48, top: 12, bottom: 24 };
+  const pad = { left: 56, right: 56, top: 24, bottom: 24 };
   const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
-  const axisFont = '10px "SF Mono", "Cascadia Mono", Consolas, monospace';
+  const axisFont = '10.5px "SF Mono", "Cascadia Mono", Consolas, monospace';
   const colors = trendColors();
   const labelColor = cssVar("--chart-label", "#7c7f7d");
   const gridColor = cssVar("--chart-grid", "#2d2f31");
@@ -403,17 +407,16 @@ function drawTrend() {
       ctx.fillStyle = labelColor;
       if (left && Number.isFinite(left.min)) {
         ctx.textAlign = "right";
-        ctx.fillText(`${(left.max - (left.max - left.min) * row / 4).toFixed(1)}`, pad.left - 7, y + 3);
+        const value = (left.max - (left.max - left.min) * row / 4).toFixed(1);
+        ctx.fillText(row === 0 ? `${value} V` : value, pad.left - 7, y + 3);
       }
       if (right && Number.isFinite(right.min)) {
         ctx.textAlign = "left";
-        ctx.fillText(`${(right.max - (right.max - right.min) * row / 4).toFixed(1)}`, width - pad.right + 7, y + 3);
+        const value = (right.max - (right.max - right.min) * row / 4).toFixed(1);
+        ctx.fillText(row === 0 ? `${value} A` : value, width - pad.right + 7, y + 3);
       }
     }
   }
-  ctx.fillStyle = labelColor; ctx.textAlign = "left"; ctx.font = axisFont;
-  ctx.fillText("V", 2, pad.top + 3);
-  ctx.textAlign = "right"; ctx.fillText("A", width - 2, pad.top + 3);
 
   if (trends.length < 2) {
     ctx.fillStyle = cssVar("--chart-axis", "#87969c");
@@ -548,6 +551,7 @@ function renderAlarms() {
     const ruleText = alarmRuleText(alarm.index, thresholds);
     alarmTitle.textContent = alarm.name;
     alarmRule.textContent = ruleText;
+    node.title = `统一故障码 bit ${alarm.index} · ${ruleText}`;
     node.querySelector("em").textContent = alarm.index === 22 && ((levelReceived && alarm.level) || faultCodeActive) ? "事件触发"
       : levelReceived && alarm.level === 1 ? "一级故障"
       : levelReceived && alarm.level === 2 ? "二级告警"
@@ -602,7 +606,7 @@ function renderConfig() {
   text("#displayUv", hasThresholdReport ? `${thresholds.uv_mv} mV` : "等待数据");
   text("#displayOt", hasThresholdReport ? `${thresholds.ot_c} °C` : "等待数据");
   text("#displayUt", hasThresholdReport ? `${thresholds.ut_c} °C` : "等待数据");
-  const thresholdLabel = state.dirty.thresholds ? "页面值待写入" : hasThresholdReport ? "已从主控同步" : "等待主控回报";
+  const thresholdLabel = state.dirty.thresholds ? "页面值待写入" : hasThresholdReport ? "已与主控一致" : "等待主控回报";
   text("#thresholdSync", thresholdLabel);
   $("#thresholdSync").className = `tag ${state.dirty.thresholds ? "warn" : hasThresholdReport ? "ok" : "neutral"}`;
   if (!hasThresholdReport && !state.dirty.thresholds) {
@@ -617,7 +621,7 @@ function renderConfig() {
   setPersistentButtonState("#sendThresholds", !hasThresholdReport && !state.dirty.thresholds, flashState);
 
   text("#switchVersion", hasSwitchReport && config.switch_version != null
-    ? `回报 V${config.switch_version}` : "等待数据");
+    ? `配置版本 V${config.switch_version}` : "等待数据");
   const statusList = $("#switchStatusList");
   if (statusList && state.bootstrap?.switch_catalog) {
     const enabledCount = state.bootstrap.switch_catalog.filter(item => switches[item.key]).length;
@@ -771,13 +775,19 @@ function renderControls() {
     && connection.bus_profile === "can1" && !mismatch;
   const fresh = connection.summary_age != null && connection.summary_age <= 1.5;
   const allowedState = fresh && [2, 3, 7].includes(overview.state);
-  setClass("#lockState", "ok", allowedState); setClass("#lockFresh", "ok", fresh);
+  setClass("#lockState", "ok", allowedState);
+  setClass("#lockState", "bad", fresh && !allowedState);
+  setClass("#lockFresh", "ok", fresh);
+  setClass("#lockFresh", "bad", !fresh);
+  text("#lockStateText", !fresh ? "主控状态未知" : allowedState ? "主控允许写入" : "主控当前禁止写入");
+  text("#lockFreshText", fresh ? "状态帧新鲜" : "状态帧已超时");
   // 徽标必须反映实际可用的写通道：接反或非 CAN1 时不能再显示“CAN1 已连接”。
   setClass("#lockConnected", "ok", connectedCan1);
+  setClass("#lockConnected", "bad", !connectedCan1);
   text("#lockConnectedText", connectedCan1 ? "CAN1 已连接"
     : replay ? "历史回放"
     : mismatch ? "CAN1 疑似接反"
-    : connection.connected ? "非 CAN1 连接" : "CAN1 未连接");
+    : connection.connected ? "当前连接不是 CAN1" : "CAN1 未连接");
   const lockNode = $("#lockConnected");
   if (lockNode) lockNode.title = connectedCan1 ? "当前主连接为 CAN1"
     : replay ? "历史回放为只读，不能发送 F405 工具命令"
@@ -805,9 +815,9 @@ function renderRtcReply(reply, runtime) {
 function buildSwitchList() {
   const catalog = state.bootstrap?.switch_catalog || [];
   $("#switchList").innerHTML = catalog.map(item =>
-    `<label class="switch-row" data-key="${item.key}" title="${item.name} · ${item.code} · ${item.variable}"><i class="switch-dot"></i>`
-    + `<span class="switch-label"><b>${item.name}</b><small>${item.code}</small></span>`
-    + `<b class="switch-state">等待</b><input type="checkbox" data-key="${item.key}"><span class="switch-track"></span></label>`
+    `<label class="switch-row" data-key="${item.key}" title="${item.name} · ${item.code} · ${item.variable}">`
+    + `<span class="switch-label"><b>${item.name}</b></span>`
+    + `<b class="switch-state">等待</b><input type="checkbox" data-key="${item.key}" aria-label="${item.name}"><span class="switch-track"></span></label>`
   ).join("");
 }
 
@@ -839,7 +849,7 @@ function updateSwitchRowState() {
       label.textContent = "等待";
       row.classList.remove("dirty", "on");
     } else {
-      label.textContent = enabled ? "启用" : "关闭";
+      label.textContent = enabled ? "开" : "关";
       row.classList.remove("dirty");
     }
   });
@@ -912,7 +922,7 @@ function buildCellGrids() {
   container.innerHTML = "";
   const placeholder = document.createElement("div");
   placeholder.className = "filter-empty";
-  placeholder.innerHTML = "<b>当前没有异常或缺失数据</b><span>138 串电压与 48 路温度均在当前阈值范围内。</span>";
+  placeholder.innerHTML = '<b class="ok">当前没有异常或缺失数据</b><span>138 串电压与 48 路温度均在当前阈值范围内。</span>';
   placeholder.classList.add("hidden");
   container.appendChild(placeholder);
   const modules = [];
@@ -960,7 +970,7 @@ function renderCells() {
     const container = $("#cellModules");
     if (state.cellRefs || !container.firstElementChild) {
       state.cellRefs = null;
-      container.innerHTML = '<div class="filter-empty"><b>CANB 无单体原始数据</b><span>请连接 CAN1 查看 138 串电压和 48 路温度。</span></div>';
+      container.innerHTML = '<div class="filter-empty"><b>CAN1 未连接，单体数据不可用</b><span>CANB 只转发整车镜像；逐串电压和温度只在 CAN1 广播。</span></div>';
     }
     return;
   }
@@ -1039,12 +1049,11 @@ function confirmCommand(name, values, title, message, destructive = false) {
   state.pendingIvtAction = null;
   state.pendingFanCommand = null;
   text("#confirmTitle", title); text("#confirmMessage", message);
-  setConfirmModeBadge(destructive ? "危险操作 · 需二次确认" : "CAN1 工具命令", destructive ? "bad" : "");
+  setConfirmModeBadge(destructive ? "危险操作 · 需二次确认" : "CAN1 命令", destructive ? "bad" : "");
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CAN1 · ${conn.bitrate ? conn.bitrate / 1000 : 500} kbit/s\n`
     + `主控状态：${state.snapshot.overview.state_name}\n`
-    + `告警等级：${state.snapshot.overview.alarm_level_name}\n`
-    + `命令：${name}`);
+    + `告警等级：${state.snapshot.overview.alarm_level_name}`);
   $("#confirmCheck").checked = false; $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";
   $("#confirmDialog").showModal();
@@ -1056,7 +1065,7 @@ function legacyChargeEndView(hv, chargerType) {
   if (![0, 1].includes(chargerType) || hv.age == null || hv.age > 1.5) return result;
   if (chargerType === 1 && hv.legacy_end_version === 1) return {...result, text: "Chroma 未启用"};
   if (![1, 2].includes(hv.legacy_end_version)) {
-    return {...result, text: hv.legacy_end_version ? "状态版本未知" : "固件未提供"};
+    return {...result, text: hv.legacy_end_version ? "状态版本未知" : "固件未提供该状态"};
   }
   const status = hv.legacy_end_state;
   result.text = hv.legacy_end_name || "状态未知";
