@@ -8,6 +8,7 @@
 - 修复布局缺陷：电芯与温度网格统一为两行，消除 BMU 卡片空单元；整车页按节点补齐列数，轮胎温度测点与读数分列；模拟器输出卡不再因 `classList.toggle` 收到 `undefined` 而反复显示失败；台架“发送”按钮不再占满整行。
 - 软件验证：全量 764 项测试通过（1 项平台跳过），JavaScript 语法检查通过；浏览器预览在 1600×1000 下核对深浅主题的总览、电芯、故障、命令、整车、风扇、监视器、DBC、编码器、IVT、台架、车手屏、模拟器及连接、更新、确认弹窗，页面脚本无未捕获错误。
 - 未验证：Windows WebView2 与 macOS WKWebView 原生窗口、实体 PCAN 操作流程。`p:has()` 在旧版 WebView2 不支持时只影响“等待数据”旁的单位是否隐藏，读数本身仍正确。
+- 已发布 [GitHub v0.9.30](https://github.com/BITFSAE/can-host/releases/tag/v0.9.30) 与 [CNB 镜像](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.30)，标签对应 `3b0a373`；主分支 Windows 测试通过，双平台构建、GitHub 7 个附件、CNB 同步与匿名下载校验均通过。
 
 ## 2026-10-14 BRT 编码器页：制动油压与开度
 
