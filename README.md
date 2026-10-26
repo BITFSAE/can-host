@@ -1,6 +1,6 @@
 # BITFSAE CAN Host
 
-BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CAN 记录与受控发送、MQTT 故障订阅，以及 F405、IVT 和风扇台架工作。程序采用 Python、PyWebView 和零构建前端，发布目标为 Windows 与 Apple Silicon macOS；两种发布包都以实体 PCAN-USB 联调为主要用途。
+BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CAN 记录与受控发送、MQTT 故障订阅，以及 F405、IVT 和风扇台架工作。程序采用 Python、PyWebView 和不需要构建的前端，发布目标为 Windows 与 Apple Silicon macOS；两种发布包都以实体 PCAN-USB 联调为主要用途。
 
 ## 文档入口
 
@@ -11,7 +11,7 @@ BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CA
 | 载入 DBC 实时解码、画曲线、编辑保存和比对 | [`DOC/DBC工作台.md`](DOC/DBC工作台.md) |
 | 标定或手动调试两套风扇 | [`DOC/风扇标定与手动调试指南.md`](DOC/风扇标定与手动调试指南.md) |
 | 查看待办、风险和未完成验证 | [`todo.md`](todo.md) |
-| 查看已发布与未发布变更 | [`CHANGELOG.md`](CHANGELOG.md) |
+| 查看已完成的变化和待办摘要 | [`CHANGELOG.md`](CHANGELOG.md) |
 | 查找接口权威仓库和文档职责 | [`DOC/README.md`](DOC/README.md) |
 
 ## 主要能力
@@ -19,11 +19,11 @@ BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CA
 - BMS：138 串电压、48 路温度、状态机、故障、告警、记录回放和受控参数命令。
 - 整车：SOP、BMS 镜像、PDM、ECU、胎温、赛会能量计和两套风扇遥测；整车风扇使用 V4 固定档位，并保留更换风扇所需的分回路标定与 CSV/JSON 导出。
 - 工程工具：CAN 监视与留档、F405 从控台架、IVT 配置、车手屏联调（模拟整车节点与方向盘）、BRT 编码器（读取、标定、配置与曲线）、电池箱风扇标定、MQTT 故障订阅。
-- DBC 工作台：载入 DBC 绑定到 CAN1/CANB，实时解码、信号曲线（实时与记录文件）、保真编辑与保存（含 CANdb++ 规整）、按信号发送和 DBC 与总线比对；只用于查看与调试。
+- DBC 工作台：载入 DBC 绑定到 CAN1/CANB，实时解码、信号曲线（实时与记录文件）、逐行保留原文的编辑与保存（含 CANdb++ 规整）、按信号发送和 DBC 与总线比对；只用于查看与调试。
 - 连接隔离：实体 CAN1、实体 CANB、台架、车手屏联调、BRT 编码器和 IVT 配置各自管理连接，不因切换页面而改变其他连接；一条 CANB 连接同时供给 BMS 镜像与整车页面。
-- 软件更新：并行核对 CNB 与 GitHub、按版本选择最新发布（同版本使用 CNB 下载），下载校验后可一键重启更新；升级后首次启动显示更新前后版本和本次更新条目，并可打开对应发布页或浏览版本历史。
+- 软件更新：并行核对 CNB 与 GitHub、按版本号选择较新发布（同版本使用 CNB 下载），下载校验后可重启更新；升级后首次启动显示更新前后版本和本次更新条目，并可打开对应发布页或浏览版本历史。
 
-## 支持边界
+## 运行环境
 
 | 环境 | 发布形式 | 实体 PCAN 依赖 |
 |---|---|---|
@@ -33,6 +33,24 @@ BITFSAE 车队 CAN 桌面上位机，用于 BMS 监视、整车 CANB 遥测、CA
 
 发布包可从 [GitHub Releases](https://github.com/BITFSAE/can-host/releases) 或 [CNB 国内镜像](https://cnb.cool/totok22/can-host/-/releases) 获取。“调试模拟”只在本地源码运行时显示，Windows 与 macOS 发布包均隐藏并拒绝该连接模式；模拟数据不经过驱动、适配器和实体总线，不能作为车辆或台架验收结果。
 
-## 接口与安全
+## 接口
 
-上位机只消费既有 CAN 契约，不定义新帧。BMS、FanController、PDM 和整车 DBC 的权威位置见 [`DOC/README.md`](DOC/README.md)。所有对实体设备生效的写命令必须使用对应的真实 PCAN 连接，并由后端校验总线、状态、参数和应答；通用发送区不能绕过项目已登记命令的专用页面。
+上位机只解析已有的 CAN 报文，不定义新帧。BMS、FanController、PDM 和整车 DBC 的权威位置见 [`DOC/README.md`](DOC/README.md)。
+
+## 源码结构
+
+| 路径 | 内容 |
+|---|---|
+| `canhost/` | 后端：CAN 连接、协议状态机、帧定义 `decoders.py`、各页面服务 |
+| `canhost/web/` | 前端：`index.html`、`styles.css`、按页面拆分的 `js/` |
+| `Tests/` | Python 单元测试与页面脚本测试 |
+| `DOC/` | 使用、DBC 工作台、风扇标定、开发与发布 |
+| `scripts/` | 版本说明、发布和浏览器预览脚本 |
+
+## 运行
+
+安装 `requirements.txt` 中的依赖后运行 `python -m canhost`。Windows 与 macOS 的虚拟环境、测试、打包和发布命令见 [`DOC/开发与发布.md`](DOC/开发与发布.md)。
+
+## 安全
+
+所有对实体设备生效的写命令必须使用对应的真实 PCAN 连接，并由后端校验总线、状态、参数和应答；通用发送区不能绕过项目已登记命令的专用页面。
