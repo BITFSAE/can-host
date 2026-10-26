@@ -25,6 +25,10 @@ const dbcUi = {
   stateRequest: 0,
   detailRequests: new Map(),
   selectionRequest: 0,
+  folds: {},
+  collapsedGroups: new Set(),
+  rowCache: new Map(),
+  commentOpen: false,
 };
 
 const DBC_BUS_LABEL = { can1: "CAN1", canb: "CANB", all: "全部总线", none: "不解码" };
@@ -36,10 +40,63 @@ const DBC_TAB_HINT = {
   send: "按信号填值生成数据，发送沿用原始帧发送的确认与保护",
   audit: "把 DBC 与总线上实际发生的情况逐项对照",
 };
+// 折叠状态的默认值：未识别帧和报文属性默认收起，其余展开。
+const DBC_FOLD_DEFAULTS = { files: false, watch: false, unknown: true, msgProps: true };
+const DBC_UNUSED_GROUP = "未使用信号";
+const DBC_ICON = {
+  watch: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>',
+  plot: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 19.5h17"/><path d="m4.5 15 4.5-5 4 3.5 6.5-8"/></svg>',
+  remove: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/></svg>',
+};
 
 /* ---------- 小工具 ---------- */
 
 function dbcApi() { return state.api && state.api.dbc_state ? state.api : null; }
+
+function dbcFolded(name) { return name in dbcUi.folds ? !!dbcUi.folds[name] : !!DBC_FOLD_DEFAULTS[name]; }
+
+function dbcToggleFold(name) {
+  dbcUi.folds[name] = !dbcFolded(name);
+  try { localStorage.setItem("canHostDbcFolds", JSON.stringify(dbcUi.folds)); } catch { /* storage may be disabled */ }
+  dbcUi.signatures = {};
+  dbcUi.rowCache.clear();
+  renderDbc();
+}
+
+/** 折叠按钮与面板状态同步；面板 hidden 表示整块不显示，folded 只收起内容。 */
+function dbcApplyFold(name, panel) {
+  const folded = dbcFolded(name);
+  panel?.classList.toggle("folded", folded);
+  panel?.querySelector(`[data-fold="${name}"]`)?.setAttribute("aria-expanded", String(!folded));
+  return folded;
+}
+
+/** 每个标签页自己的滚动区回到顶部（换文件、换报文时用）。 */
+function dbcScrollReset() {
+  $$("#page-dbc .dbc-scroll").forEach(node => { node.scrollTop = 0; });
+}
+
+/** 表格按行、按单元格就地更新：值变了只换对应单元格，按钮节点保持不动，
+ * 轮询刷新既不会整表重排，也不会吞掉正落在按钮上的点击。 */
+function dbcPatchRows(key, body, rows) {
+  if (!body) return;
+  const ids = rows.map(row => row.id).join("\n");
+  const cache = dbcUi.rowCache.get(key);
+  if (!cache || cache.ids !== ids || !body.rows || body.rows.length !== rows.length) {
+    body.innerHTML = rows.map(dbcRowHtml).join("");
+    dbcUi.rowCache.set(key, { ids, rows });
+    return;
+  }
+  rows.forEach((row, index) => {
+    const old = cache.rows[index];
+    const tr = body.rows[index];
+    if (old.cls !== row.cls) tr.className = row.cls;
+    row.cells.forEach((cell, column) => { if (old.cells[column] !== cell) tr.cells[column].outerHTML = cell; });
+  });
+  cache.rows = rows;
+}
+
+function dbcRowHtml(row) { return `<tr class="${row.cls}" ${row.attrs}>${row.cells.join("")}</tr>`; }
 
 /** 仅在内容变化时写 DOM，避免每次轮询重建表格。 */
 function dbcPaint(key, node, html) {
@@ -171,9 +228,11 @@ function dbcResetFileView(fileId) {
   }
   const search = $("#dbcSearch");
   if (search) search.value = "";
-  $(".dbc-content")?.scrollTo(0, 0);
+  dbcScrollReset();
   if ($("#dbcTree")) $("#dbcTree").scrollTop = 0;
+  dbcUi.collapsedGroups.clear();
   dbcUi.signatures = {};
+  dbcUi.rowCache.clear();
 }
 
 async function dbcSelectFile(fileId) {
@@ -193,7 +252,7 @@ async function dbcSelectFile(fileId) {
 }
 
 function dbcSelectMessage(key, signal = null) {
-  if (key !== dbcUi.selected.key) $(".dbc-content")?.scrollTo(0, 0);
+  if (key !== dbcUi.selected.key) { dbcScrollReset(); dbcUi.commentOpen = false; }
   dbcUi.selected = { key, signal };
   dbcUi.signatures.editor = "";
   renderDbc();
@@ -311,7 +370,6 @@ function renderDbc() {
     button.setAttribute("aria-selected", String(active));
     button.tabIndex = active ? 0 : -1;
   });
-  text("#dbcTabHint", DBC_TAB_HINT[dbcUi.tab] || "");
   if (dbcUi.tab === "live") renderDbcLive();
   else if (dbcUi.tab === "plot" && typeof renderDbcPlot === "function") renderDbcPlot();
   else if (dbcUi.tab === "edit" && typeof renderDbcEditor === "function") renderDbcEditor();
@@ -352,21 +410,26 @@ function renderDbcBindingNotice() {
 function renderDbcFiles() {
   const live = dbcLiveFor();
   const bound = new Set((live?.files || []).map(file => file.id));
+  const folded = dbcUi.files.length > 0 && dbcApplyFold("files", $("#dbcDirectory"));
+  if (!dbcUi.files.length) $("#dbcDirectory")?.classList.remove("folded");
+  text("#dbcFilesCount", String(dbcUi.files.length));
+  text("#dbcFilesCurrent", folded ? dbcCurrentFile()?.name || "" : "");
   let html = dbcUi.files.map(file => {
     const issues = file.errors ? `<span class="dbc-count bad" title="${file.errors} 个错误">${file.errors}</span>`
       : file.warnings ? `<span class="dbc-count warn" title="${file.warnings} 个警告">${file.warnings}</span>` : "";
     const options = (dbcUi.buses.length ? dbcUi.buses : Object.entries(DBC_BUS_LABEL).map(([key, label]) => ({ key, label })))
       .map(bus => `<option value="${bus.key}" ${bus.key === file.bus ? "selected" : ""}>${escapeHtml(bus.label)}</option>`).join("");
-    const flags = [file.readonly ? '<span title="中央库 DBC 默认只读；另存为后可编辑">只读</span>' : "",
-      file.disk_changed ? '<button class="dbc-mini" data-file-act="reload" title="磁盘上的文件已被改动">重新载入</button>' : "",
+    const flags = [file.readonly ? '<span class="dbc-flag" title="中央库 DBC 默认只读；另存为后可编辑">只读</span>' : "",
+      file.disk_changed ? '<button class="dbc-mini" type="button" data-file-act="reload" title="磁盘上的文件已被改动">重新载入</button>' : "",
       file.decode_error ? `<span class="dbc-count bad" title="${escapeHtml(file.decode_error)}">解析</span>` : "",
-      bound.has(file.id) ? "" : (file.bus === "none" ? "" : '<span title="当前数据源的总线没有绑定到这个文件">非当前总线</span>')]
+      bound.has(file.id) || file.bus === "none" ? "" : '<span class="dbc-flag warn" title="当前数据源的总线没有绑定到这个文件">非当前总线</span>']
       .filter(Boolean).join("");
-    return `<div class="dbc-file ${file.id === dbcUi.fileId ? "active" : ""}" data-file="${file.id}" title="${escapeHtml(file.path || "尚未保存")}">`
+    const path = file.path || "尚未保存";
+    return `<div class="dbc-file ${file.id === dbcUi.fileId ? "active" : ""}" data-file="${file.id}" title="${escapeHtml(`${path}\n${file.messages} 报文 · ${file.signals} 信号 · ${file.encoding_label}`)}">`
       + `<div class="dbc-file-head"><span class="dbc-file-name ${file.dirty ? "dirty" : ""}">${escapeHtml(file.name)}</span>${issues}`
-      + `<button class="dbc-file-close" data-file-act="close" aria-label="关闭 ${escapeHtml(file.name)}">×</button></div>`
+      + `<button class="dbc-file-close" type="button" data-file-act="close" aria-label="关闭 ${escapeHtml(file.name)}">×</button></div>`
       + `<div class="dbc-file-meta"><select data-file-act="bus" aria-label="总线绑定">${options}</select>`
-      + `<span>${file.messages} 报文 · ${file.signals} 信号 · ${escapeHtml(file.encoding_label)}</span>${flags}</div></div>`;
+      + `<span>${file.messages} 报文</span>${flags}</div></div>`;
   }).join("");
   if (!dbcUi.files.length) {
     const suggestions = dbcUi.suggestions.map(item =>
@@ -392,7 +455,6 @@ function renderDbcTree() {
     dbcPaint("tree", container, `<div class="empty-state">${dbcCurrentFile() ? "正在载入报文…" : "载入 DBC 后在这里选择报文。"}</div>`);
     return;
   }
-  const summaries = dbcMessageSummaries();
   const query = dbcUi.filter.trim().toLowerCase();
   const groups = new Map();
   for (const message of catalog.messages) {
@@ -400,27 +462,45 @@ function renderDbcTree() {
       const haystack = `${message.name} ${message.id_text} ${message.signals.map(signal => signal.name).join(" ")}`.toLowerCase();
       if (!haystack.includes(query)) continue;
     }
-    const group = message.virtual ? "未使用信号" : (message.senders[0] || "未指定发送节点");
+    const group = message.virtual ? DBC_UNUSED_GROUP : (message.senders[0] || "未指定发送节点");
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(message);
   }
   text("#dbcSearchResults", query ? `${[...groups.values()].reduce((count, messages) => count + messages.length, 0)} / ${catalog.messages.length} 条报文` : "");
   $("#dbcSearchClear")?.classList.toggle("hidden", !query);
   let html = "";
-  for (const [group, messages] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "zh"))) {
-    html += `<div class="dbc-group"><span>${escapeHtml(group)}</span><span>${messages.length}</span></div>`;
+  // “未使用信号”不是总线报文，排在最后。
+  const ordered = [...groups.entries()].sort((a, b) =>
+    Number(a[0] === DBC_UNUSED_GROUP) - Number(b[0] === DBC_UNUSED_GROUP) || a[0].localeCompare(b[0], "zh"));
+  for (const [group, messages] of ordered) {
+    const collapsed = !query && dbcUi.collapsedGroups.has(group);
+    html += `<button class="dbc-group" type="button" data-group="${escapeHtml(group)}" aria-expanded="${!collapsed}">`
+      + `<i class="dbc-chevron" aria-hidden="true"></i><span>${escapeHtml(group)}</span><span>${messages.length}</span></button>`;
+    if (collapsed) continue;
     for (const message of messages.sort((a, b) => a.id - b.id || Number(a.extended) - Number(b.extended))) {
-      const info = message.virtual ? { dot: "", label: "未使用信号" }
-        : dbcStateInfo(summaries.get(`${dbcUi.fileId}|${message.key}`));
       const active = message.key === dbcUi.selected.key;
-      html += `<button class="dbc-msg ${active ? "active" : ""}" type="button" role="option" aria-selected="${active}" data-key="${message.key}">`
-        + `<i class="dbc-dot ${info.dot}" title="${escapeHtml(info.label)}"></i>`
+      html += `<button class="dbc-msg ${active ? "active" : ""}" type="button" role="option" aria-selected="${active}" data-key="${message.key}"${message.virtual ? " data-virtual" : ""}>`
+        + '<i class="dbc-dot"></i>'
         + `<span class="dbc-msg-name" title="${escapeHtml(message.name)}">${escapeHtml(message.name)}</span>`
         + `<span class="dbc-msg-id">${message.virtual ? "—" : escapeHtml(message.id_text)}</span></button>`;
     }
   }
   if (!html) html = '<div class="empty-state">没有匹配的报文。</div>';
   dbcPaint("tree", container, html);
+  renderDbcTreeDots(container);
+}
+
+/** 状态点随每次轮询变化，单独就地更新，整棵目录不重建。 */
+function renderDbcTreeDots(container) {
+  const summaries = dbcMessageSummaries();
+  for (const button of container?.querySelectorAll?.(".dbc-msg") || []) {
+    const dot = button.firstElementChild;
+    const info = button.hasAttribute("data-virtual") ? { dot: "", label: DBC_UNUSED_GROUP }
+      : dbcStateInfo(summaries.get(`${dbcUi.fileId}|${button.dataset.key}`));
+    const cls = `dbc-dot ${info.dot}`.trim();
+    if (dot.className !== cls) dot.className = cls;
+    if (dot.title !== info.label) dot.title = info.label;
+  }
 }
 
 /** 实时页：选中报文的信号表、观察表和未识别帧。 */
@@ -448,24 +528,24 @@ function renderDbcLive() {
       ? `<dd class="bad">${summary.seen_dlc} / DBC ${entry.dlc}</dd>` : `<dd>${entry.dlc}</dd>`;
     const cycle = summary?.cycle_ms != null ? `${dbcNumber(summary.cycle_ms)} ms` : "—";
     const expected = entry.cycle_ms ? `${entry.cycle_ms} ms` : "—";
-    meta = `<dl class="dbc-fact"><dt>CAN ID</dt><dd>${entry.virtual ? "—" : escapeHtml(entry.id_text)} · ${entry.extended ? "扩展" : "标准"}</dd></dl>`
+    meta = `<dl class="dbc-fact"><dt>ID</dt><dd>${entry.virtual ? "—" : escapeHtml(entry.id_text)} <small>${entry.extended ? "扩展" : "标准"}</small></dd></dl>`
       + `<dl class="dbc-fact"><dt>DLC</dt>${dlc}</dl>`
-      + `<dl class="dbc-fact"><dt>周期 实测 / DBC</dt><dd>${cycle} / ${expected}</dd></dl>`
+      + `<dl class="dbc-fact" title="实测周期 / DBC 周期"><dt>周期</dt><dd>${cycle} <small>/ ${expected}</small></dd></dl>`
       + `<dl class="dbc-fact"><dt>距今</dt><dd class="${summary?.state === "stale" ? "warn" : ""}">${dbcAgeText(summary?.age_ms)}</dd></dl>`
       + `<dl class="dbc-fact"><dt>帧数</dt><dd>${summary ? Number(summary.count || 0).toLocaleString() : "—"}</dd></dl>`
-      + `<dl class="dbc-fact"><dt>最新数据</dt><dd><span class="dbc-bytes">${cells || "—"}</span></dd></dl>`
-      + (entry.senders.length ? `<dl class="dbc-fact"><dt>发送节点</dt><dd>${escapeHtml(entry.senders.join(", "))}</dd></dl>` : "")
-      + (entry.comment ? `<dl class="dbc-fact"><dt>说明</dt><dd>${escapeHtml(entry.comment)}</dd></dl>` : "");
+      + (entry.senders.length ? `<dl class="dbc-fact"><dt>发送</dt><dd>${escapeHtml(entry.senders.join(", "))}</dd></dl>` : "")
+      + `<dl class="dbc-fact dbc-fact-data"><dt>数据</dt><dd><span class="dbc-bytes">${cells || "—"}</span></dd></dl>`
+      + (entry.comment ? `<button type="button" class="dbc-live-comment ${dbcUi.commentOpen ? "open" : ""}" aria-expanded="${dbcUi.commentOpen}" title="${dbcUi.commentOpen ? "收起说明" : "展开完整说明"}">${escapeHtml(entry.comment)}</button>` : "");
   }
   dbcPaint("liveMeta", $("#dbcLiveMeta"), meta);
 
   const rows = $("#dbcSignalRows");
   if (!entry) {
-    dbcPaint("signals", rows, "");
+    dbcPatchRows("signals", rows, []);
     $("#dbcLiveEmpty")?.classList.remove("hidden");
   } else {
     const rowsData = summary?.signals || entry.signals.map(signal => ({ name: signal.name, unit: signal.unit, state: entry.virtual ? "unassigned" : "waiting", has_label: signal.choices.length > 0 }));
-    dbcPaint("signals", rows, rowsData.map(row => dbcSignalRow(entry, row, summary)).join(""));
+    dbcPatchRows("signals", rows, rowsData.map(row => dbcSignalRowData(entry, row, summary)));
     const hint = $("#dbcLiveEmpty");
     hint?.classList.toggle("hidden", !!summary || entry.virtual || entry.signals.length === 0);
     if (hint) hint.textContent = decoded && !fileMatches ? "同一 ID 优先由另一个 DBC 解码，请核对文件绑定。"
@@ -499,54 +579,67 @@ function dbcValueCells(row, stale) {
   return { value: `${escapeHtml(dbcNumber(row.value))}${unit}`, raw: escapeHtml(String(row.raw_text ?? row.raw)), label, cls };
 }
 
-function dbcSignalRow(entry, row, summary) {
+/** 信号行：id 用于就地更新，cells 是完整的 <td>，操作列只在观察 / 曲线状态变化时才换。 */
+function dbcSignalRowData(entry, row, summary) {
   const signal = entry.signals.find(item => item.name === row.name);
   const cells = dbcValueCells(row, summary?.state === "stale");
   const mux = signal?.mux?.role && signal.mux.role !== "none"
     ? `<small>${signal.mux.role === "multiplexor" ? "多路复用选择" : `复用值 ${signal.mux.value}`}</small>` : "";
   const watched = dbcWatchIndex(dbcUi.source, entry.key, row.name) >= 0;
   const plotted = typeof dbcPlotHas === "function" && dbcPlotHas(dbcUi.source, entry.key, row.name);
-  return `<tr class="${cells.cls} ${row.state}" data-signal="${escapeHtml(row.name)}">`
-    + `<td class="dbc-name" title="${escapeHtml(signal?.comment || "")}">${escapeHtml(row.name)}${mux}</td>`
-    + `<td class="dbc-value">${cells.value}</td><td>${cells.raw}</td><td>${cells.label}</td>`
-    + `<td>${dbcRangeBar(signal, row)}</td>`
-    + `<td><div class="dbc-row-actions"><button data-act="watch" ${entry.virtual ? "disabled" : ""} aria-pressed="${watched}" aria-label="${watched ? "取消观察" : "观察"} ${escapeHtml(row.name)}" class="${watched ? "on" : ""}">${watched ? "已观察" : "观察"}</button>`
-    + `<button data-act="plot" ${entry.virtual ? "disabled" : ""} aria-pressed="${plotted}" aria-label="${plotted ? "移除曲线" : "添加曲线"} ${escapeHtml(row.name)}" class="${plotted ? "on" : ""}">${plotted ? "已添加" : "曲线"}</button></div></td></tr>`;
+  const lock = entry.virtual ? " disabled" : "";
+  const name = escapeHtml(row.name);
+  return {
+    id: row.name, cls: `${cells.cls} ${row.state}`, attrs: `data-signal="${name}"`,
+    cells: [`<td class="dbc-name" title="${escapeHtml(signal?.comment || "")}">${name}${mux}</td>`,
+      `<td class="dbc-value">${cells.value}</td>`, `<td class="dbc-col-raw">${cells.raw}</td>`, `<td>${cells.label}</td>`,
+      `<td class="dbc-col-range">${dbcRangeBar(signal, row)}</td>`,
+      `<td class="dbc-col-act"><div class="dbc-row-actions"><button type="button" data-act="watch"${lock} aria-pressed="${watched}" aria-label="${watched ? "取消观察" : "加入观察表"} ${name}" title="${watched ? "已在观察表，点击移除" : "加入观察表"}" class="${watched ? "on" : ""}">${DBC_ICON.watch}</button>`
+        + `<button type="button" data-act="plot"${lock} aria-pressed="${plotted}" aria-label="${plotted ? "移除曲线" : "添加曲线"} ${name}" title="${plotted ? "已加入曲线，点击移除" : "加入曲线"}" class="${plotted ? "on" : ""}">${DBC_ICON.plot}</button></div></td>`],
+  };
 }
+
+function dbcSignalRow(entry, row, summary) { return dbcRowHtml(dbcSignalRowData(entry, row, summary)); }
 
 function renderDbcWatch() {
   const live = dbcLiveFor();
   const entries = dbcUi.watch.filter(entry => entry.source === dbcUi.source);
+  const panel = $("#dbcWatchPanel");
+  panel?.classList.toggle("hidden", entries.length === 0);
+  text("#dbcWatchCount", String(entries.length));
+  if (dbcApplyFold("watch", panel)) return;
   const rows = entries.map(entry => {
     const decoded = live?.decoded?.[entry.key];
     const row = decoded?.signals.find(item => item.name === entry.signal);
     const info = dbcStateInfo(decoded);
     const cells = dbcValueCells(row || { state: "waiting" }, decoded?.state === "stale");
     const messageName = decoded?.name || live?.names?.[entry.key] || entry.key;
-    return `<tr class="${cells.cls} ${row?.state || "waiting"}" data-watch="${escapeHtml(entry.key)}|${escapeHtml(entry.signal)}">`
-      + `<td class="dbc-name">${escapeHtml(entry.signal)}<small>${escapeHtml(messageName)}</small></td>`
-      + `<td class="dbc-value">${cells.value}</td><td>${cells.raw}</td><td>${cells.label}</td>`
-      + `<td><span class="tag ${info.cls}">${escapeHtml(info.label)}</span></td>`
-      + `<td><div class="dbc-row-actions"><button data-act="unwatch">移除</button></div></td></tr>`;
-  }).join("");
-  dbcPaint("watch", $("#dbcWatchRows"), rows);
-  $("#dbcWatchEmpty")?.classList.toggle("hidden", entries.length > 0);
+    return { id: `${entry.key}|${entry.signal}`, cls: `${cells.cls} ${row?.state || "waiting"}`,
+      attrs: `data-watch="${escapeHtml(entry.key)}|${escapeHtml(entry.signal)}"`,
+      cells: [`<td class="dbc-name">${escapeHtml(entry.signal)}<small>${escapeHtml(messageName)}</small></td>`,
+        `<td class="dbc-value">${cells.value}</td>`, `<td class="dbc-col-raw">${cells.raw}</td>`, `<td>${cells.label}</td>`,
+        `<td class="dbc-col-range"><span class="tag ${info.cls}">${escapeHtml(info.label)}</span></td>`,
+        `<td class="dbc-col-act"><div class="dbc-row-actions"><button type="button" data-act="unwatch" aria-label="移出观察表 ${escapeHtml(entry.signal)}" title="移出观察表">${DBC_ICON.remove}</button></div></td>`] };
+  });
+  dbcPatchRows("watch", $("#dbcWatchRows"), rows);
 }
 
 function renderDbcUnknown() {
   const live = dbcLiveFor();
   const unknown = live?.unknown || [];
+  const panel = $("#dbcUnknownPanel");
+  panel?.classList.toggle("hidden", unknown.length === 0);
   text("#dbcUnknownCount", String(unknown.length));
-  const rows = unknown.map(frame => `<tr data-id="${frame.id}" data-ext="${frame.extended}">`
-    + `<td>${escapeHtml(frame.id_text)} · ${frame.extended ? "扩展" : "标准"}</td><td>${frame.dlc}</td>`
-    + `<td title="${escapeHtml(frame.data)}">${escapeHtml(frame.data || "无数据")}</td>`
-    + `<td>${frame.cycle_ms != null ? `${dbcNumber(frame.cycle_ms)} ms` : "—"}</td>`
-    + `<td>${Number(frame.count).toLocaleString()}</td>`
-    + `<td><div class="dbc-row-actions"><button data-act="model">建模</button></div></td></tr>`).join("");
-  dbcPaint("unknown", $("#dbcUnknownRows"), rows);
-  $("#dbcUnknownEmpty")?.classList.toggle("hidden", unknown.length > 0);
-  text("#dbcUnknownEmpty", !live?.connection?.connected ? "连接数据源后查看未识别帧。"
-    : !(live?.files?.length) ? "绑定 DBC 后查看未识别帧。" : "当前收到的帧均已识别。");
+  // 收起时不生成行，省掉每次轮询的表格更新。
+  if (dbcApplyFold("unknown", panel)) return;
+  const rows = unknown.map(frame => ({ id: `${frame.id}|${frame.extended}`, cls: "",
+    attrs: `data-id="${frame.id}" data-ext="${frame.extended}"`,
+    cells: [`<td>${escapeHtml(frame.id_text)} · ${frame.extended ? "扩展" : "标准"}</td>`, `<td>${frame.dlc}</td>`,
+      `<td title="${escapeHtml(frame.data)}">${escapeHtml(frame.data || "无数据")}</td>`,
+      `<td>${frame.cycle_ms != null ? `${dbcNumber(frame.cycle_ms)} ms` : "—"}</td>`,
+      `<td>${Number(frame.count).toLocaleString()}</td>`,
+      '<td class="dbc-col-act"><div class="dbc-row-actions"><button type="button" class="dbc-text-act" data-act="model" title="用这帧的 ID、长度和周期新建报文">建模</button></div></td>'] }));
+  dbcPatchRows("unknown", $("#dbcUnknownRows"), rows);
 }
 
 /* ---------- 弹窗表单 ---------- */
@@ -626,13 +719,67 @@ function dbcSetDirectory(hidden) {
   try { localStorage.setItem("canHostDbcDirectoryHidden", String(hidden)); } catch { /* storage may be disabled */ }
 }
 
+function dbcSetSideWidth(width, persist = false) {
+  const value = Math.round(Math.max(200, Math.min(520, width)));
+  $(".dbc-workspace")?.style.setProperty("--dbc-side", `${value}px`);
+  if (persist) try { localStorage.setItem("canHostDbcSideWidth", String(value)); } catch { /* storage may be disabled */ }
+}
+
+/** 目录与主区之间的分隔条：拖动或用方向键调整目录宽度。 */
+function bindDbcSplitter() {
+  const splitter = $("#dbcSplitter");
+  if (!splitter) return;
+  const sideWidth = () => $("#dbcDirectory")?.getBoundingClientRect().width || 272;
+  splitter.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX, start = sideWidth();
+    splitter.setPointerCapture(event.pointerId);
+    splitter.classList.add("dragging");
+    const move = moveEvent => dbcSetSideWidth(start + moveEvent.clientX - startX);
+    const up = () => {
+      splitter.classList.remove("dragging");
+      splitter.removeEventListener("pointermove", move);
+      splitter.removeEventListener("pointerup", up);
+      splitter.removeEventListener("pointercancel", up);
+      dbcSetSideWidth(sideWidth(), true);
+    };
+    splitter.addEventListener("pointermove", move);
+    splitter.addEventListener("pointerup", up);
+    splitter.addEventListener("pointercancel", up);
+  });
+  splitter.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    dbcSetSideWidth(sideWidth() + (event.key === "ArrowRight" ? 16 : -16), true);
+  });
+  splitter.addEventListener("dblclick", () => {
+    $(".dbc-workspace")?.style.removeProperty("--dbc-side");
+    try { localStorage.removeItem("canHostDbcSideWidth"); } catch { /* storage may be disabled */ }
+  });
+}
+
 function bindDbcControls() {
   let directoryHidden = window.matchMedia("(max-width: 800px)").matches;
   try {
     const saved = localStorage.getItem("canHostDbcDirectoryHidden");
     if (saved !== null) directoryHidden = saved === "true";
-  } catch { /* storage may be disabled */ }
+    dbcUi.folds = JSON.parse(localStorage.getItem("canHostDbcFolds") || "{}") || {};
+    const width = Number(localStorage.getItem("canHostDbcSideWidth"));
+    if (width > 0) dbcSetSideWidth(width);
+  } catch { /* storage may be disabled or hold an old value */ }
+  if (typeof dbcUi.folds !== "object" || Array.isArray(dbcUi.folds)) dbcUi.folds = {};
   dbcSetDirectory(directoryHidden);
+  bindDbcSplitter();
+  $("#page-dbc")?.addEventListener("click", event => {
+    const toggle = event.target.closest("[data-fold]");
+    if (toggle) dbcToggleFold(toggle.dataset.fold);
+  });
+  $("#dbcLiveMeta")?.addEventListener("click", event => {
+    if (!event.target.closest(".dbc-live-comment")) return;
+    dbcUi.commentOpen = !dbcUi.commentOpen;
+    renderDbcLive();
+  });
   const closeDirectory = () => { dbcSetDirectory(true); $("#dbcDirectoryToggle")?.focus(); };
   $("#dbcDirectoryToggle")?.addEventListener("click", () => {
     dbcSetDirectory(!dbcUi.directoryHidden);
@@ -641,6 +788,7 @@ function bindDbcControls() {
   $("#dbcDirectoryClose")?.addEventListener("click", closeDirectory);
   $("#dbcBindingChoose")?.addEventListener("click", () => {
     dbcSetDirectory(false);
+    if (dbcFolded("files")) dbcToggleFold("files");
     const card = $$("#dbcFiles [data-file]").find(node => node.dataset.file === dbcUi.fileId);
     card?.scrollIntoView({ block: "nearest" });
     card?.querySelector('select[data-file-act="bus"]')?.focus();
@@ -650,6 +798,7 @@ function bindDbcControls() {
     if (event.key === "Escape" && event.target.id !== "dbcSearch") { event.preventDefault(); closeDirectory(); }
   });
   $$("#dbcTabs button").forEach(button => {
+    button.title = DBC_TAB_HINT[button.dataset.tab] || "";
     button.id = `dbcTab-${button.dataset.tab}`;
     button.setAttribute("aria-controls", `dbcPanel-${button.dataset.tab}`);
     const panel = $(`[data-dbc-panel="${button.dataset.tab}"]`);
@@ -688,14 +837,15 @@ function bindDbcControls() {
     dbcUi.source = button.dataset.source;
     dbcPersistView();
     dbcUi.signatures = {};
+    dbcUi.rowCache.clear();
     schedulePoll(0);
     renderDbc();
   });
   $("#dbcTabs")?.addEventListener("click", event => {
     const button = event.target.closest("button[data-tab]"); if (!button || !DBC_TABS.includes(button.dataset.tab)) return;
     dbcUi.tab = button.dataset.tab;
-    $(".dbc-content")?.scrollTo(0, 0);
     dbcUi.signatures = {};
+    dbcUi.rowCache.clear();
     schedulePoll(0);
     renderDbc();
   });
@@ -715,6 +865,15 @@ function bindDbcControls() {
     });
   });
   $("#dbcTree")?.addEventListener("click", event => {
+    const group = event.target.closest(".dbc-group");
+    if (group) {
+      const name = group.dataset.group;
+      if (dbcUi.filter.trim()) return;
+      if (dbcUi.collapsedGroups.has(name)) dbcUi.collapsedGroups.delete(name); else dbcUi.collapsedGroups.add(name);
+      renderDbcTree();
+      [...$$("#dbcTree .dbc-group")].find(node => node.dataset.group === name)?.focus({ preventScroll: true });
+      return;
+    }
     const button = event.target.closest(".dbc-msg");
     if (button) {
       dbcSelectMessage(button.dataset.key);

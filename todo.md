@@ -1,5 +1,11 @@
 # 进度与待办
 
+## 2026-10-25 DBC 工作台界面重排与滚动性能
+
+- 只改前端（`canhost/web/index.html`、`styles.css`、`js/dbc*.js`），后端接口和解码不变；变化见 [CHANGELOG](CHANGELOG.md#未发布)，用法同步到 [DBC 工作台](DOC/DBC工作台.md)。
+- 软件验证：`test_dbc_ui` 与主题测试通过；全量 764 项中 762 项通过、1 项平台跳过，`test_release_history_merges_online_release_over_embedded` 仍是既有失败（干净 `main` 上同样复现）。浏览器预览（内置模拟 CAN1 + 中央库 `Vehicle_Can1.dbc`）在 1440×900、1024×700 和浅色主题下核对了实时、曲线、编辑、比对四页；32 个信号的报文每次轮询整页渲染约 0.4 ms，信号表零次整表重建，无长任务，页面脚本无错误。
+- 未验证：Windows WebView2 与 macOS WKWebView 原生窗口下的滚动手感和分隔条拖动；实体 PCAN。
+
 ## 2026-10-24 F405 Chroma 保活兼容
 
 - 同步 F405 的 2 s `0x290` 保活说明；已核对 `canhost/decoders.py`，沿用现有 Chroma ID 和原厂周期设置格式，页面继续显示原始命令，不新增解码字段或发送逻辑。

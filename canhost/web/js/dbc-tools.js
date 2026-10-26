@@ -254,8 +254,13 @@ async function dbcAuditTraceRun() {
 
 function dbcAuditSection(title, count, headers, rows, tone = "bad") {
   if (!count) return "";
-  return `<article class="panel"><header class="panel-head"><h3>${escapeHtml(title)}<span class="dbc-count ${tone}">${count}</span></h3></header>`
-    + `<div class="table-wrap dbc-signal-wrap"><table class="frame-table"><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div></article>`;
+  const fold = `audit:${title}`;
+  const folded = dbcFolded(fold);
+  const head = `<header class="panel-head"><button class="dbc-fold-toggle" type="button" data-fold="${escapeHtml(fold)}" aria-expanded="${!folded}">`
+    + `<i class="dbc-chevron" aria-hidden="true"></i><h3>${escapeHtml(title)}</h3><span class="dbc-count ${tone}">${count}</span></button></header>`;
+  if (folded) return `<article class="panel dbc-fold folded">${head}</article>`;
+  return `<article class="panel dbc-fold">${head}`
+    + `<div class="dbc-signal-wrap"><table class="frame-table"><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div></article>`;
 }
 
 function dbcAuditHtml(report) {

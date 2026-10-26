@@ -59,8 +59,9 @@ function renderDbcEditBar(file) {
   const readonly = !!file?.readonly;
   const stateTag = $("#dbcEditState");
   if (stateTag) {
-    stateTag.textContent = !file ? "无文件" : readonly ? "只读" : file.dirty ? "未保存" : "已保存";
+    stateTag.textContent = !file ? "无文件" : readonly ? "只读 · 另存为后可编辑" : file.dirty ? "未保存" : "已保存";
     stateTag.className = `tag ${!file ? "neutral" : readonly || file.dirty ? "warn" : "ok"}`;
+    stateTag.title = readonly ? "团队中央库 DBC 默认只读；另存为副本后编辑副本" : "";
   }
   $("#dbcUndo").disabled = !file || !file.can_undo || readonly;
   $("#dbcRedo").disabled = !file || !file.can_redo || readonly;
@@ -77,13 +78,13 @@ function renderDbcEditBar(file) {
   }
   $$("#dbcEditTabs button").forEach(button => button.classList.toggle("active", button.dataset.sub === dbcEdit.sub));
   const notice = $("#dbcEditNotice");
-  let message = "";
-  if (file?.readonly) message = "团队中央库 · 只读。另存为副本后可编辑。";
-  else if (file?.disk_changed) message = "磁盘上的文件在打开后被改动过。保存会覆盖它（旧内容留在 .bak）；也可以先在左侧文件卡里“重新载入”。";
+  // 只读已经写在状态标签里；这里只提示需要用户决定的磁盘改动。
+  const message = file?.disk_changed && !readonly
+    ? "磁盘上的文件在打开后被改动过。保存会覆盖它（旧内容留在 .bak）；也可以先在左侧文件卡里“重新载入”。" : "";
   if (notice) {
     notice.textContent = message;
     notice.classList.toggle("hidden", !message);
-    notice.classList.toggle("warn", !!file?.disk_changed && !readonly);
+    notice.classList.toggle("warn", !!message);
   }
 }
 
@@ -92,10 +93,10 @@ function renderDbcEditor() {
   renderDbcEditBar(file);
   const root = $("#dbcEditor");
   if (!file || !dbcCatalog()) {
-    dbcPaint("editor", root, '<div class="empty-state large">先在左侧打开或新建一个 DBC。</div>');
+    dbcPaint("editor", root, '<div class="dbc-pane"><div class="empty-state large">先在左侧打开或新建一个 DBC。</div></div>');
     return;
   }
-  const signature = JSON.stringify([file.id, file.revision, file.readonly, dbcEdit.sub, dbcUi.selected, dbcEdit.newOrder, dbcEdit.muxView]);
+  const signature = JSON.stringify([file.id, file.revision, file.readonly, dbcEdit.sub, dbcUi.selected, dbcEdit.newOrder, dbcEdit.muxView, dbcFolded("msgProps")]);
   if (dbcUi.signatures.editor !== signature) {
     dbcUi.signatures.editor = signature;
     const active = document.activeElement;
@@ -103,7 +104,19 @@ function renderDbcEditor() {
     const focusForm = focusField ? active.closest("[data-form]")?.dataset.form : null;
     const focusBit = active && root.contains(active) ? active.dataset.bit : null;
     const focusSignal = active?.classList.contains("dbc-signal-select") ? active.closest("[data-signal]")?.dataset.signal : null;
+    // 两栏各自滚动：同一报文内重画时保留左栏位置，同一信号时也保留右栏位置。
+    const view = { file: file.id, sub: dbcEdit.sub, key: dbcUi.selected.key, signal: dbcUi.selected.signal };
+    const previous = dbcEdit.view || {};
+    const scroll = {};
+    for (const pane of root.querySelectorAll?.("[data-pane]") || []) scroll[pane.dataset.pane] = pane.scrollTop;
     root.innerHTML = dbcEditorHtml();
+    const sameMessage = previous.file === view.file && previous.sub === view.sub && previous.key === view.key;
+    for (const pane of root.querySelectorAll?.("[data-pane]") || []) {
+      if (!sameMessage) continue;
+      if (pane.dataset.pane === "detail" && previous.signal !== view.signal) continue;
+      pane.scrollTop = scroll[pane.dataset.pane] || 0;
+    }
+    dbcEdit.view = view;
     if (focusField) {
       const scope = focusForm ? root.querySelector(`[data-form="${focusForm}"]`) : root;
       const target = scope?.querySelector(`[data-field="${focusField}"]`) || scope?.querySelector(`[data-receiver="${focusField}"]`);
@@ -116,9 +129,10 @@ function renderDbcEditor() {
 
 function dbcEditorHtml() {
   const catalog = dbcCatalog();
-  if (dbcEdit.sub === "nodes") return dbcNodesHtml(catalog);
-  if (dbcEdit.sub === "tables") return dbcTablesHtml(catalog);
-  if (dbcEdit.sub === "check") return dbcCheckHtml();
+  const pane = html => `<div class="dbc-pane" data-pane="main">${html}</div>`;
+  if (dbcEdit.sub === "nodes") return pane(dbcNodesHtml(catalog));
+  if (dbcEdit.sub === "tables") return pane(dbcTablesHtml(catalog));
+  if (dbcEdit.sub === "check") return pane(dbcCheckHtml());
   return dbcMessageEditorHtml(catalog);
 }
 
@@ -130,43 +144,61 @@ function dbcIssueFor(issues, key, signal = null) {
   return issues.filter(issue => issue.message_key === key && (signal === null || issue.signal === signal));
 }
 
+/** 报文与信号：左栏是报文属性（可收起）、位布局和信号列表，右栏是选中信号的属性，两栏各自滚动。 */
 function dbcMessageEditorHtml(catalog) {
   const entry = dbcMessageEntry();
   const readonly = dbcReadonly();
   const lock = readonly ? "disabled" : "";
-  if (entry?.virtual) {
-    return '<article class="panel"><header class="panel-head"><h3>未使用信号</h3></header>'
-      + '<div class="panel-body note tight">这些信号尚未分配到报文，不参与总线解码。</div></article>'
-      + dbcSignalPanelHtml(entry, catalog);
-  }
-  const actions = (names) => names.map(([act, label, danger]) =>
-    `<button class="dbc-mini ${danger ? "danger" : ""}" type="button" data-act="${act}" ${lock}>${label}</button>`).join("");
   if (!entry) {
-    return `<article class="panel"><div class="empty-state">这个 DBC 还没有报文。</div>`
-      + `<div class="panel-foot" style="padding:0 var(--sp-3) var(--sp-3)"><button class="action-button" type="button" data-act="msg-new" ${lock}>新建报文</button></div></article>`;
+    return `<div class="dbc-pane" data-pane="main"><article class="panel"><div class="empty-state">这个 DBC 还没有报文。</div>`
+      + `<div class="panel-foot dbc-foot"><button class="action-button" type="button" data-act="msg-new" ${lock}>新建报文</button></div></article></div>`;
   }
+  const main = entry.virtual
+    ? '<article class="panel"><header class="panel-head"><h3>未使用信号</h3></header>'
+      + '<div class="panel-body note tight">这些信号尚未分配到报文，不参与总线解码。</div></article>' + dbcSignalPanelHtml(entry)
+    : dbcMessagePropsHtml(entry, catalog, lock) + dbcLayoutPanelHtml(entry, readonly) + dbcSignalPanelHtml(entry);
+  const signal = dbcSelectedSignal();
+  const detail = signal ? dbcSignalFormHtml(entry, signal, catalog, lock)
+    : '<div class="empty-state">在位布局或信号列表里选择一个信号，在这里编辑它的属性。</div>';
+  return `<div class="dbc-edit-split"><div class="dbc-pane" data-pane="main">${main}</div>`
+    + `<aside class="dbc-pane dbc-detail panel" data-pane="detail" aria-label="信号属性">${detail}</aside></div>`;
+}
+
+function dbcMessagePropsHtml(entry, catalog, lock) {
+  const folded = dbcFolded("msgProps");
+  const name = escapeHtml(entry.name);
+  const issues = dbcIssueFor(dbcDetail()?.issues || [], entry.key).filter(issue => issue.level !== "note");
+  const summary = [`${entry.id_text}${entry.extended ? " 扩展" : ""}`, `DLC ${entry.dlc}`,
+    entry.cycle_ms ? `${entry.cycle_ms} ms` : "非周期", entry.senders[0] || "无发送节点"];
+  const actions = [["msg-new", "新建"], ["msg-dup", "复制"], ["msg-up", "上移"], ["msg-down", "下移"], ["msg-del", "删除", true]]
+    .map(([act, label, danger]) => `<button class="dbc-mini ${danger ? "danger" : ""}" type="button" data-act="${act}" ${lock}>${label}</button>`).join("");
+  const count = issues.length
+    ? `<span class="dbc-count ${issues.some(issue => issue.level === "error") ? "bad" : "warn"}" title="${escapeHtml(issues.map(issue => issue.message).join("\n"))}">${issues.length}</span>` : "";
+  const head = `<header class="panel-head"><button class="dbc-fold-toggle" type="button" data-fold="msgProps" aria-expanded="${!folded}" title="${folded ? "展开报文属性" : "收起报文属性"}">`
+    + `<i class="dbc-chevron" aria-hidden="true"></i><h3 title="${name}">${name}</h3><span class="dbc-fold-summary">${escapeHtml(summary.join(" · "))}</span>${count}</button>`
+    + `<div class="head-actions">${actions}</div></header>`;
+  if (folded) return `<article class="panel dbc-fold folded">${head}</article>`;
   const nodeNames = catalog.nodes.map(node => node.name);
-  const sender = entry.senders[0] || "";
-  const messageForm = `<div class="dbc-form-grid" data-form="message">`
-    + `<label class="field"><span class="field-label">名称</span><input data-field="name" value="${escapeHtml(entry.name)}" ${lock} maxlength="128"></label>`
+  const form = `<div class="dbc-form-grid" data-form="message">`
+    + `<label class="field"><span class="field-label">名称</span><input data-field="name" value="${name}" ${lock} maxlength="128"></label>`
     + `<label class="field"><span class="field-label">CAN ID <small>十六进制</small></span><input data-field="id" value="${entry.id.toString(16).toUpperCase()}" ${lock}></label>`
     + `<label class="field"><span class="field-label">帧类型</span><select data-field="extended" ${lock}>${dbcOptions([{ value: "false", label: "标准 11 位" }, { value: "true", label: "扩展 29 位" }], String(entry.extended))}</select></label>`
     + `<label class="field"><span class="field-label">DLC</span><input data-field="dlc" type="number" min="0" max="8" value="${entry.dlc}" ${lock}></label>`
-    + `<label class="field"><span class="field-label">发送节点</span><select data-field="sender" ${lock}>${dbcOptions([{ value: "", label: "（无）" }, ...nodeNames.map(name => ({ value: name, label: name }))], sender)}</select></label>`
-    + `<label class="field"><span class="field-label">周期 <small>ms，0 表示非周期</small></span><input data-field="cycle_time" type="number" min="0" max="65535" value="${entry.cycle_ms ?? ""}" ${lock}></label>`
+    + `<label class="field"><span class="field-label">发送节点</span><select data-field="sender" ${lock}>${dbcOptions([{ value: "", label: "（无）" }, ...nodeNames.map(node => ({ value: node, label: node }))], entry.senders[0] || "")}</select></label>`
+    + `<label class="field"><span class="field-label">周期 <small>ms，0 为非周期</small></span><input data-field="cycle_time" type="number" min="0" max="65535" value="${entry.cycle_ms ?? ""}" ${lock}></label>`
     + `<label class="field wide"><span class="field-label">注释</span><textarea data-field="comment" rows="2" ${lock}>${escapeHtml(entry.comment)}</textarea></label></div>`;
-  const issues = dbcDetail()?.issues || [];
-  const messageIssues = dbcIssueFor(issues, entry.key).filter(issue => issue.level !== "note");
-  const issueNote = messageIssues.length
-    ? `<div class="note tight" style="margin-top:var(--sp-2)">${messageIssues.slice(0, 3).map(issue => `<span class="tag ${issue.level === "error" ? "bad" : "warn"}">${escapeHtml(issue.message)}</span>`).join(" ")}</div>` : "";
-  const left = `<article class="panel dbc-message-panel"><header class="panel-head"><h3 title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</h3><div class="head-actions">`
-    + actions([["msg-new", "新建"], ["msg-dup", "复制"], ["msg-up", "上移"], ["msg-down", "下移"], ["msg-del", "删除", true]])
-    + `</div></header><div class="panel-body dbc-message-layout"><div>${messageForm}${issueNote}</div><div class="dbc-layout-preview">`
-    + `<div class="dbc-subhead"><span>位布局</span><span class="dbc-inline">${dbcMuxViewHtml(entry)}<div class="segmented small" id="dbcNewOrder" role="group" aria-label="新信号字节序">`
-    + ["intel", "motorola"].map(order => `<button type="button" data-order="${order}" class="${dbcEdit.newOrder === order ? "active" : ""}" title="新建信号时使用的字节序">${DBC_ORDER_LABEL[order]}</button>`).join("")
-    + `</div></span></div>${dbcBitGridHtml(entry)}`
-    + `<p class="dbc-grid-legend">${readonly ? "点击位格查看信号。" : "拖选位格调整信号，空白处拖选新建。"} 红色表示重叠，虚线表示超出 DLC。</p></div></div></article>`;
-  return `<div class="dbc-edit-grid">${left}${dbcSignalPanelHtml(entry, catalog)}</div>`;
+  const notes = issues.length
+    ? `<div class="dbc-issue-tags">${issues.slice(0, 3).map(issue => `<span class="tag ${issue.level === "error" ? "bad" : "warn"}">${escapeHtml(issue.message)}</span>`).join("")}</div>` : "";
+  return `<article class="panel dbc-fold">${head}<div class="panel-body">${form}${notes}</div></article>`;
+}
+
+function dbcLayoutPanelHtml(entry, readonly) {
+  const orders = ["intel", "motorola"].map(order =>
+    `<button type="button" data-order="${order}" class="${dbcEdit.newOrder === order ? "active" : ""}">${DBC_ORDER_LABEL[order]}</button>`).join("");
+  return `<article class="panel"><header class="panel-head"><h3>位布局</h3><div class="head-actions">${dbcMuxViewHtml(entry)}`
+    + `<span class="dbc-head-label">新信号</span><div class="segmented small" id="dbcNewOrder" role="group" aria-label="新信号字节序" title="拖选空白位新建信号时使用的字节序">${orders}</div></div></header>`
+    + `<div class="panel-body">${dbcBitGridHtml(entry)}`
+    + `<p class="dbc-grid-legend">${readonly ? "点击位格查看信号。" : "点击位格选中信号；拖选调整选中信号的位置，未选中信号时在空白处拖选新建。"}红框为重叠，虚线为超出 DLC。</p></div></article>`;
 }
 
 /** 多路复用报文：按复用值查看位布局，其余分支的信号先隐藏。 */
@@ -208,14 +240,15 @@ function dbcBitGridHtml(entry) {
         if (list.includes(selectedIndex)) classes.push("selected");
       }
       const owner = list.map(item => entry.signals[item].name).join(" / ");
-      html += `<td class="${classes.join(" ")}" style="${style}" data-bit="${index}" ${owner ? `tabindex="0" role="button" aria-label="${escapeHtml(owner)}，bit ${index}"` : ""} title="${escapeHtml(owner ? `${owner} · bit ${index}` : `bit ${index}（空闲）`)}"><span class="bit">${index}</span>${label}</td>`;
+      // 信号名只写在最高位格里；其余格显示位号，两者不叠在一起。
+      html += `<td class="${classes.join(" ")}" style="${style}" data-bit="${index}" ${owner ? `tabindex="0" role="button" aria-label="${escapeHtml(owner)}，bit ${index}"` : ""} title="${escapeHtml(owner ? `${owner} · bit ${index}` : `bit ${index}（空闲）`)}">${label || `<span class="bit">${index}</span>`}</td>`;
     }
     html += "</tr>";
   }
   return `${html}</tbody></table>`;
 }
 
-function dbcSignalPanelHtml(entry, catalog) {
+function dbcSignalPanelHtml(entry) {
   const readonly = dbcReadonly();
   const lock = readonly ? "disabled" : "";
   const issues = dbcDetail()?.issues || [];
@@ -225,45 +258,53 @@ function dbcSignalPanelHtml(entry, catalog) {
     return `<tr class="${signal.name === dbcUi.selected.signal ? "active" : ""}" data-signal="${escapeHtml(signal.name)}">`
       + `<td><button class="dbc-signal-select" type="button" aria-pressed="${signal.name === dbcUi.selected.signal}"><span class="dbc-swatch" style="background:var(--series-${(index % 8) + 1})"></span>${escapeHtml(signal.name)}${mux}</button>${bad ? ' <span class="dbc-count bad">!</span>' : ""}</td>`
       + `<td>${signal.start}|${signal.length}</td><td>${signal.byte_order === "intel" ? "Intel" : "Motorola"}</td>`
-      + `<td>${dbcNumber(signal.factor)}</td><td>${dbcNumber(signal.offset)}</td><td>${escapeHtml(signal.unit)}</td></tr>`;
+      + `<td title="物理值 = 原始值 × 因子 + 偏移">×${dbcNumber(signal.factor)} ${signal.offset < 0 ? "−" : "+"}${dbcNumber(Math.abs(signal.offset))}</td><td>${escapeHtml(signal.unit)}</td></tr>`;
   }).join("");
   const signal = dbcSelectedSignal();
   const actions = [["sig-new", "新建"], ["sig-dup", "复制"], ["sig-up", "上移"], ["sig-down", "下移"], ["sig-del", "删除", true]]
     .map(([act, label, danger]) => `<button class="dbc-mini ${danger ? "danger" : ""}" type="button" data-act="${act}" ${lock || ((act !== "sig-new" && !signal) ? "disabled" : "")}>${label}</button>`).join("");
   return `<article class="panel"><header class="panel-head"><h3>信号 · ${entry.signals.length}</h3><div class="head-actions">${actions}</div></header>`
-    + `<div class="panel-body"><div class="table-wrap dbc-signal-list"><table class="frame-table"><thead><tr><th>名称</th><th>位|长</th><th>字节序</th><th>因子</th><th>偏移</th><th>单位</th></tr></thead>`
-    + `<tbody id="dbcSignalList">${rows || '<tr><td colspan="6">还没有信号，点“新建”或在位布局里拖选。</td></tr>'}</tbody></table></div>`
-    + (signal ? dbcSignalFormHtml(entry, signal, catalog, lock) : '<p class="note">选中一个信号后在这里编辑。</p>') + "</div></article>";
+    + `<div class="dbc-signal-list"><table class="frame-table"><thead><tr><th>名称</th><th>位|长</th><th>字节序</th><th>换算</th><th>单位</th></tr></thead>`
+    + `<tbody id="dbcSignalList">${rows || '<tr><td colspan="5">还没有信号，点“新建”或在位布局里拖选。</td></tr>'}</tbody></table></div></article>`;
 }
 
+/** 右栏：选中信号的属性。多路复用的复用值和扩展复用只在相应角色下出现。 */
 function dbcSignalFormHtml(entry, signal, catalog, lock) {
   const nodes = catalog.nodes.map(node => node.name);
   const receivers = nodes.length ? nodes.map(name => `<label class="checkbox"><input type="checkbox" data-receiver="${escapeHtml(name)}" ${signal.receivers.includes(name) ? "checked" : ""} ${lock}><span>${escapeHtml(name)}</span></label>`).join("")
     : '<span class="note tight">先在“节点”里添加节点。</span>';
   const choiceRows = signal.choices.map(choice => dbcChoiceRowHtml(choice.value, choice.label, lock)).join("");
   const tables = catalog.value_tables.length
-    ? `<select data-field="apply_table" ${lock}><option value="">套用全局值表…</option>${catalog.value_tables.map(table => `<option value="${escapeHtml(table.name)}">${escapeHtml(table.name)}</option>`).join("")}</select>` : "";
-  return `<div class="dbc-subhead"><span>信号 ${escapeHtml(signal.name)}</span></div><div class="dbc-form-grid" data-form="signal">`
-    + `<label class="field"><span class="field-label">名称</span><input data-field="name" value="${escapeHtml(signal.name)}" ${lock} maxlength="128"></label>`
+    ? `<select data-field="apply_table" ${lock} aria-label="套用全局值表"><option value="">套用全局值表…</option>${catalog.value_tables.map(table => `<option value="${escapeHtml(table.name)}">${escapeHtml(table.name)}</option>`).join("")}</select>` : "";
+  const index = entry.signals.findIndex(item => item.name === signal.name);
+  const muxed = signal.mux.role === "multiplexed" || signal.mux.role === "both";
+  const section = title => `<div class="dbc-form-section">${title}</div>`;
+  return `<header class="panel-head dbc-detail-head"><h3><span class="dbc-swatch" style="background:var(--series-${(index % 8) + 1})"></span>${escapeHtml(signal.name)}</h3></header>`
+    + `<div class="panel-body"><div class="dbc-trial" id="dbcTrial" title="当前帧试算">等待数据</div>`
+    + `<div class="dbc-form-grid" data-form="signal">`
+    + `<label class="field wide"><span class="field-label">名称</span><input data-field="name" value="${escapeHtml(signal.name)}" ${lock} maxlength="128"></label>`
+    + section("位置与编码")
     + `<label class="field"><span class="field-label">起始位</span><input data-field="start" type="number" min="0" max="511" value="${signal.start}" ${lock}></label>`
     + `<label class="field"><span class="field-label">长度 <small>位</small></span><input data-field="length" type="number" min="1" max="64" value="${signal.length}" ${lock}></label>`
     + `<label class="field"><span class="field-label">字节序</span><select data-field="byte_order" ${lock}>${dbcOptions([{ value: "intel", label: DBC_ORDER_LABEL.intel }, { value: "motorola", label: DBC_ORDER_LABEL.motorola }], signal.byte_order)}</select></label>`
     + `<label class="field"><span class="field-label">符号</span><select data-field="signed" ${lock}>${dbcOptions([{ value: "false", label: "无符号" }, { value: "true", label: "有符号" }], String(signal.signed))}</select></label>`
     + `<label class="field"><span class="field-label">数值类型</span><select data-field="value_type" ${lock}>${dbcOptions(Object.entries(DBC_VALUE_TYPE_LABEL).map(([value, label]) => ({ value, label })), signal.value_type)}</select></label>`
+    + `<label class="field"><span class="field-label">初始原始值</span><input data-field="initial_raw" value="${signal.initial_raw ?? ""}" ${lock}></label>`
+    + section("换算")
     + `<label class="field"><span class="field-label">因子</span><input data-field="factor" value="${dbcNumber(signal.factor)}" ${lock}></label>`
     + `<label class="field"><span class="field-label">偏移</span><input data-field="offset" value="${dbcNumber(signal.offset)}" ${lock}></label>`
     + `<label class="field"><span class="field-label">最小值</span><input data-field="minimum" value="${dbcNumber(signal.minimum)}" ${lock}></label>`
     + `<label class="field"><span class="field-label">最大值</span><input data-field="maximum" value="${dbcNumber(signal.maximum)}" ${lock}></label>`
     + `<label class="field"><span class="field-label">单位</span><input data-field="unit" value="${escapeHtml(signal.unit)}" ${lock}></label>`
-    + `<label class="field"><span class="field-label">初始原始值</span><input data-field="initial_raw" value="${signal.initial_raw ?? ""}" ${lock}></label>`
-    + `<label class="field"><span class="field-label">多路复用</span><select data-field="mux_role" ${lock}>${dbcOptions(Object.entries(DBC_MUX_LABEL).map(([value, label]) => ({ value, label })), signal.mux.role)}</select></label>`
-    + `<label class="field"><span class="field-label">复用值 <small>mN</small></span><input data-field="mux_value" type="number" min="0" value="${signal.mux.value ?? 0}" ${lock}></label>`
+    + section("多路复用")
+    + `<label class="field"><span class="field-label">角色</span><select data-field="mux_role" ${lock}>${dbcOptions(Object.entries(DBC_MUX_LABEL).map(([value, label]) => ({ value, label })), signal.mux.role)}</select></label>`
+    + (muxed ? `<label class="field"><span class="field-label">复用值 <small>mN</small></span><input data-field="mux_value" type="number" min="0" value="${signal.mux.value ?? 0}" ${lock}></label>` : "")
     + dbcExtMuxHtml(entry, signal, lock)
+    + section("接收与注释")
     + `<div class="field wide"><span class="field-label">接收节点</span><div class="dbc-inline">${receivers}</div></div>`
     + `<label class="field wide"><span class="field-label">注释</span><textarea data-field="comment" rows="2" ${lock}>${escapeHtml(signal.comment)}</textarea></label></div>`
     + `<div class="dbc-subhead"><span>值表</span><span class="dbc-inline">${tables}<button class="dbc-mini" type="button" data-act="choice-add" ${lock}>添加</button></span></div>`
-    + `<div data-form="choices"><table class="dbc-choices"><tbody>${choiceRows || ""}</tbody></table>${choiceRows ? "" : '<p class="note tight">没有值表。填写后，实时页会把原始值显示成文字。</p>'}</div>`
-    + `<div class="dbc-subhead"><span>当前帧试算</span></div><div class="dbc-trial" id="dbcTrial">等待数据</div>`;
+    + `<div data-form="choices"><table class="dbc-choices"><tbody>${choiceRows || ""}</tbody></table>${choiceRows ? "" : '<p class="note tight">没有值表。填写后，实时页会把原始值显示成文字。</p>'}</div></div>`;
 }
 
 /** 扩展多路复用（SG_MUL_VAL_）：被复用的信号可指定父选择信号和取值范围。 */
@@ -437,7 +478,9 @@ async function dbcCommitSignalField(entry, target, form) {
     }
   } else if (field === "mux_role") {
     fields.mux_role = target.value;
-    fields.mux_value = dbcParseNumber(form.querySelector('[data-field="mux_value"]').value) ?? 0;
+    // 复用值输入框只在被复用角色下显示；从“无”切换过来时沿用原值。
+    const muxValue = form.querySelector('[data-field="mux_value"]');
+    fields.mux_value = (muxValue ? dbcParseNumber(muxValue.value) : null) ?? signal.mux.value ?? 0;
   } else if (target.dataset.receiver !== undefined) {
     fields.receivers = [...form.querySelectorAll("[data-receiver]")].filter(box => box.checked).map(box => box.dataset.receiver);
   } else if (["name", "unit", "comment", "byte_order", "value_type"].includes(field)) {

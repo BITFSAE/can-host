@@ -96,13 +96,19 @@ async function dbcPlotFetch() {
         const chunk = reply.series[item.sid];
         if (!chunk) continue;
         let entry = dbcPlot.data.get(item.sid);
-        if (!entry || chunk.reset) { entry = { t: [], v: [], cursor: 0 }; dbcPlot.data.set(item.sid, entry); }
+        if (!entry || chunk.reset) { entry = { t: [], v: [], cursor: 0, low: Infinity, high: -Infinity }; dbcPlot.data.set(item.sid, entry); }
         if (dbcPlot.origin === null && chunk.t.length) dbcPlot.origin = chunk.t[0];
-        for (let index = 0; index < chunk.t.length; index += 1) { entry.t.push(chunk.t[index]); entry.v.push(chunk.v[index]); }
+        for (let index = 0; index < chunk.t.length; index += 1) {
+          const value = chunk.v[index];
+          entry.t.push(chunk.t[index]); entry.v.push(value);
+          if (value < entry.low) entry.low = value;
+          if (value > entry.high) entry.high = value;
+        }
         entry.cursor = chunk.cursor;
         if (entry.t.length > DBC_PLOT_CAP) {
           const drop = entry.t.length - DBC_PLOT_CAP;
           entry.t.splice(0, drop); entry.v.splice(0, drop);
+          Object.assign(entry, dbcRangeOf(entry.v));
         }
       }
     }
@@ -129,6 +135,12 @@ function dbcPlotResolveMeta() {
 function dbcPlotColor(index) { return cssVar(`--series-${(index % 8) + 1}`, "#4ad6ec"); }
 
 function dbcPlotSource(item) { return dbcPlot.mode === "trace" ? dbcPlot.traceData.get(item.sid) : dbcPlot.data.get(item.sid); }
+
+function dbcRangeOf(values) {
+  let low = Infinity, high = -Infinity;
+  for (const value of values) { if (value < low) low = value; if (value > high) high = value; }
+  return { low, high };
+}
 
 function dbcBisect(times, value) {
   let low = 0, high = times.length;
@@ -158,8 +170,9 @@ function dbcPlotTable() {
       times = times.filter((_, index) => index % stride === 0);
       values = values.filter((_, index) => index % stride === 0);
     }
-    let low = Infinity, high = -Infinity;
-    for (const value of source.v) { if (value < low) low = value; if (value > high) high = value; }
+    // 实时样本在取回时累计极值，每次重绘不再扫描全部历史。
+    if (source.low === undefined) Object.assign(source, dbcRangeOf(source.v));
+    const { low, high } = source;
     stats.push({ low, high });
     if (dbcPlot.normalize && high > low) values = values.map(value => (value - low) / (high - low) * 100);
     else if (dbcPlot.normalize) values = values.map(() => 50);
@@ -205,14 +218,27 @@ function dbcPlotDestroy() {
   dbcPlot.drawKey = "";
 }
 
+/** 曲线填满卡片：宽高取绘图区，减去图例占用的高度。 */
+function dbcPlotSize() {
+  const host = $("#dbcPlot");
+  const legend = dbcPlot.chart?.root.querySelector(".u-legend")?.offsetHeight ?? 32;
+  return { width: Math.max(320, Math.floor(host.clientWidth - 24)), height: Math.max(180, Math.floor(host.clientHeight - 24 - legend - 4)) };
+}
+
+function dbcPlotResize() {
+  if (!dbcPlot.chart) return;
+  const size = dbcPlotSize();
+  if (size.width !== dbcPlot.chart.width || size.height !== dbcPlot.chart.height) dbcPlot.chart.setSize(size);
+}
+
 function dbcPlotDraw() {
   const host = $("#dbcPlot");
   const { tables, latest, from, windowed, stats } = dbcPlotTable();
   const units = dbcPlotUnits();
   const normalize = dbcPlot.normalize || units.length > 3;
   const theme = document.documentElement.dataset.theme;
-  const width = Math.max(320, host.clientWidth - 24);
-  const structure = JSON.stringify([dbcPlot.series.map(item => [item.sid, item.color, item.unit]), normalize, theme, width, dbcPlot.mode]);
+  const { width, height } = dbcPlotSize();
+  const structure = JSON.stringify([dbcPlot.series.map(item => [item.sid, item.color, item.unit]), normalize, theme, dbcPlot.mode]);
   const counts = tables.map(table => table[0].length).join(",");
   const drawKey = `${counts}|${windowed ? Math.round(latest * 4) : ""}|${dbcPlot.windowSec}`;
   if (structure !== dbcPlot.chartKey) {
@@ -235,7 +261,7 @@ function dbcPlotDraw() {
       });
     }
     const options = {
-      width, height: 340, scales, axes, legend: { show: true },
+      width, height, scales, axes, legend: { show: true },
       cursor: { drag: { x: true, y: false }, points: { size: 6 } },
       series: [{ label: "时间 s" }, ...dbcPlot.series.map(item => ({
         label: `${item.signal}${item.unit ? ` [${item.unit}]` : ""}`, stroke: dbcPlotColor(item.color), width: 1.6,
@@ -249,6 +275,7 @@ function dbcPlotDraw() {
     dbcPlot.chart = new uPlot(options, joined, host);
     dbcPlot.chartKey = structure;
     dbcPlot.drawKey = drawKey;
+    dbcPlotResize();
     if (windowed) dbcPlotScaleX(from, latest);
     return;
   }
@@ -292,7 +319,8 @@ async function dbcPlotLoadTrace() {
   if (!reply?.ok) return toast(reply?.error || "无法从记录文件解码", true);
   for (const item of dbcPlot.series) {
     const result = reply.series[item.sid];
-    dbcPlot.traceData.set(item.sid, { t: result?.t || [], v: result?.v || [], samples: result?.samples || 0 });
+    const values = result?.v || [];
+    dbcPlot.traceData.set(item.sid, { t: result?.t || [], v: values, samples: result?.samples || 0, ...dbcRangeOf(values) });
   }
   dbcPlot.drawKey = "";
   dbcPlotDestroy();
@@ -382,9 +410,10 @@ function bindDbcPlotControls() {
     const item = dbcPlot.series.find(series => series.sid === button.closest("[data-sid]").dataset.sid);
     if (item) dbcTogglePlot(item.source, item.key, item.signal);
   });
+  // 绘图区尺寸由卡片决定（不随图表内容变化），尺寸变化时只调整画布，不重建图表。
   if (typeof ResizeObserver === "function" && $("#dbcPlot")) {
     dbcPlot.observer = new ResizeObserver(() => {
-      if (dbcPlot.chart && state.page === "dbc" && dbcUi.tab === "plot") { dbcPlot.chartKey = ""; dbcPlot.drawKey = ""; renderDbcPlot(); }
+      if (state.page === "dbc" && dbcUi.tab === "plot") dbcPlotResize();
     });
     dbcPlot.observer.observe($("#dbcPlot"));
   }
