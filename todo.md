@@ -1,9 +1,16 @@
 # 进度与待办
 
+## 2026-10-27 v0.9.31 发布验证
+
+- 已发布 [GitHub v0.9.31](https://github.com/BITFSAE/can-host/releases/tag/v0.9.31) 与 [CNB 镜像](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.31)，标签对应 `e7a61b1`；版本变化见 [CHANGELOG](CHANGELOG.md#v0931--2026-10-27)。
+- 合并方式：`docs/bitfsae-standards`（`a40896c`）快进并入 `main` 后删除，仓库与本机都只剩 `main`。
+- 软件验证：本地 764 项测试全部通过（1 项平台跳过）；主分支 Windows 测试、标签触发的双平台构建与发布任务均成功。GitHub 有 7 个附件，CNB 同样 7 个附件、匿名地址可按范围请求读取，`cnb-update/latest.json` 已指向 v0.9.31。
+- 未验证：冻结包在 Windows WebView2 与 macOS WKWebView 原生窗口里的实际操作、实体 PCAN 联调；见下一条未验证项。
+
 ## 2026-10-25 DBC 工作台界面重排与滚动性能
 
-- 只改前端（`canhost/web/index.html`、`styles.css`、`js/dbc*.js`），后端接口和解码不变；变化见 [CHANGELOG](CHANGELOG.md#未发布)，用法同步到 [DBC 工作台](DOC/DBC工作台.md)。
-- 软件验证：`test_dbc_ui` 与主题测试通过；全量 764 项中 762 项通过、1 项平台跳过，`test_release_history_merges_online_release_over_embedded` 仍是既有失败（干净 `main` 上同样复现）。浏览器预览（内置模拟 CAN1 + 中央库 `Vehicle_Can1.dbc`）在 1440×900、1024×700 和浅色主题下核对了实时、曲线、编辑、比对四页；32 个信号的报文每次轮询整页渲染约 0.4 ms，信号表零次整表重建，无长任务，页面脚本无错误。
+- 只改前端（`canhost/web/index.html`、`styles.css`、`js/dbc*.js`），后端接口和解码不变；变化见 [CHANGELOG](CHANGELOG.md#v0931--2026-10-27)，用法同步到 [DBC 工作台](DOC/DBC工作台.md)。
+- 软件验证：`test_dbc_ui` 与主题测试通过；全量 764 项测试通过（1 项平台跳过）。`test_release_history_merges_online_release_over_embedded` 之前失败的原因是工作区里 `canhost/release_info.py` 仍是上一次打包生成的 0.9.29，与 `__version__` 不一致；按发布步骤运行 `scripts/set_version.py 0.9.31` 重新生成后即通过。浏览器预览（内置模拟 CAN1 + 中央库 `Vehicle_Can1.dbc`）在 1440×900、1024×700 和浅色主题下核对了实时、曲线、编辑、比对四页；32 个信号的报文每次轮询整页渲染约 0.4 ms，信号表零次整表重建，无长任务，页面脚本无错误。
 - 未验证：Windows WebView2 与 macOS WKWebView 原生窗口下的滚动手感和分隔条拖动；实体 PCAN。
 
 ## 2026-10-20 界面层级、措辞与浅色对比度
