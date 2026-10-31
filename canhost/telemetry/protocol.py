@@ -67,6 +67,7 @@ def decode_telemetry_payload(payload: bytes) -> dict[str, Any]:
     except DecodeError as exc:
         raise ValueError(f"TelemetryFrame Protobuf 解码失败：{exc}") from exc
 
+    soc_x10 = _optional(frame, "battery_soc_pct_x10")
     present_domains = [field.name for field, _ in frame.ListFields()]
     if not present_domains:
         raise ValueError("Payload 中没有可识别的 TelemetryFrame 字段")
@@ -156,7 +157,7 @@ def decode_telemetry_payload(payload: bytes) -> dict[str, Any]:
         "summary": {
             "hv_voltage_v": float(frame.hv_voltage),
             "hv_current_a": float(frame.hv_current),
-            "soc_pct": int(frame.battery_soc),
+            "soc_pct": soc_x10 / 10.0 if soc_x10 is not None else int(frame.battery_soc),
             "battery_temp_max_c": float(frame.battery_temp_max),
         },
         "present_domains": present_domains,

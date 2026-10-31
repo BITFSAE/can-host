@@ -1,5 +1,11 @@
 # 进度与待办
 
+## 2026-10-31 SOC 小数链路
+
+- 统一包状态解码兼容旧整数帧和新版小数扩展，BMS、整车总览及底栏显示一位小数，MQTT 遥测摘要优先使用新小数字段；模拟报文构造器可传一位小数。
+- `.venv/bin/python -m unittest discover -s Tests -p "test_*.py"`：SOC 独立提交快照 768 项通过，1 项平台跳过。新增旧/新帧、小数、有效位、越界和扩展标记回退测试。
+- 待实体 PCAN/HMI 联调；本轮未打包、未发布。
+
 ## 2026-10-27 v0.9.31 发布验证
 
 - 已发布 [GitHub v0.9.31](https://github.com/BITFSAE/can-host/releases/tag/v0.9.31) 与 [CNB 镜像](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.31)，标签对应 `e7a61b1`；版本变化见 [CHANGELOG](CHANGELOG.md#v0931--2026-10-27)。

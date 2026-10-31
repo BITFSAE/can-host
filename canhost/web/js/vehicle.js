@@ -175,7 +175,7 @@ function renderVehicle() {
   const packFresh = isFresh(pack.age);
   text("#vehPackV", packKnown && pack.voltage_valid ? fmt(pack.voltage_v, 1) : "等待数据");
   text("#vehPackI", packKnown && pack.current_valid ? fmt(pack.current_a, 1) : "等待数据");
-  text("#vehPackSoc", packKnown && pack.soc_valid ? fmt(pack.soc_pct, 0) : "等待数据");
+  text("#vehPackSoc", packKnown && pack.soc_valid ? fmt(pack.soc_pct, 1) : "等待数据");
   const packStateNode = $("#vehPackState");
   text("#vehPackState", packKnown ? VEH_STATE_NAMES[pack.state] ?? pack.state ?? "—" : "等待数据");
   packStateNode.className = `veh-state-text ${packFresh ? (pack.state === 7 ? "bad" : pack.state === 5 ? "ok" : "") : ""}`;

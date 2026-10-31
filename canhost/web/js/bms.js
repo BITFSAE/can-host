@@ -139,7 +139,7 @@ function renderOverview() {
   $("#alarmLevelName").className = !faultState.faultFresh || o.alarm_level == null ? "" : o.alarm_level === 1 ? "bad" : o.alarm_level === 2 ? "warn" : "ok";
   text("#packVoltage", voltageFresh ? fmt(o.voltage_v, 1) : "等待数据");
   text("#packCurrent", currentFresh ? fmt(o.current_a, 1) : "等待数据");
-  text("#packSoc", socFresh ? fmt(o.soc_pct, 0) : "等待数据");
+  text("#packSoc", socFresh ? fmt(o.soc_pct, 1) : "等待数据");
   $("#socBar").style.width = socFresh ? `${Math.max(0, Math.min(100, o.soc_pct))}%` : "0%";
   const delta = cellExtremesFresh && o.max_cell_mv != null && o.min_cell_mv != null ? o.max_cell_mv - o.min_cell_mv : null;
   text("#cellDelta", delta == null ? "等待数据" : fmt(delta, 0));

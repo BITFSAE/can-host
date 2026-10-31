@@ -1304,7 +1304,7 @@ function renderQuickBar() {
   const vehicleSocKnown = vehiclePackKnown && vehiclePack.soc_valid;
   const socSource = choosePackSource(mainSocKnown, useMainSoc,
     vehicleSocKnown, vehicleSocFresh);
-  setQuickValue("#quickSoc", socSource && fmt(socSource.data.soc_pct, 0),
+  setQuickValue("#quickSoc", socSource && fmt(socSource.data.soc_pct, 1),
     !!socSource, socSource?.fresh, socSource?.age);
 
   const sop = quick?.sop || {};

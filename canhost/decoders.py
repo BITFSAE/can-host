@@ -190,13 +190,17 @@ ALARM_LEVEL_NAMES = {0: "正常", 1: "一级故障", 2: "二级告警", 3: "保�
 
 def decode_pack_status(data: bytes) -> dict[str, Any]:
     valid = data[5]
+    soc_x10 = data[4] * 10
+    if len(data) >= 8 and data[7] & 0xF0 == 0xA0 and data[7] & 0x0F <= 9:
+        soc_x10 += data[7] & 0x0F
+    soc_valid = bool(valid & 0x04) and soc_x10 <= 1000
     return {
         "voltage_v": u16be(data) / 10.0 if valid & 0x01 else None,
         "current_a": int.from_bytes(data[2:4], "big", signed=True) / 10.0 if valid & 0x02 else None,
-        "soc_pct": data[4] if valid & 0x04 else None,
+        "soc_pct": soc_x10 / 10.0 if soc_valid else None,
         "voltage_valid": bool(valid & 0x01),
         "current_valid": bool(valid & 0x02),
-        "soc_valid": bool(valid & 0x04),
+        "soc_valid": soc_valid,
         "cell_voltage_complete": bool(valid & 0x08),
         "temperature_complete": bool(valid & 0x10),
         "state": (data[6] >> 4) & 0x0F,
@@ -866,18 +870,23 @@ def _u16(value: int, byteorder: str) -> bytes:
     return int(value).to_bytes(2, byteorder, signed=False)  # type: ignore[arg-type]
 
 
-def build_pack_status(voltage_v: float, current_a: float, soc_raw: int, *,
+def build_pack_status(voltage_v: float, current_a: float, soc_raw: float, *,
                       voltage_valid: bool = True, current_valid: bool = True,
                       soc_valid: bool = True, cells_complete: bool = True,
                       temperatures_complete: bool = True, state: int = 5,
                       alarm_level: int = 0) -> bytes:
-    """BMS 0x4B0 (7 bytes); inverse of :func:`decode_pack_status`."""
+    """BMS 0x4B0：整数 7 字节，小数 8 字节；SOC 四舍五入到一位小数。"""
     flags = (int(voltage_valid) | int(current_valid) << 1 | int(soc_valid) << 2
              | int(cells_complete) << 3 | int(temperatures_complete) << 4)
-    return (_u16(_scaled(voltage_v, 0.1, 0, 0xFFFF), "big")
+    soc_x10 = round(soc_raw * 10)
+    soc_integer = soc_x10 // 10 if 0 <= soc_raw <= 100 else int(soc_raw)
+    payload = (_u16(_scaled(voltage_v, 0.1, 0, 0xFFFF), "big")
             + _i16(_scaled(current_a, 0.1, -32768, 32767), "big")
-            + bytes([max(0, min(255, int(soc_raw))), flags,
+            + bytes([max(0, min(255, soc_integer)), flags,
                      (state & 0x0F) << 4 | (alarm_level & 0x0F)]))
+    if 0 <= soc_raw <= 100 and soc_x10 % 10:
+        payload += bytes([0xA0 | (soc_x10 % 10)])
+    return payload
 
 
 def build_sop_limits(discharge_kw: float, regen_kw: float, sequence: int, *,
