@@ -18,7 +18,7 @@ const ALARM_RULE_TEXTS = [
   null, null, null, null,
   null, null,
   "压差 ≥800 mV · 即时", "温差 ≥30 °C · 即时",
-  "总压 ≥578.2 V · 480 ms", "总压 ≤415.4 V · 480 ms",
+  "总压 ≥582.3 V · 480 ms", "总压 ≤415.4 V · 480 ms",
   "风扇/UART/RTC/Flash异常 · 二级", "≤5.0% 一级",
   "充电电流 >15.0 A · 270 ms", "放电电流 <−180.0 A · 270 ms",
   "", "",
