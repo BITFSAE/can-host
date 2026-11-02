@@ -424,13 +424,14 @@ class ServiceTest(unittest.TestCase):
                                                             is_extended_id=False))
         send(0x301, bytes([0xE8, 0x03]))
         send(0x7A1, (5231).to_bytes(2, "little") + bytes(2) + (5280).to_bytes(2, "little") + bytes(2))
-        send(0x703, bytes([3, 1]))
+        send(0x703, bytes([3, 4]))
         self.assertTrue(wait_until(lambda: self.service.snapshot()["display"].get("steering") is not None))
         display = self.service.snapshot()["display"]
         self.assertTrue(display["online"])
         self.assertEqual(display["speed"]["data"]["speed_kmh"], 100.0)
         self.assertEqual(display["lap"]["data"]["current_s"], 52.31)
-        self.assertEqual(display["steering"]["data"], {"slip_level": 3, "lap_toggle": True, "error_clear": False})
+        self.assertEqual(display["steering"]["data"],
+                         {"slip_level": 3, "disable_request": False, "error_clear": False, "lap_toggle": True})
         self.assertTrue(any("0x703" in event["text"] and "圈速计时键" in event["text"]
                             for event in self.service.snapshot()["events"]))
 
@@ -492,18 +493,33 @@ class ServiceTest(unittest.TestCase):
             self.assertEqual((message.arbitration_id, bytes(message.data)), (frame_id, data), command)
 
         expect("wheel_mode", {"mode": 2}, 0x310, b"2" + bytes(7))
-        expect("wheel_slip", {"level": 5}, 0x700, b"\x05")
-        expect("wheel_lap", None, 0x701, b"\x01")
-        expect("wheel_clear", None, 0x702, b"\x01")
+        # Every 0x703 carries the current slip level; the lap timer is byte1 bit2, not bit0.
+        expect("wheel_slip", {"level": 5}, 0x703, b"\x05\x00")
+        expect("wheel_lap", None, 0x703, b"\x05\x04")
+        expect("wheel_clear", None, 0x703, b"\x05\x02")
         expect("wheel_invalid", {"kind": "mode_ff"}, 0x310, b"\xff" + bytes(7))
         expect("wheel_invalid", {"kind": "mode_4"}, 0x310, b"4" + bytes(7))
-        expect("wheel_invalid", {"kind": "slip_8"}, 0x700, b"\x08")
+        expect("wheel_invalid", {"kind": "slip_8"}, 0x703, b"\x08\x00")
         self.assertTrue(self.service.command("wheel_powerup")["ok"])
-        self.assertEqual([wheel_peer.recv(timeout=1.0).arbitration_id for _ in range(2)], [0x700, 0x310])
+        self.assertEqual([wheel_peer.recv(timeout=1.0).arbitration_id for _ in range(2)], [0x703, 0x310])
         self.assertTrue(self.service.command("wheel_lap_double")["ok"])
         first, second = wheel_peer.recv(timeout=1.0), wheel_peer.recv(timeout=1.0)
+        self.assertEqual(bytes(first.data), b"\x05\x04")
         self.assertLess(0.08, second.timestamp - first.timestamp)
         self.assertLess(second.timestamp - first.timestamp, 0.3)
+        # Exit-enable chord: DisableRequest=1 every 20 ms, at least 3 frames, then one frame with 0.
+        events_before = len(self.service.snapshot()["events"])
+        self.assertTrue(self.service.command("wheel_disable")["ok"])
+        chord = [wheel_peer.recv(timeout=1.0) for _ in range(6)]
+        self.assertEqual([(m.arbitration_id, bytes(m.data)) for m in chord],
+                         [(0x703, b"\x05\x01")] * 5 + [(0x703, b"\x05\x00")])
+        gaps = [later.timestamp - earlier.timestamp for earlier, later in zip(chord, chord[1:])]
+        self.assertTrue(all(0.01 < gap < 0.1 for gap in gaps), gaps)
+        self.assertEqual(len(self.service.snapshot()["events"]) - events_before, 1)   # one line, not six
+        self.assertTrue(self.service.command("wheel_invalid", {"kind": "disable_short"})["ok"])
+        self.assertEqual([bytes(wheel_peer.recv(timeout=1.0).data) for _ in range(3)],
+                         [b"\x05\x01", b"\x05\x01", b"\x05\x00"])
+        self.assertIsNone(wheel_peer.recv(timeout=0.1))
         values = self.service.snapshot()["values"]
         self.assertEqual((values["wheelsw.mode"], values["wheelsw.slip"]), (2, 5))
 

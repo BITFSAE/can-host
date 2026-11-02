@@ -49,6 +49,8 @@ assert.match(rule(0), /阈值未回报/);
 assert.match(rule(0, {ov_mv: 4200}), /≥4200 mV/);
 assert.match(rule(2, {ot_c: 45}), /充电时45 °C/);
 assert.match(rule(3, {ut_c: 10}), /充电时10 °C/);
+assert.match(rule(11), /≤5\.0% 一级/);
+assert.doesNotMatch(rule(11), /10%|二级/);
 vm.runInContext('state.bootstrap = null', context);
 assert.match(rule(4), /等待/);
 assert.match(rule(5), /等待/);

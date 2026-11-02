@@ -348,7 +348,7 @@
                 <div class="duo-fields">
                   <label class="field big">
                     <span class="field-label">请求电压</span>
-                    <span class="field-input"><input id="chargeVoltage" type="number" min="415.4" max="575.0" step="0.1" placeholder="575.0"><em>V</em></span>
+                    <span class="field-input"><input id="chargeVoltage" type="number" min="415.4" max="580.0" step="0.1" placeholder="575.0"><em>V</em></span>
                   </label>
                   <label class="field big">
                     <span class="field-label">请求电流</span>
@@ -956,12 +956,13 @@
                     <span id="dbObserveTag" class="tag neutral">未连接</span>
                   </header>
                   <div class="panel-body">
-                    <p class="db-hint db-hint-top">直接拨旋钮、转电位器、按按键。车手屏会把操作转发或合并后发到 CANB，下面实时解读并检查每一帧的格式。做了操作却没有出现新记录，说明车手屏没有发出。</p>
+                    <p class="db-hint db-hint-top">直接拨旋钮、转电位器、按按键。车手屏把方向盘的帧原样转发到 CANB，下面实时解读并检查每一帧的格式；退使组合键按住期间的重复帧合成一行。做了操作却没有出现新记录，说明车手屏没有发出。</p>
                     <div class="db-tiles">
                       <div class="db-tile" title="0x310：方向盘旋钮的驾驶模式请求，车手屏原样转发给 ECU；圈速计时中不转发"><span>旋钮档位</span><b id="dbKnobValue">—</b><small id="dbKnobAge">尚未操作</small></div>
                       <div class="db-tile" title="0x703 字节 0：方向盘电位器的滑级 0–7，每帧都带"><span>滑级</span><b id="dbSlipValue">—</b><small id="dbSlipAge">尚未收到</small></div>
-                      <div class="db-tile" title="0x703 字节 1 位 0：圈速计时键的一次有效按下"><span>圈速计时键</span><b id="dbLapValue">—</b><small id="dbLapAge">尚未按下</small></div>
-                      <div class="db-tile" title="0x703 字节 1 位 1：消错键的一次有效按下"><span>消错键</span><b id="dbClearValue">—</b><small id="dbClearAge">尚未按下</small></div>
+                      <div class="db-tile" title="0x703 字节 1 位 2：单独按下并松开圈速计时键（KEY1）"><span>圈速计时键</span><b id="dbLapValue">—</b><small id="dbLapAge">尚未按下</small></div>
+                      <div class="db-tile" title="0x703 字节 1 位 1：单独按下并松开消错键（KEY2）"><span>消错键</span><b id="dbClearValue">—</b><small id="dbClearAge">尚未按下</small></div>
+                      <div class="db-tile" title="0x703 字节 1 位 0：先按住消错键再按计时键、两键按住 300 ms 后，方向盘每 20 ms 发一帧请求 ECU 退出使能"><span>退使请求</span><b id="dbDisableValue">—</b><small id="dbDisableAge">尚未请求</small></div>
                     </div>
                     <div class="db-observe-summary">
                       <span>格式检查：正确 <b id="dbObserveOk">0</b> · 异常 <b id="dbObserveBad">0</b></span>
@@ -984,20 +985,22 @@
                   <div class="panel-body">
                     <p class="db-hint db-hint-top" id="dbWheelHint"></p>
                     <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">驾驶模式</span><small>0x310 · 旋钮四档，车手屏转发给 ECU</small></div><div class="db-big-row" id="dbWheelModes"></div></div>
-                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">滑级</span><small>0x700 · 电位器 0–7 档，显示在车手屏左栏 SLIP 条</small></div><div class="segmented" id="dbSlipLevels" role="group" aria-label="滑级"></div></div>
-                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">按键</span><small>0x701 / 0x702 · 按一下发一帧</small></div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">滑级</span><small>0x703 · 电位器 0–7 档，显示在车手屏左栏 SLIP 条</small></div><div class="segmented" id="dbSlipLevels" role="group" aria-label="滑级"></div></div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">按键</span><small>0x703 · 单键松开发一帧，组合键按住期间连发</small></div>
                       <div class="db-chip-row" id="dbWheelButtons">
-                        <button type="button" class="outline-button" data-db-command="wheel_lap" title="0x701：车手屏开始或停止圈速/冲刺计时，与触摸顶栏相同">圈速计时键（开始/停止计时）</button>
-                        <button type="button" class="outline-button" data-db-command="wheel_clear" title="0x702：车手屏清除界面上的全部告警">消错键（清除告警）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_lap" title="0x703 字节 1 位 2：车手屏开始或停止圈速/冲刺计时，与触摸顶栏相同">圈速计时键（开始/停止计时）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_clear" title="0x703 字节 1 位 1：车手屏清除界面上的全部告警">消错键（清除告警）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_disable" title="0x703 字节 1 位 0：DisableRequest=1 每 20 ms 一帧共 5 帧，随后 1 帧为 0；车手屏弹出退使提示并原样转发给 ECU">退使组合键（请求退出使能）</button>
                         <button type="button" class="outline-button" data-db-command="wheel_powerup" title="像方向盘上电那样补发当前滑级和驾驶模式">补发当前状态</button>
                       </div>
                     </div>
-                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">异常输入</span><small>车手屏应丢弃、不转发的坏帧</small></div>
+                    <div class="db-wheel-block"><div class="db-wheel-label"><span class="db-label">异常输入</span><small>车手屏应丢弃或标出的坏帧</small></div>
                       <div class="db-chip-row" id="dbWheelFaults">
                         <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"mode_ff"}' title="0x310 的模式码为 0xFF（方向盘换档途中的无效值）">模式码 0xFF</button>
                         <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"mode_4"}' title="0x310 的模式码为 ASCII '4'，超出 '0'..'3'">模式码 '4'（越界）</button>
-                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"slip_8"}' title="0x700 的滑级为 8，超出 0..7；车手屏不更新滑级也不发 0x703">滑级 8（越界）</button>
-                        <button type="button" class="outline-button" data-db-command="wheel_lap_double" title="两帧 0x701 间隔 100 ms：车手屏 300 ms 内只算一次按下">计时键连按两次（100 ms）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"slip_8"}' title="0x703 的滑级为 8，超出 0..7；车手屏原样转发但不更新滑级，上方观察标为异常">滑级 8（越界）</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_invalid" data-db-args='{"kind":"disable_short"}' title="DisableRequest=1 只发 2 帧就结束，少于方向盘应发的 3 帧">退使请求只发 2 帧</button>
+                        <button type="button" class="outline-button" data-db-command="wheel_lap_double" title="两帧计时位为 1 的 0x703 间隔 100 ms：车手屏 300 ms 内只算一次按下">计时键连按两次（100 ms）</button>
                       </div>
                     </div>
                   </div>
@@ -1030,7 +1033,7 @@
                     <div title="圈速计时开始后已完成的圈数"><dt>圈数<small>0x7A0 · 已跑圈数</small></dt><dd id="dbLapCount">等待数据</dd></div>
                     <div title="单位秒；差值为当前圈相对最快圈，负数表示更快"><dt>圈速<small>0x7A1 · 各圈用时与差值</small></dt><dd id="dbLapTimes">等待数据</dd></div>
                     <div title="圈速计时是否在进行，以及起终点线的检测状态"><dt>过线检测<small>0x068 · 起终点线状态</small></dt><dd id="dbLapDiag">等待数据</dd></div>
-                    <div title="车手屏把方向盘的滑级、圈速计时键、消错键合并成一帧发给 ECU；每收到一个方向盘帧发一次"><dt>方向盘指令<small>0x703 · 车手屏发给 ECU</small></dt><dd id="dbLastCommand">等待数据</dd></div>
+                    <div title="方向盘组好的指令帧（滑级、退使请求、消错键、圈速计时键），车手屏原样转发给 ECU；计时中也转发"><dt>方向盘指令<small>0x703 · 车手屏转发给 ECU</small></dt><dd id="dbLastCommand">等待数据</dd></div>
                     <div title="方向盘旋钮的驾驶模式请求，车手屏原样转发给 ECU；圈速计时中不转发"><dt>转发的驾驶模式<small>0x310 · 车手屏转发给 ECU</small></dt><dd id="dbLastMode">等待数据</dd></div>
                   </dl>
                 </div>

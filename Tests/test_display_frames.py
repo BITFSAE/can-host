@@ -109,10 +109,11 @@ class NodeFrameGoldenTest(unittest.TestCase):
         frame = d.build_ecu_status(1, [True, False, False, True], [0x419, 0, 0, 0])
         decoded = d.decode_ecu_status(frame)
         self.assertEqual(len(frame), 5)
-        self.assertEqual(decoded["mode_flag"], 1)
+        self.assertEqual(decoded["mode_flag"], 2)
         self.assertEqual(decoded["enable"], {"FL": True, "FR": False, "RL": False, "RR": True})
         self.assertEqual(decoded["error"], {"FL": True, "FR": False, "RL": False, "RR": False})
-        self.assertEqual(d.decode_ecu_status(d.build_ecu_status(-1, [True] * 4, [0] * 4))["mode_flag"], -1)
+        for mode in range(-1, 4):
+            self.assertEqual(d.decode_ecu_status(d.build_ecu_status(mode, [True] * 4, [0] * 4))["mode_flag"], mode + 1)
         # Firmware: byte2 bit4 FR, bit5 FL, bit6 RR, bit7 RL.
         enable_bits = d.build_ecu_status(0, [True, False, False, False], [0] * 4)[2] >> 4
         self.assertEqual(enable_bits, 0b0010)
@@ -133,13 +134,22 @@ class SteeringWheelFrameTest(unittest.TestCase):
         frame = d.build_drive_mode_request(d.DRIVE_MODE_ASCII_ZERO + 2)
         self.assertEqual(frame, b"2" + bytes(7))
         self.assertEqual(d.decode_drive_mode_request(frame), {"code": 50, "mode": 2})
+        self.assertEqual(d.decode_drive_mode_request(d.build_drive_mode_request(47))["mode"], -1)
         self.assertIsNone(d.decode_drive_mode_request(d.build_drive_mode_request(0xFF))["mode"])
         self.assertIsNone(d.decode_drive_mode_request(d.build_drive_mode_request(52))["mode"])
 
-    def test_slip_and_buttons_are_single_byte_frames(self) -> None:
-        self.assertEqual(d.build_slip_level(7), b"\x07")
-        self.assertEqual(d.build_button_press(), b"\x01")
-        self.assertEqual(d.build_button_press(False), b"\x00")
+    def test_steering_command_is_one_two_byte_frame_with_three_key_bits(self) -> None:
+        # Vehicle_CanB.dbc BO_1795: byte1 bit0 DisableRequest, bit1 ErrorClearActive, bit2 LapTimerToggle.
+        self.assertEqual(d.STEERING_COMMAND_ID, 0x703)
+        self.assertEqual(d.build_steering_command(7), b"\x07\x00")
+        self.assertEqual(d.build_steering_command(3, disable_request=True), b"\x03\x01")
+        self.assertEqual(d.build_steering_command(3, error_clear=True), b"\x03\x02")
+        self.assertEqual(d.build_steering_command(3, lap_toggle=True), b"\x03\x04")
+        self.assertEqual(d.build_steering_command(8), b"\x08\x00")   # out of range on purpose, not masked
+        for retired in ("SLIP_LEVEL_ID", "LAP_TOGGLE_ID", "ERROR_CLEAR_ID", "build_slip_level", "build_button_press"):
+            self.assertFalse(hasattr(d, retired), retired)
+        self.assertNotIn(0x700, d.CANB_ONLY_NODE_STD_IDS)
+        self.assertIn(0x703, d.CANB_ONLY_NODE_STD_IDS)
 
 
 class DisplayOriginatedFrameTest(unittest.TestCase):
@@ -182,12 +192,14 @@ class DisplayOriginatedFrameTest(unittest.TestCase):
         self.assertIsNone(d.decode_display_status(bytes(7)))
         self.assertIsNone(d.decode_display_lap(bytes(9)))
 
-    def test_merged_steering_command(self) -> None:
-        # Firmware: byte0 slip level, byte1 bit0 lap toggle, bit1 error clear.
+    def test_relayed_steering_command(self) -> None:
+        # Bit0 is the exit-enable request, not the lap timer; the lap timer is bit2.
         self.assertEqual(d.decode_steering_command(bytes([5, 1])),
-                         {"slip_level": 5, "lap_toggle": True, "error_clear": False})
+                         {"slip_level": 5, "disable_request": True, "error_clear": False, "lap_toggle": False})
         self.assertEqual(d.decode_steering_command(bytes([7, 2])),
-                         {"slip_level": 7, "lap_toggle": False, "error_clear": True})
+                         {"slip_level": 7, "disable_request": False, "error_clear": True, "lap_toggle": False})
+        self.assertEqual(d.decode_steering_command(bytes([2, 4])),
+                         {"slip_level": 2, "disable_request": False, "error_clear": False, "lap_toggle": True})
         self.assertIsNone(d.decode_steering_command(b"\x05"))
 
 

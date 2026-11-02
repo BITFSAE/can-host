@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from canhost.transport import CanService
 from canhost.app import Api, _simulation_available, _update_health_path_from_argv, _write_update_health
 from canhost.bms.protocol import BmsProtocol, build_command, command_ack_matches, switch_catalog
-from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID
+from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID, build_pack_status
 from canhost.bms.simulator import BmsSimulator
 
 
@@ -65,6 +65,33 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["config"]["switches"]["bsu_offline"])
         self.assertTrue(snapshot["config"]["switches"]["cell_lbk"])
         self.assertTrue(snapshot["config"]["switches"]["cell_tbk"])
+
+    def test_soc_alarm_uses_reported_level_on_can1_and_canb(self) -> None:
+        # 新固件正常电量、5% 一级及旧记录二级共用原有帧布局。
+        for summary_id, fault_id, level_id, extended in (
+            (0x186050F4, 0x187650F4, 0x187850F4, True),
+            (0x4B0, 0x4B1, 0x4B2, False),
+        ):
+            for soc, level, state in ((10.0, 0, 3), (7.5, 0, 5), (5.1, 0, 5),
+                                       (5.0, 1, 7), (7.5, 2, 5)):
+                with self.subTest(bus=hex(summary_id), soc=soc, level=level):
+                    protocol = BmsProtocol()
+                    protocol.ingest(CanFrame(summary_id, build_pack_status(
+                        500.0, -20.0, soc, state=state, alarm_level=level), extended))
+                    code = (1 << 11) if level else 0
+                    flags = 0xC0 if level == 1 else 0
+                    fault = bytes([state << 4 | level]) + code.to_bytes(4, "big")
+                    fault += bytes([flags, 0, 4])
+                    levels = bytearray(8)
+                    levels[2] = level << 6
+                    protocol.ingest(CanFrame(fault_id, fault, extended))
+                    protocol.ingest(CanFrame(level_id, bytes(levels), extended))
+                    snapshot = protocol.snapshot({"connected": True})
+                    self.assertEqual(snapshot["overview"]["soc_pct"], soc)
+                    self.assertEqual(snapshot["alarms"][11]["level"], level)
+                    self.assertEqual(snapshot["alarms"][11]["in_fault_code"], bool(level))
+                    self.assertEqual(snapshot["fault"]["flags"]["latched"], level == 1)
+                    self.assertEqual(snapshot["fault"]["version"], 4)
 
     def test_can_runtime_alarm_keeps_existing_can1_canb_layout(self) -> None:
         # F405 only changes which errors set bit21; frame version 4 stays valid.
@@ -246,12 +273,12 @@ class BmsProtocolTest(unittest.TestCase):
         frames = []
         simulator = BmsSimulator(frames.append)
         self.assertEqual((simulator.request_voltage, simulator.request_current), (5750, 30))
-        for payload, result in (("51 01 16 76 00 23 00 00", 1),
-                                ("51 02 16 77 00 23 00 00", 5),
-                                ("51 03 16 76 00 24 00 00", 5)):
+        for payload, result in (("51 01 16 A8 00 23 00 00", 1),
+                                ("51 02 16 A9 00 23 00 00", 5),
+                                ("51 03 16 A8 00 24 00 00", 5)):
             simulator.on_command(CanFrame(0x18A050F5, bytes.fromhex(payload), True))
             self.assertEqual(frames[-1].data[3], result)
-            self.assertEqual((simulator.request_voltage, simulator.request_current), (5750, 35))
+            self.assertEqual((simulator.request_voltage, simulator.request_current), (5800, 35))
 
     def test_canb_simulator_does_not_emit_can1_frames(self) -> None:
         frames: list[CanFrame] = []
@@ -459,7 +486,11 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertEqual(frame.data, bytes.fromhex("51 00 16 44 00 1E 00 00"))
         frame = build_command("charge_config", {"voltage_v": 575.0, "current_a": 3.5})
         self.assertEqual(frame.data, bytes.fromhex("51 00 16 76 00 23 00 00"))
-        for values in ({"voltage_v": 575.1, "current_a": 3.0},
+        frame = build_command("charge_config", {"voltage_v": 575.1, "current_a": 3.0})
+        self.assertEqual(frame.data, bytes.fromhex("51 00 16 77 00 1E 00 00"))
+        frame = build_command("charge_config", {"voltage_v": 580.0, "current_a": 3.5})
+        self.assertEqual(frame.data, bytes.fromhex("51 00 16 A8 00 23 00 00"))
+        for values in ({"voltage_v": 580.1, "current_a": 3.0},
                        {"voltage_v": 575.0, "current_a": 3.6}):
             with self.assertRaises(ValueError):
                 build_command("charge_config", values)

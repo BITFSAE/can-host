@@ -3895,7 +3895,7 @@ select {
 
 .db-wheel { display: grid; gap: var(--sp-2); }
 .db-wheel .panel-body { flex: 0 0 auto; }
-.db-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.db-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-2); }
 .db-tile { display: grid; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-soft); border-radius: var(--r-ctl); background: var(--wash-faint); }
 .db-tile span { color: var(--text-3); font-size: var(--fs-label); }
 .db-tile b { color: var(--text); font: 700 var(--fs-value-lg) var(--mono); }

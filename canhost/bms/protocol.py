@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..decoders import (ALARM_LEVEL_NAMES, CANB_IDS, STATE_NAMES, CanFrame, age,
-                        CHROMA_CURR_STD_ID, CHROMA_OUTPUT_STD_ID,
+                        CHARGE_REQUEST_VOLTAGE_MAX_01V, CHROMA_CURR_STD_ID, CHROMA_OUTPUT_STD_ID,
                         CHROMA_PROTECT_STD_ID, CHROMA_VOLT_STD_ID,
                         bms_cell_voltage_is_open, decode_alarm_levels, decode_bms_firmware_identity,
                         decode_ecu_sop_ack, decode_fault_fields,
@@ -722,8 +722,8 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
     if name == "charge_config":
         voltage = round(float(values["voltage_v"]) * 10)
         current = round(float(values["current_a"]) * 10)
-        if not 4154 <= voltage <= 5750 or not 0 <= current <= 35:
-            raise ValueError("充电请求范围为 415.4..575.0 V、0..3.5 A")
+        if not 4154 <= voltage <= CHARGE_REQUEST_VOLTAGE_MAX_01V or not 0 <= current <= 35:
+            raise ValueError("充电请求范围为 415.4..580.0 V、0..3.5 A")
         data = request_header(operation["charge_config"])
         data.extend(voltage.to_bytes(2, "big") + current.to_bytes(2, "big"))
         data.extend(b"\x00\x00")

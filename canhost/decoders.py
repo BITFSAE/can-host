@@ -15,6 +15,9 @@ import math
 import time
 from typing import Any
 
+# 充电机端目标含二极管压降余量；包内过压保护仍由 F405 独立判断。
+CHARGE_REQUEST_VOLTAGE_MAX_01V = 5800
+
 
 # ---------------------------------------------------------------------------
 # Shared value frame
@@ -105,7 +108,7 @@ CANB_OCCUPIED_WITHOUT_CHROMA = {
     0x300, 0x301, 0x305, 0x310, 0x430,
     0x4A0, 0x4A3, 0x4A4, 0x4B0, 0x4B1, 0x4B2,
     *range(0x502, 0x50A),
-    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5B0), 0x700,
+    0x521, 0x522, 0x526, 0x528, *range(0x5A0, 0x5B0), 0x703,
 }
 if CHROMA_ACK_STD_ID > 0x7FF or len(CHROMA_DERIVED_STD_IDS) != 6:
     raise RuntimeError("Chroma 节点基准派生出的 ID 超出 11 位范围或发生内部重复")
@@ -751,10 +754,9 @@ def decode_ecu_status(data: bytes) -> dict[str, Any]:
                 "RR": bool(byte & 0x04), "RL": bool(byte & 0x08)}
 
     mode_raw = (data[0] >> 4) & 0x0F
-    mode_signed = mode_raw - 16 if mode_raw >= 8 else mode_raw
     return {
         "error": nibble(data[0]),
-        "mode_flag": mode_signed,
+        "mode_flag": mode_raw,
         "system_ready": nibble(data[1]),
         "quit_dc_on": nibble(data[1] >> 4),
         "quit_inverter_on": nibble(data[2]),
@@ -981,13 +983,13 @@ def _wheel_nibble(fl: bool, fr: bool, rl: bool, rr: bool) -> int:
 def build_ecu_status(mode: int, enabled: Sequence[bool], faults: Sequence[int]) -> bytes:
     """ECU 0x509 (5 bytes); ``enabled`` and ``faults`` in display order FL, FR, RL, RR.
 
-    The display reads the mode nibble (signed, -1 = ECU default) and the four
-    enable bits.  Error, ready and quit nibbles mirror enable and fault state;
+    Mode uses the display index -1..3; the wire nibble is 0..4. The display
+    also reads the four enable bits. Error, ready and quit nibbles mirror them;
     the two logic-state bytes are a fixed filler the display ignores.
     """
     enable = _wheel_nibble(*enabled)
     error = _wheel_nibble(*(bool(value) for value in faults))
-    return bytes([(mode & 0x0F) << 4 | error, enable | enable << 4, enable | enable << 4, 0x44, 0x44])
+    return bytes([((mode + 1) & 0x0F) << 4 | error, enable | enable << 4, enable | enable << 4, 0x44, 0x44])
 
 
 def build_pdm_side(voltage_v: float, current_a: float, power_w: float, energy_wh: float, *,
@@ -1017,10 +1019,16 @@ def build_tire_frame(temperatures_c: Sequence[float]) -> bytes:
 
 
 DRIVE_MODE_REQUEST_ID = 0x310
-SLIP_LEVEL_ID = 0x700
-LAP_TOGGLE_ID = 0x701
-ERROR_CLEAR_ID = 0x702
 DRIVE_MODE_ASCII_ZERO = 48
+# 0x703 SteeringCmd (Vehicle_CanB.dbc BO_1795): the wheel builds the whole frame
+# on the display's CAN2 and the display relays it verbatim to CANB.  Byte0
+# bit0..2 slip level; byte1 bit0 DisableRequest (exit-enable request to the
+# ECU, formerly RecorderToggle), bit1 ErrorClearActive, bit2 LapTimerToggle.
+# The former private frames 0x700..0x702 are gone.
+STEERING_COMMAND_ID = 0x703
+STEERING_DISABLE_REQUEST = 0x01
+STEERING_ERROR_CLEAR = 0x02
+STEERING_LAP_TOGGLE = 0x04
 
 
 def build_drive_mode_request(code: int) -> bytes:
@@ -1028,14 +1036,12 @@ def build_drive_mode_request(code: int) -> bytes:
     return bytes([code & 0xFF]) + bytes(7)
 
 
-def build_slip_level(level: int) -> bytes:
-    """Steering wheel 0x700: DLC 1, slip level 0..7."""
-    return bytes([level & 0xFF])
-
-
-def build_button_press(pressed: bool = True) -> bytes:
-    """Steering wheel 0x701/0x702: DLC 1, bit 0 set once per press."""
-    return bytes([1 if pressed else 0])
+def build_steering_command(slip_level: int, *, disable_request: bool = False,
+                           error_clear: bool = False, lap_toggle: bool = False) -> bytes:
+    """Steering wheel 0x703: DLC 2, byte 0 the slip level as given, byte 1 the three key bits."""
+    flags = (STEERING_DISABLE_REQUEST if disable_request else 0) \
+        | (STEERING_ERROR_CLEAR if error_clear else 0) | (STEERING_LAP_TOGGLE if lap_toggle else 0)
+    return bytes([slip_level & 0xFF, flags])
 
 
 # ---------------------------------------------------------------------------
@@ -1049,7 +1055,7 @@ DISPLAY_POSITION_ID = 0x067
 DISPLAY_MOTION_ID = 0x068
 DISPLAY_STATUS_ID = 0x7A0
 DISPLAY_LAP_ID = 0x7A1
-STEERING_COMMAND_ID = 0x703
+# 0x703 and 0x310 are wheel frames the display relays verbatim.
 DISPLAY_TX_IDS = (DISPLAY_SPEED_ID, DISPLAY_POSITION_ID, DISPLAY_MOTION_ID,
                   DISPLAY_STATUS_ID, DISPLAY_LAP_ID, STEERING_COMMAND_ID, DRIVE_MODE_REQUEST_ID)
 LAP_DIAG_NAMES = {0: "未启用", 1: "等待布防", 2: "已布防", 3: "接近起终点线",
@@ -1110,19 +1116,20 @@ def decode_display_lap(data: bytes) -> dict[str, Any] | None:
 
 
 def decode_steering_command(data: bytes) -> dict[str, Any] | None:
-    """0x703 merged steering command: slip level, lap-timer toggle and error clear."""
+    """0x703 steering command as relayed by the display: slip level and the three key bits."""
     if len(data) != 2:
         return None
-    return {"slip_level": data[0] & 7, "lap_toggle": bool(data[1] & 1),
-            "error_clear": bool(data[1] & 2)}
+    return {"slip_level": data[0] & 7, "disable_request": bool(data[1] & STEERING_DISABLE_REQUEST),
+            "error_clear": bool(data[1] & STEERING_ERROR_CLEAR),
+            "lap_toggle": bool(data[1] & STEERING_LAP_TOGGLE)}
 
 
 def decode_drive_mode_request(data: bytes) -> dict[str, Any] | None:
-    """0x310 drive-mode request as relayed by the display; ``mode`` is None outside '0'..'3'."""
+    """0x310 drive-mode request as relayed by the display; ``mode`` is None outside 47..51 (display indexes -1..3)."""
     if not data:
         return None
     code = data[0]
-    valid = DRIVE_MODE_ASCII_ZERO <= code <= DRIVE_MODE_ASCII_ZERO + 3
+    valid = DRIVE_MODE_ASCII_ZERO - 1 <= code <= DRIVE_MODE_ASCII_ZERO + 3
     return {"code": code, "mode": code - DRIVE_MODE_ASCII_ZERO if valid else None}
 
 

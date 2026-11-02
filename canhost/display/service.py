@@ -23,7 +23,7 @@ from typing import Any
 
 from .. import decoders
 from .cycle import DriveCycle
-from .wheel_check import WheelObserver
+from .wheel_check import DISABLE_MIN_FRAMES, DISABLE_PERIOD_S, WheelObserver
 from .model import (
     DEFECT_NAMES, DISPLAY_TIMEOUT_MS, ECU_PERIODS_MS, FRAME_BY_ID, FRAMES, FRAMES_BY_NODE, NODES,
     NODE_LABELS, SCENARIOS, build_frame, cycle_drives, default_controls, default_values, derive,
@@ -44,9 +44,9 @@ ERROR_WINDOW_S = 2.0
 RATE_WINDOW_S = 1.0
 EVENT_LIMIT = 40
 
-MODE_NAMES = {0: "S 直线", 1: "Q 避障", 2: "C 八字", 3: "E 耐久"}
-WHEEL_FRAME_NAMES = {decoders.DRIVE_MODE_REQUEST_ID: "驾驶模式请求", decoders.SLIP_LEVEL_ID: "滑级",
-                     decoders.LAP_TOGGLE_ID: "圈速计时键", decoders.ERROR_CLEAR_ID: "消错键"}
+MODE_NAMES = {-1: "默认", 0: "S 直线", 1: "Q 避障", 2: "C 八字", 3: "E 耐久"}
+WHEEL_FRAME_NAMES = {decoders.DRIVE_MODE_REQUEST_ID: "驾驶模式请求", decoders.STEERING_COMMAND_ID: "方向盘指令"}
+WHEEL_DISABLE_FRAMES = 5   # simulated chord: 5 x DisableRequest=1 (~100 ms held), then the 0 frame
 # Display-originated frames: id -> (snapshot key, decoder, label)
 _DISPLAY_RX = {
     decoders.DISPLAY_SPEED_ID: ("speed", decoders.decode_display_speed),
@@ -426,10 +426,15 @@ class DisplayBenchService:
             if frame_id in _ALIVE_IDS:
                 self._display_seen = now
         if key == "steering":
-            parts = [f"滑级 {decoded['slip_level']}"]
-            parts += ["圈速计时键"] if decoded["lap_toggle"] else []
-            parts += ["清错键"] if decoded["error_clear"] else []
-            self._log("display", "车手屏发给 ECU 的方向盘指令（0x703）：" + " · ".join(parts))
+            # The exit-enable request repeats every 20 ms while held: log its first frame and its end only.
+            was_disabling = bool(previous and previous["data"]["disable_request"])
+            if not (decoded["disable_request"] and was_disabling):
+                parts = [f"滑级 {decoded['slip_level']}"]
+                parts += ["退使请求（按住期间每 20 ms 重发）"] if decoded["disable_request"] else []
+                parts += ["退使请求结束"] if was_disabling and not decoded["disable_request"] else []
+                parts += ["圈速计时键"] if decoded["lap_toggle"] else []
+                parts += ["清错键"] if decoded["error_clear"] else []
+                self._log("display", "车手屏转发给 ECU 的方向盘指令（0x703）：" + " · ".join(parts))
         elif key == "mode_request":
             mode = decoded["mode"]
             self._log("display", "车手屏转发的驾驶模式请求（0x310）：" + (MODE_NAMES[mode] if mode is not None
@@ -560,7 +565,7 @@ class DisplayBenchService:
 
     # -- steering wheel (display CAN2) -----------------------------------
 
-    def _send_wheel(self, frame_id: int, payload: bytes, text: str) -> dict[str, Any]:
+    def _send_wheel(self, frame_id: int, payload: bytes, text: str, *, log: bool = True) -> dict[str, Any]:
         with self._lock:
             running = self._state == "running"
             preview = self._mode == "preview"
@@ -576,9 +581,32 @@ class DisplayBenchService:
                 return {"ok": False, "error": f"方向盘帧 0x{frame_id:03X} 发送失败：{exc}"}
         with self._lock:
             self._wheel_tx += 1
-        self._log("wheel", f"方向盘 → 车手屏 {WHEEL_FRAME_NAMES[frame_id]}（0x{frame_id:03X}）：{text}"
-                  + ("（预览，未发送）" if preview else ""))
+        if log:
+            self._log("wheel", f"方向盘 → 车手屏 {WHEEL_FRAME_NAMES[frame_id]}（0x{frame_id:03X}）：{text}"
+                      + ("（预览，未发送）" if preview else ""))
         return {"ok": True}
+
+    def _wheel_command(self, text: str, *, slip: int | None = None, log: bool = True,
+                       **keys: bool) -> dict[str, Any]:
+        """One 0x703 as the wheel builds it: every frame carries the current slip level."""
+        if slip is None:
+            with self._lock:
+                slip = max(self._values["wheelsw.slip"], 0)
+        return self._send_wheel(decoders.STEERING_COMMAND_ID, decoders.build_steering_command(slip, **keys),
+                                text, log=log)
+
+    def _wheel_disable(self, frames: int, text: str) -> dict[str, Any]:
+        """The exit-enable chord after its 300 ms hold: DisableRequest=1 every 20 ms, then one 0 frame."""
+        due = time.monotonic()
+        for index in range(frames):
+            if index:
+                due += DISABLE_PERIOD_S
+                time.sleep(max(0.0, due - time.monotonic()))
+            result = self._wheel_command(text, disable_request=True, log=False)
+            if not result["ok"]:
+                return result
+        time.sleep(max(0.0, due + DISABLE_PERIOD_S - time.monotonic()))
+        return self._wheel_command(f"{text}：DisableRequest=1 共 {frames} 帧（每 20 ms），随后 1 帧为 0")
 
     def _wheel_mode(self, mode: int) -> dict[str, Any]:
         if not 0 <= mode <= 3:
@@ -594,7 +622,7 @@ class DisplayBenchService:
     def _wheel_slip(self, level: int) -> dict[str, Any]:
         if not 0 <= level <= 7:
             raise ValueError("滑级只能是 0..7")
-        result = self._send_wheel(decoders.SLIP_LEVEL_ID, decoders.build_slip_level(level), f"滑级 {level}")
+        result = self._wheel_command(f"滑级 {level}", slip=level)
         if result["ok"]:
             with self._lock:
                 self._values["wheelsw.slip"] = level
@@ -607,18 +635,21 @@ class DisplayBenchService:
         return self._wheel_slip(int(args.get("level")))
 
     def _cmd_wheel_lap(self, args: dict[str, Any]) -> dict[str, Any]:
-        return self._send_wheel(decoders.LAP_TOGGLE_ID, decoders.build_button_press(), "圈速计时键")
+        return self._wheel_command("圈速计时键", lap_toggle=True)
 
     def _cmd_wheel_clear(self, args: dict[str, Any]) -> dict[str, Any]:
-        return self._send_wheel(decoders.ERROR_CLEAR_ID, decoders.build_button_press(), "消错键")
+        return self._wheel_command("消错键", error_clear=True)
+
+    def _cmd_wheel_disable(self, args: dict[str, Any]) -> dict[str, Any]:
+        return self._wheel_disable(WHEEL_DISABLE_FRAMES, "退使组合键")
 
     def _cmd_wheel_lap_double(self, args: dict[str, Any]) -> dict[str, Any]:
         """Two presses 100 ms apart: the display counts them as one (300 ms debounce)."""
-        first = self._send_wheel(decoders.LAP_TOGGLE_ID, decoders.build_button_press(), "圈速计时键（连按 1/2）")
+        first = self._wheel_command("圈速计时键（连按 1/2）", lap_toggle=True)
         if not first["ok"]:
             return first
         time.sleep(0.1)
-        return self._send_wheel(decoders.LAP_TOGGLE_ID, decoders.build_button_press(), "圈速计时键（连按 2/2）")
+        return self._wheel_command("圈速计时键（连按 2/2）", lap_toggle=True)
 
     def _cmd_wheel_invalid(self, args: dict[str, Any]) -> dict[str, Any]:
         kind = str(args.get("kind"))
@@ -627,8 +658,10 @@ class DisplayBenchService:
                         "无效驾驶模式码 0xFF"),
             "mode_4": (decoders.DRIVE_MODE_REQUEST_ID, decoders.build_drive_mode_request(52),
                        "越界驾驶模式码 '4'"),
-            "slip_8": (decoders.SLIP_LEVEL_ID, decoders.build_slip_level(8), "越界滑级 8"),
+            "slip_8": (decoders.STEERING_COMMAND_ID, decoders.build_steering_command(8), "越界滑级 8"),
         }
+        if kind == "disable_short":
+            return self._wheel_disable(DISABLE_MIN_FRAMES - 1, "退使请求帧不足")
         if kind not in cases:
             raise ValueError(f"未知异常输入：{kind}")
         return self._send_wheel(*cases[kind])
@@ -647,7 +680,8 @@ class DisplayBenchService:
         "defect": _cmd_defect, "run": _cmd_run, "ecu_period": _cmd_ecu_period,
         "ecu_follow": _cmd_ecu_follow, "scenario": _cmd_scenario, "reset": _cmd_reset,
         "wheel_mode": _cmd_wheel_mode, "wheel_slip": _cmd_wheel_slip, "wheel_lap": _cmd_wheel_lap,
-        "wheel_clear": _cmd_wheel_clear, "wheel_lap_double": _cmd_wheel_lap_double,
+        "wheel_clear": _cmd_wheel_clear, "wheel_disable": _cmd_wheel_disable,
+        "wheel_lap_double": _cmd_wheel_lap_double,
         "wheel_invalid": _cmd_wheel_invalid, "wheel_powerup": _cmd_wheel_powerup,
         "wheel_log_clear": _cmd_wheel_log_clear,
     }

@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from ..decoders import CanFrame
+from ..decoders import CanFrame, CHARGE_REQUEST_VOLTAGE_MAX_01V
 from .protocol import CAN1_COMMAND_REQ_EXT_ID, TOOL_PROTOCOL_VERSION
 # 告警开关位图布局版本，与固件 CAN1_ALARM_SWITCH_FRAME_VERSION 一致：
 # 0x07 起从控未就绪/离线位表示全状态动作开关；位位置不变。
@@ -97,7 +97,7 @@ class BmsSimulator:
             voltage = int.from_bytes(data[2:4], "big")
             current = int.from_bytes(data[4:6], "big")
             if (data[6:8] != b"\x00\x00"
-                    or not 4154 <= voltage <= 5750 or not 0 <= current <= 35):
+                    or not 4154 <= voltage <= CHARGE_REQUEST_VOLTAGE_MAX_01V or not 0 <= current <= 35):
                 result = 5
             else:
                 self.request_voltage, self.request_current = voltage, current

@@ -3,8 +3,8 @@
 
 const DB_PREFS_KEY = "canHostDisplayBenchPreferences";
 const DB_WHEELS = [["fl", "左前 FL"], ["fr", "右前 FR"], ["rl", "左后 RL"], ["rr", "右后 RR"]];
-// 0x509 的驾驶模式半字节：-1 为 ECU 上电默认，车手屏对默认和越界值保持上一个模式。
-const DB_ECU_MODES = [[-1, "默认", "ECU 上电默认值，车手屏保持上一个模式"], [0, "S 直线", "直线加速"],
+// 页面索引 -1..3 对应 ECU 0x509 的 0..4；默认模式可被确认，越界值由车手屏忽略。
+const DB_ECU_MODES = [[-1, "默认", "ECU 回报 0，车手屏显示默认模式"], [0, "S 直线", "直线加速"],
   [1, "Q 避障", "避障"], [2, "C 八字", "八字绕环"], [3, "E 耐久", "耐久"], [7, "无效", "越界值，车手屏忽略"]];
 const DB_WHEEL_MODES = [[0, "S", "直线加速"], [1, "Q", "避障"], [2, "C", "八字绕环"], [3, "E", "耐久"]];
 const DB_FRESH_FAST_S = 1.0;
@@ -600,12 +600,14 @@ function dbRenderObserver(snapshot) {
   dbSetRow("#dbLapAge", observer.lap.count ? `最近 ${ago(observer.lap.age)}` : "尚未按下");
   dbSetRow("#dbClearValue", observer.clear.count ? `${observer.clear.count} 次` : "—");
   dbSetRow("#dbClearAge", observer.clear.count ? `最近 ${ago(observer.clear.age)}` : "尚未按下");
+  dbSetRow("#dbDisableValue", observer.disable.active ? "按住中" : observer.disable.count ? `${observer.disable.count} 次` : "—");
+  dbSetRow("#dbDisableAge", observer.disable.count ? `最近 ${ago(observer.disable.age)}` : "尚未请求");
   text("#dbObserveOk", String(observer.summary.ok));
   text("#dbObserveBad", String(observer.summary.bad));
   $("#dbObserveBad").classList.toggle("bad", observer.summary.bad > 0);
 
   const body = $("#dbObserveRows");
-  const signature = observer.rows.map(row => row.id).join(",");
+  const signature = observer.rows.map(row => `${row.id}.${row.rev}`).join(",");
   if (body.dataset.signature !== signature) {
     body.dataset.signature = signature;
     const verdict = { ok: ["✓ 正确", "ok"], warn: ["⚠ 需核对", "warn"], bad: ["✗ 异常", "bad"] };
@@ -657,10 +659,10 @@ function dbRenderSide(snapshot) {
     data => `当前 ${fmt(data.current_s, 2)} · 上圈 ${fmt(data.last_s, 2)} · 最快 ${fmt(data.best_s, 2)} · 差 ${fmt(data.delta_s, 2)} s`);
   const steering = display.steering;
   dbSetRow("#dbLastCommand", steering
-    ? `滑级 ${steering.data.slip_level}${steering.data.lap_toggle ? " · 圈速计时键" : ""}${steering.data.error_clear ? " · 消错键" : ""} · ${fmt(steering.age, 1)} s 前`
+    ? `滑级 ${steering.data.slip_level}${steering.data.disable_request ? " · 退使请求" : ""}${steering.data.lap_toggle ? " · 圈速计时键" : ""}${steering.data.error_clear ? " · 消错键" : ""} · ${fmt(steering.age, 1)} s 前`
     : noEvent);
   const request = display.mode_request;
-  const modeNames = ["S 直线", "Q 避障", "C 八字", "E 耐久"];
+  const modeNames = {"-1": "默认", 0: "S 直线", 1: "Q 避障", 2: "C 八字", 3: "E 耐久"};
   dbSetRow("#dbLastMode", request
     ? `${request.data.mode == null ? `无效码 0x${request.data.code.toString(16).toUpperCase()}` : modeNames[request.data.mode]} · ${fmt(request.age, 1)} s 前`
     : noEvent);

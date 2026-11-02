@@ -101,13 +101,15 @@ class DisplayPageWiringTest(unittest.TestCase):
 
     def test_wheel_tab_observes_the_physical_wheel_from_canb_alone(self) -> None:
         self.assertIn("不用接 CAN2", HTML)
-        for identifier in ("dbObserveRows", "dbKnobValue", "dbSlipValue", "dbLapValue", "dbClearValue", "dbObserveClear"):
+        for identifier in ("dbObserveRows", "dbKnobValue", "dbSlipValue", "dbLapValue", "dbClearValue",
+                           "dbDisableValue", "dbObserveClear"):
             self.assertIn(f'id="{identifier}"', HTML)
         self.assertIn("wheel_observer", SCRIPT)
         self.assertIn("wheel_log_clear", SCRIPT)
 
     def test_wheel_tab_labels_explain_their_frames(self) -> None:
-        for frame_id in ("0x310", "0x700", "0x701 / 0x702"):
+        self.assertNotRegex(HTML, r"0x70[012]")
+        for frame_id in ("0x310", "0x703"):
             self.assertRegex(HTML, rf'<small>{re.escape(frame_id)} · [^<]+</small>')
 
     def test_every_frame_has_a_plain_note_shown_in_the_monitor(self) -> None:
