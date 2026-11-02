@@ -98,7 +98,7 @@ SWITCH_DEFS = [
     ("beep", "蜂鸣器", "beep", "BeepSwitch", 1, 1),
     ("soc_low", "SOC 过低", "soclo", "ALM_BATT_UC_SWITCH", 1, 0),
     ("ivt_voltage_loss", "IVT 包电压失联", "ivtloss", "ALM_IVT_VOLT_LOSS_SWITCH", 2, 7),
-    ("lv1_blocked", "一级故障全部受阻", "lv1blk", "ALM_LV1_ALL_BLOCKED_SWITCH", 2, 6),
+    ("lv1_blocked", "普通一级故障动作", "lv1blk", "ALM_LV1_ALL_BLOCKED_SWITCH", 2, 6),
     ("lv2_blocked", "二级告警全部受阻", "lv2blk", "ALM_LV2_ALL_BLOCKED_SWITCH", 2, 5),
     ("bsu_not_ready", "从控未就绪", "bsunrdy", "ALM_BSU_NOT_READY_SWITCH", 2, 4),
     ("bsu_offline", "从控离线", "bsuoff", "ALM_BSU_OFFLINE_SWITCH", 2, 3),

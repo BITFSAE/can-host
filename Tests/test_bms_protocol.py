@@ -357,6 +357,21 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIsNone(overview["voltage_v"])
         self.assertIsNone(overview["current_a"])
 
+    def test_hv_fault_is_reported_with_lv1_switch_disabled(self) -> None:
+        # Bringup lv1blk=0 时，高压流程故障仍按原故障帧显示保持与 Q3。
+        for fault_id, extended in ((0x187650F4, True), (0x4B1, False)):
+            with self.subTest(fault_id=hex(fault_id)):
+                protocol = BmsProtocol()
+                protocol.ingest(CanFrame(0x187F50F4, bytes.fromhex("FF FF BE 07"), True))
+                protocol.ingest(CanFrame(fault_id, bytes.fromhex("71 00 02 00 00 C0 00 04"), extended))
+                snapshot = protocol.snapshot({"connected": True})
+                self.assertFalse(snapshot["config"]["switches"]["lv1_blocked"])
+                self.assertEqual(snapshot["config"]["switch_version"], 7)
+                self.assertTrue(snapshot["fault"]["flags"]["latched"])
+                self.assertTrue(snapshot["fault"]["flags"]["bms_output_latched"])
+                self.assertTrue(snapshot["alarms"][17]["in_fault_code"])
+                self.assertEqual(snapshot["fault"]["version"], 4)
+
     def test_hv_request_external_event_and_bms_fault_signal_are_separate(self) -> None:
         protocol = BmsProtocol()
         # HV_ACC request released, charge button released, Q0/Q1/Q2 off.
