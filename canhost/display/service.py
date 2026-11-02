@@ -600,12 +600,13 @@ class DisplayBenchService:
         due = time.monotonic()
         for index in range(frames):
             if index:
-                due += DISABLE_PERIOD_S
                 time.sleep(max(0.0, due - time.monotonic()))
             result = self._wheel_command(text, disable_request=True, log=False)
             if not result["ok"]:
                 return result
-        time.sleep(max(0.0, due + DISABLE_PERIOD_S - time.monotonic()))
+            # Windows 调度可能晚唤醒；从本帧实际发送后再等待，避免追赶旧时刻而挤在一起。
+            due = time.monotonic() + DISABLE_PERIOD_S
+        time.sleep(max(0.0, due - time.monotonic()))
         return self._wheel_command(f"{text}：DisableRequest=1 共 {frames} 帧（每 20 ms），随后 1 帧为 0")
 
     def _wheel_mode(self, mode: int) -> dict[str, Any]:

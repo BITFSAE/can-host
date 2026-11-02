@@ -194,6 +194,28 @@ class DriveCycleTest(unittest.TestCase):
         self.assertLess(updates["sop.discharge_kw"], 40.0)
 
 
+class WheelTimingTest(unittest.TestCase):
+    def test_delayed_scheduler_does_not_send_catchup_frames(self) -> None:
+        now = [0.0]
+        sent = []
+
+        def sleep(seconds: float) -> None:
+            now[0] += seconds + (0.015 if len(sent) == 1 else 0.0)  # 首次晚唤醒 15 ms。
+
+        def send(*args, **kwargs):
+            sent.append((now[0], kwargs.get("disable_request", False)))
+            return {"ok": True}
+
+        service = DisplayBenchService()
+        with patch.object(service, "_wheel_command", side_effect=send), \
+             patch("canhost.display.service.time.monotonic", side_effect=lambda: now[0]), \
+             patch("canhost.display.service.time.sleep", side_effect=sleep):
+            self.assertTrue(service._wheel_disable(5, "测试")["ok"])
+        self.assertEqual([active for _, active in sent], [True] * 5 + [False])
+        for first, second in zip(sent, sent[1:]):
+            self.assertGreaterEqual(second[0] - first[0], 0.020 - 1e-9)
+
+
 class ServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         index = next(_channels)
