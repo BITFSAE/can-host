@@ -109,6 +109,12 @@ class FileTests(WorkspaceCase):
         saved = self.workspace.save(file_id, path=str(copy))
         self.assertTrue(saved["ok"], saved)
         self.assertEqual(copy.read_bytes(), path.read_bytes())
+        # 另存为的副本从此可编辑，原中央库文件仍只读。
+        self.assertFalse(saved["file"]["readonly"])
+        self.assertTrue(self.workspace.edit(file_id, {"op": "set_message", "message": "s:291",
+                                                      "fields": {"name": "EngineCopy"}})["ok"])
+        again = self.workspace.open_path(path)
+        self.assertTrue(again["file"]["readonly"])
 
     def test_new_file_edit_and_save_as(self) -> None:
         file_id = self.workspace.new_file("scratch.dbc", "can1")["file"]["id"]
@@ -394,6 +400,20 @@ class LiveTests(WorkspaceCase):
         self.assertFalse(self.workspace.encode("canb", "s:291", {})["ok"])
         self.assertFalse(self.workspace.encode("can1", "s:291", {"Speed": 1e9})["ok"])
         self.assertFalse(self.workspace.encode("can1", "garbage", {})["ok"])
+
+    def test_long_symbol_names_are_used_for_live_and_encoding(self) -> None:
+        key = "e:403105268"
+        frame = fact(403105268, bytes([0x39, 0x30, 0x07, 0, 0, 0, 0, 0]), 99.9, extended=True)
+        rows = self.live([frame], keys=[key])["decoded"][key]["signals"]
+        long_name = "VeryLongSignalNameForTestingTheShortSymbol"
+        row = next(item for item in rows if item["name"] == long_name)
+        self.assertEqual((row["file_name"], row["value"]), ("VeryLongSignalNameForTestingTheS", 7))
+        form = self.workspace.message_form("can1", key)
+        self.assertIn(long_name, form["values"])
+        by_display = self.workspace.encode("can1", key, {long_name: 7})
+        by_file = self.workspace.encode("can1", key, {"VeryLongSignalNameForTestingTheS": 7})
+        self.assertEqual(by_display["data"], by_file["data"])
+        self.assertEqual(by_display["data"].split()[2], "07")
 
 
 class SeriesTests(unittest.TestCase):

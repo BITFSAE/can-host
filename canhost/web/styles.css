@@ -4300,6 +4300,11 @@ select {
 .dbc-signal-table th.dbc-col-raw { width: 15%; }
 .dbc-signal-table th.dbc-col-range { width: 11%; }
 #page-dbc .frame-table .dbc-col-act { width: 76px; }
+#page-dbc .dbc-attr-table th:nth-child(1) { width: 64px; }
+#page-dbc .dbc-attr-table th:nth-child(2) { width: 26%; }
+#page-dbc .dbc-attr-table th:nth-child(3) { width: 36%; }
+#page-dbc .dbc-attr-table th:nth-child(4) { width: 12%; }
+#page-dbc .dbc-attr-table th:nth-child(5) { width: 132px; }
 .dbc-signal-table td.dbc-name { overflow: hidden; color: var(--text); font-family: var(--mono); font-weight: 600; text-overflow: ellipsis; }
 .dbc-signal-table td.dbc-name small { display: block; overflow: hidden; color: var(--text-3); font: var(--fs-unit) var(--cjk); font-weight: 400; text-overflow: ellipsis; }
 .dbc-value { color: var(--text); font: 700 var(--fs-value) var(--mono); }
@@ -4387,6 +4392,8 @@ select {
 .dbc-detail-head h3 { display: flex; align-items: center; font-family: var(--mono) !important; }
 .dbc-foot { padding: 0 var(--sp-3) var(--sp-3); }
 .dbc-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: var(--sp-2); align-items: start; }
+/* 属性定义包含名称、类型、默认值和操作，独占整行才不会被裁成省略号。 */
+.dbc-edit-grid > article:last-child { grid-column: 1 / -1; }
 .dbc-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--sp-2); }
 .dbc-detail .dbc-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .dbc-form-grid .wide, .dbc-form-section { grid-column: 1 / -1; }
@@ -4398,6 +4405,11 @@ select {
 .dbc-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
 .dbc-subhead { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--line-soft); color: var(--text-3); font: 600 var(--fs-unit) var(--cjk); }
 .dbc-subhead select { min-height: 26px; padding: 0 var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-unit); }
+.dbc-node-attr-row td { background: var(--surface-2); }
+.dbc-node-attr-row .dbc-subhead { margin-top: 0; }
+.dbc-group-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--line-soft); }
+.dbc-group-row:last-child { border-bottom: 0; }
+.dbc-group-row .note { margin-top: var(--sp-1); }
 .dbc-signal-list tr { cursor: pointer; }
 .dbc-signal-list tr.active td { background: var(--surface-hi); color: var(--text); }
 #page-dbc .dbc-signal-list th:nth-child(1) { width: 38%; }
@@ -4441,6 +4453,37 @@ select {
 .dbc-choices input:focus { border-color: var(--accent); outline: 0; }
 .dbc-choices td:first-child { width: 84px; }
 .dbc-choices td:last-child { width: 30px; }
+
+/* ---- 右键菜单 ---- */
+.dbc-context-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 196px;
+  padding: var(--sp-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-ctl);
+  background: var(--surface-elevated);
+}
+.dbc-context-menu button {
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: transparent;
+  color: var(--text-2);
+  font: var(--fs-label) var(--cjk);
+  text-align: left;
+  white-space: nowrap;
+}
+.dbc-context-menu button:hover:not(:disabled),
+.dbc-context-menu button:focus-visible { background: var(--surface-hi); color: var(--text); }
+.dbc-context-menu button:focus-visible { outline: 2px solid var(--action-border); outline-offset: -2px; }
+.dbc-context-menu button.danger { color: var(--fault); }
+.dbc-context-menu button.danger:hover:not(:disabled) { background: var(--fault-dim); }
+.dbc-context-menu button:disabled { opacity: .55; color: var(--text-3); cursor: default; }
+.dbc-menu-sep { height: 1px; margin: var(--sp-1); background: var(--line-soft); }
 
 .dbc-issues { display: grid; }
 .dbc-issue {

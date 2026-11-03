@@ -1649,7 +1649,7 @@
 
   <dialog id="connectDialog" class="modal" data-backdrop-close>
     <form method="dialog">
-      <header><h2 id="connectDialogTitle">CAN 连接设置</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2 id="connectDialogTitle">CAN 连接设置</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <div class="pcan-discovery">
           <span id="pcanDiscoveryStatus" role="status" aria-live="polite">正在读取 PCAN 设备…</span>
@@ -1688,7 +1688,7 @@
         <p class="connection-settings-message hidden" id="connectionSettingsMessage" role="status" aria-live="polite"></p>
       </div>
       <footer>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="saveConnectionSettings">保存设置</button>
       </footer>
     </form>
@@ -1696,7 +1696,7 @@
 
   <dialog id="telemetryConnectDialog" class="modal telemetry-modal" data-backdrop-close>
     <form method="dialog">
-      <header><h2>MQTT 遥测订阅</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2>MQTT 遥测订阅</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <div class="telemetry-endpoint-fields">
           <label class="field telemetry-host-field">
@@ -1729,7 +1729,7 @@
       </div>
       <footer>
         <button type="button" class="danger-outline hidden" id="disconnectTelemetryButton">断开订阅</button>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="doConnectTelemetry">订阅</button>
       </footer>
     </form>
@@ -1737,7 +1737,7 @@
 
   <dialog id="telemetrySimulatorDialog" class="modal simulator-modal" data-backdrop-close>
     <form method="dialog">
-      <header><h2>配置本地遥测模拟器</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2>配置本地遥测模拟器</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <fieldset class="simulator-output-choices">
           <legend>输出路径</legend>
@@ -1783,7 +1783,7 @@
         <div id="simulatorConfigError" class="modal-error hidden" role="alert"></div>
       </div>
       <footer>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="startSimulatorButton">启动模拟</button>
       </footer>
     </form>
@@ -1791,7 +1791,7 @@
 
   <dialog id="displayBenchDialog" class="modal simulator-modal" data-backdrop-close>
     <form method="dialog">
-      <header><h2>连接车手屏测试台</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2>连接车手屏测试台</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <section class="simulator-config-section" id="dbHardwareFields">
           <header><b>PCAN 通道</b><span>500 kbit/s</span></header>
@@ -1820,7 +1820,7 @@
         <div id="dbConnectError" class="modal-error hidden" role="alert"></div>
       </div>
       <footer>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="dbStartButton">连接并开始发送</button>
       </footer>
     </form>
@@ -1828,10 +1828,10 @@
 
   <dialog id="dbcFormDialog" class="modal dbc-form-dialog" data-backdrop-close>
     <form method="dialog" id="dbcFormDialogForm">
-      <header><h2 id="dbcFormTitle">DBC</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2 id="dbcFormTitle">DBC</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body" id="dbcFormBody"></div>
       <footer>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="dbcFormOk">确定</button>
       </footer>
     </form>
@@ -1839,7 +1839,7 @@
 
   <dialog id="dbcReviewDialog" class="modal dbc-review-dialog" data-backdrop-close>
     <form method="dialog">
-      <header><h2 id="dbcReviewTitle">保存前评审</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2 id="dbcReviewTitle">保存前评审</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body" id="dbcReviewBody"></div>
       <footer>
         <label class="dbc-review-option" title="按 CANdb++ 要求重排段落、合并注释为单行，并默认存为 GBK"><input type="checkbox" id="dbcReviewCandbpp"><span>CANdb++ 规整保存</span></label>
@@ -1849,7 +1849,7 @@
             <option value="utf-8-sig">UTF-8 带 BOM</option><option value="gbk">GBK</option>
           </select>
         </label>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="action-button" id="dbcReviewSave">保存</button>
       </footer>
     </form>
@@ -1857,7 +1857,7 @@
 
   <dialog id="confirmDialog" class="modal">
     <form method="dialog">
-      <header><h2 id="confirmTitle">确认操作</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2 id="confirmTitle">确认操作</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <span class="confirm-mode-badge" id="confirmModeBadge">待确认</span>
         <p class="confirm-text" id="confirmMessage"></p>
@@ -1868,7 +1868,7 @@
         </label>
       </div>
       <footer>
-        <button value="cancel" class="outline-button" type="submit">取消</button>
+        <button value="cancel" formnovalidate class="outline-button" type="submit">取消</button>
         <button type="button" class="danger-button" id="doConfirm" disabled>确认执行</button>
       </footer>
     </form>
@@ -1876,14 +1876,14 @@
 
   <dialog id="busMismatchDialog" class="modal" data-backdrop-close>
     <form method="dialog">
-      <header><h2>总线疑似接反</h2><button value="cancel" class="close" type="submit" aria-label="关闭"></button></header>
+      <header><h2>总线疑似接反</h2><button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button></header>
       <div class="modal-body">
         <p class="confirm-text" id="busMismatchMessage"></p>
         <p class="note">这只是接线提醒，不会锁定连接。请核对适配器接线，或断开后按实际总线重新连接。</p>
       </div>
       <footer>
         <button type="button" class="outline-button hidden" id="busMismatchSwap">交换通道并重新连接</button>
-        <button value="cancel" class="action-button" type="submit">知道了</button>
+        <button value="cancel" formnovalidate class="action-button" type="submit">知道了</button>
       </footer>
     </form>
   </dialog>
@@ -1894,7 +1894,7 @@
         <div class="modal-heading">
           <h2>软件内更新</h2>
         </div>
-        <button value="cancel" class="close" type="submit" aria-label="关闭"></button>
+        <button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button>
       </header>
       <div class="modal-body">
         <section class="updater-hero" aria-live="polite">
@@ -1990,7 +1990,7 @@
           <span class="modal-eyebrow">UPDATE COMPLETE</span>
           <h2>更新完成</h2>
         </div>
-        <button value="cancel" class="close" type="submit" aria-label="关闭"></button>
+        <button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button>
       </header>
       <div class="modal-body">
         <section class="update-result-versions">
@@ -2035,7 +2035,7 @@
         <div class="modal-heading">
           <h2>版本历史</h2>
         </div>
-        <button value="cancel" class="close" type="submit" aria-label="关闭"></button>
+        <button value="cancel" formnovalidate class="close" type="submit" aria-label="关闭"></button>
       </header>
       <div class="modal-body">
         <p class="note tight" id="releaseHistoryHint">每个版本只列出面向使用者的变化。</p>

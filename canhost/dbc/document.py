@@ -15,6 +15,7 @@ text for decoding and validation; this module is the writer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import re
 from typing import Any, Callable, Iterator
 
@@ -60,9 +61,14 @@ def escape_text(text: str) -> str:
 
 
 def format_number(value: float | int) -> str:
-    """Shortest decimal token that reads back as the same number."""
+    """Shortest decimal token that reads back as the same number.
+
+    Integers are kept as integers: a 64-bit raw value must not go through
+    ``float`` (which would round anything beyond 2**53)."""
     if isinstance(value, bool):
         return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
     number = float(value)
     if number != number or number in (float("inf"), float("-inf")):
         raise DbcEditError("数值必须是有限数字")
@@ -71,11 +77,56 @@ def format_number(value: float | int) -> str:
     return repr(number)
 
 
+def format_numeric(value: Any) -> str:
+    """Write a JSON/string number without losing integer precision."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return format_number(value)
+    text = str(value).strip()
+    try:
+        return str(int(text, 0))
+    except ValueError:
+        try:
+            return format_number(float(text))
+        except (TypeError, ValueError) as exc:
+            raise DbcEditError(f"不是数字：{text}") from exc
+
+
+def parse_int_value(value: Any) -> int:
+    """Strict integer parser for DBC values, keeping 64-bit precision.
+
+    Accepts Python ints, integral floats, decimal strings and ``0x`` strings;
+    anything else is rejected instead of silently becoming 0."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise DbcEditError(f"不是整数：{value}")
+        return int(value)
+    text = str(value).strip()
+    try:
+        return int(text, 0)
+    except ValueError:
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise DbcEditError(f"不是整数：{text}") from exc
+        if not math.isfinite(number) or not number.is_integer():
+            raise DbcEditError(f"不是整数：{text}")
+        return int(number)
+
+
 def parse_number(token: str, default: float = 0.0) -> float:
     try:
-        return float(token)
+        value = float(token)
     except (TypeError, ValueError):
         return default
+    return value if math.isfinite(value) else default
 
 
 def message_key(raw_id: int) -> str:
@@ -477,6 +528,9 @@ _RE_SIGVALTYPE = re.compile(r"^\s*SIG_VALTYPE_[ \t]+(\d+)[ \t]+(\S+?)[ \t]*:[ \t
 _RE_EXTMUX = re.compile(r"^\s*SG_MUL_VAL_[ \t]+(\d+)[ \t]+(\S+)[ \t]+(\S+)[ \t]+(.+?)[ \t]*;", re.S)
 _RE_SIGGROUP = re.compile(r"^\s*SIG_GROUP_[ \t]+(\d+)[ \t]+(\S+)[ \t]+(\d+)[ \t]*:(.*?);", re.S)
 _RE_TXBU = re.compile(r"^\s*BO_TX_BU_[ \t]+(\d+)[ \t]*:(.*?);", re.S)
+# CANdb++ 常把每对取值写在单独一行，名称与取值之间可以是换行，所以这里用 \s 而不是空格/制表符。
+_RE_VAL = re.compile(r"^\s*VAL_\s+(\d+)\s+(\S+)(?:\s+(?P<tail>.*))?\s*;", re.S)
+_RE_VALUE_TABLE = re.compile(r"^\s*VAL_TABLE_\s+(\S+)(?:\s+(?P<tail>.*))?\s*;", re.S)
 _RE_PAIRS = re.compile(r'(-?\d+)\s+' + _STRING, re.S)
 
 
@@ -571,19 +625,18 @@ def _parse_chunk(keyword: str | None, chunk: str, current: MessageItem | None,
                 elif len(rest) == 1:
                     return AttrValueItem(raw=chunk, name=name, value=rest[0])
         elif keyword == "VAL_":
-            tokens = _TOKEN.findall(chunk)
-            if len(tokens) >= 3 and tokens[1].isdigit():
-                head = chunk.index(tokens[2]) + len(tokens[2])
-                pairs = _parse_pairs(chunk[head:].rsplit(";", 1)[0])
+            match = _RE_VAL.match(chunk)
+            if match:
+                pairs = _parse_pairs(match.group("tail") or "")
                 if pairs is not None:
-                    return ValueDescItem(raw=chunk, raw_id=int(tokens[1]), signal=tokens[2], pairs=pairs)
+                    return ValueDescItem(raw=chunk, raw_id=int(match.group(1)), signal=match.group(2),
+                                         pairs=pairs)
         elif keyword == "VAL_TABLE_":
-            tokens = _TOKEN.findall(chunk)
-            if len(tokens) >= 2:
-                head = chunk.index(tokens[1]) + len(tokens[1])
-                pairs = _parse_pairs(chunk[head:].rsplit(";", 1)[0])
+            match = _RE_VALUE_TABLE.match(chunk)
+            if match:
+                pairs = _parse_pairs(match.group("tail") or "")
                 if pairs is not None:
-                    return ValueTableItem(raw=chunk, name=tokens[1], pairs=pairs)
+                    return ValueTableItem(raw=chunk, name=match.group(1), pairs=pairs)
         elif keyword == "SIG_VALTYPE_":
             match = _RE_SIGVALTYPE.match(chunk)
             if match:
@@ -1204,6 +1257,8 @@ class DbcDocument:
         raw_id = message.raw_id
         if "value_type" in fields:
             self._set_value_type(raw_id, signal.name, str(fields["value_type"]))
+        if "mux_role" in fields and signal.mux_role not in ("multiplexed", "both") and "ext_mux" not in fields:
+            self._set_ext_mux(raw_id, signal.name, None)
         if "ext_mux" in fields:
             self._set_ext_mux(raw_id, signal.name, fields["ext_mux"])
         if "comment" in fields:
@@ -1256,8 +1311,10 @@ class DbcDocument:
             return
         self.ensure_attr_def("SG_", GEN_SIG_START_VALUE, "FLOAT", " 0 100000000000", "0")
         definition = self.attr_def("SG_", GEN_SIG_START_VALUE)
-        number = float(value)
-        token = format_number(number if definition is None or definition.vtype == "FLOAT" else round(number))
+        if definition is not None and definition.vtype != "FLOAT":
+            token = str(parse_int_value(value))
+        else:
+            token = format_numeric(value)
         self.set_attr_value(GEN_SIG_START_VALUE, token, "SG_", raw_id, signal)
 
     def _rename_signal_refs(self, message: MessageItem, old: str, new: str) -> None:
@@ -1292,7 +1349,10 @@ class DbcDocument:
                 doomed.append(item)
             elif isinstance(item, SigGroupItem) and signal_name in item.signals:
                 item.signals = [name for name in item.signals if name != signal_name]
-                item.touch()
+                if item.signals:
+                    item.touch()
+                else:
+                    doomed.append(item)
         self.items = [item for item in self.items if not any(item is d for d in doomed)]
 
     def duplicate_signal(self, key: Any, signal_name: str, new_name: str) -> SignalItem:
@@ -1317,6 +1377,12 @@ class DbcDocument:
                 twin = ValueDescItem(raw_id=ref.raw_id, signal=file_name, pairs=list(ref.pairs))
             elif isinstance(ref, SigValTypeItem) and ref.signal == signal_name:
                 twin = SigValTypeItem(raw_id=ref.raw_id, signal=file_name, vtype=ref.vtype)
+            elif isinstance(ref, ExtMuxItem) and ref.signal == signal_name:
+                twin = ExtMuxItem(raw_id=ref.raw_id, signal=file_name, mux_signal=ref.mux_signal,
+                                  ranges=list(ref.ranges))
+            elif isinstance(ref, SigGroupItem) and signal_name in ref.signals:
+                ref.signals.insert(ref.signals.index(signal_name) + 1, file_name)
+                ref.touch()
             if twin is not None:
                 self._place(twin, (CommentItem,), (SignalItem, MessageItem))
         self._set_long_name("SG_", message.raw_id, file_name, new_name if new_name != file_name else None)
@@ -1334,6 +1400,53 @@ class DbcDocument:
         else:
             anchor = self.items.index(remaining[index])
         self.items.insert(anchor, signal)
+
+    # -- signal groups -----------------------------------------------------
+
+    def set_signal_group(self, key: Any, name: str, repetitions: int, signals: list[str],
+                         new_name: str | None = None) -> None:
+        """Create or replace one ``SIG_GROUP_`` statement of a message.
+
+        ``new_name`` renames an existing group in the same step."""
+        message = self.find_message(key)
+        name = self._check_identifier(name, "信号组")
+        if new_name is not None and new_name != name:
+            new_name = self._check_identifier(new_name, "信号组")
+            groups = [i for i in self.items if isinstance(i, SigGroupItem) and i.raw_id == message.raw_id]
+            target = next((g for g in groups if g.name == name), None)
+            if target is None:
+                raise DbcEditError(f"找不到信号组：{name}")
+            if any(g.name == new_name for g in groups):
+                raise DbcEditError(f"信号组已存在：{new_name}")
+            target.name = new_name
+            target.touch()
+            name = new_name
+        repetitions = parse_int_value(repetitions)
+        if repetitions < 1:
+            raise DbcEditError("信号组重复次数必须至少为 1")
+        if not isinstance(signals, list) or not signals:
+            raise DbcEditError("信号组至少需要一个信号")
+        files: list[str] = []
+        for member in signals:
+            file_name = self.find_signal(message, member).name
+            if file_name not in files:
+                files.append(file_name)
+        existing = next((i for i in self.items if isinstance(i, SigGroupItem)
+                         and i.raw_id == message.raw_id and i.name == name), None)
+        if existing is None:
+            self._place(SigGroupItem(raw_id=message.raw_id, name=name, repetitions=repetitions,
+                                     signals=files), (SignalItem, MessageItem))
+        elif (existing.repetitions, existing.signals) != (repetitions, files):
+            existing.repetitions, existing.signals = repetitions, files
+            existing.touch()
+
+    def delete_signal_group(self, key: Any, name: str) -> None:
+        message = self.find_message(key)
+        existing = next((i for i in self.items if isinstance(i, SigGroupItem)
+                         and i.raw_id == message.raw_id and i.name == name), None)
+        if existing is None:
+            raise DbcEditError(f"找不到信号组：{name}")
+        self.items.remove(existing)
 
     # -- nodes -------------------------------------------------------------
 
@@ -1423,6 +1536,19 @@ class DbcDocument:
             existing.pairs = pairs
             existing.touch()
 
+    def rename_value_table(self, old: str, new: str) -> None:
+        """Rename a global value table.  Signal value descriptions are copies,
+        not references, so nothing else has to be updated."""
+        new = self._check_identifier(new, "值表")
+        existing = next((i for i in self.items if isinstance(i, ValueTableItem) and i.name == old), None)
+        if existing is None:
+            raise DbcEditError(f"找不到全局值表：{old}")
+        if any(i is not existing and i.name == new for i in self.of_type(ValueTableItem)):
+            raise DbcEditError(f"全局值表已存在：{new}")
+        if existing.name != new:
+            existing.name = new
+            existing.touch()
+
     def set_attr_def(self, scope: str, name: str, vtype: str, args: str, default: str | None) -> None:
         if scope not in ("", "BU_", "BO_", "SG_"):
             raise DbcEditError("属性作用域只能是 全局、节点、报文 或 信号")
@@ -1430,8 +1556,19 @@ class DbcDocument:
             raise DbcEditError("属性类型只能是 INT、HEX、FLOAT、STRING 或 ENUM")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
             raise DbcEditError("属性名称无效")
+        args_text = (args or "").strip()
+        options: list[str] = []
+        if vtype in ("INT", "HEX", "FLOAT"):
+            if not _numeric_args_ok(vtype, args_text):
+                raise DbcEditError(f"{vtype} 属性的取值范围要写成两个数字，例如 0 65535")
+        elif vtype == "ENUM":
+            options = enum_options(args_text)
+            if not options:
+                raise DbcEditError('ENUM 属性要写出可选值，例如 "Yes","No"')
+        elif args_text:
+            raise DbcEditError("STRING 属性不需要取值范围")
+        args = (" " + args_text) if args_text else ""
         existing = self.attr_def(scope, name)
-        args = (" " + args.strip()) if args.strip() else ""
         if existing is None:
             self._place(AttrDefItem(scope=scope, name=name, vtype=vtype, args=args),
                         (CommentItem,), (SigGroupItem, TxBuItem, SignalItem, MessageItem))
@@ -1439,11 +1576,12 @@ class DbcDocument:
             existing.vtype, existing.args = vtype, args
             existing.touch()
         if default is not None:
+            token = _attr_default_token(name, vtype, default, options, args_text)
             current = self.attr_default(name)
             if current is None:
-                self._place(AttrDefaultItem(name=name, value=default), (AttrDefItem,))
-            elif current.value != default:
-                current.value = default
+                self._place(AttrDefaultItem(name=name, value=token), (AttrDefItem,))
+            elif current.value != token:
+                current.value = token
                 current.touch()
 
     def delete_attr_def(self, scope: str, name: str) -> None:
@@ -1451,6 +1589,8 @@ class DbcDocument:
         if existing is None:
             raise DbcEditError(f"找不到属性定义：{name}")
         self.items.remove(existing)
+        self.items = [i for i in self.items
+                      if not (isinstance(i, AttrValueItem) and i.name == name and i.scope == scope)]
         if not any(isinstance(i, AttrDefItem) and i.name == name for i in self.items):
             self.items = [i for i in self.items
                           if not (isinstance(i, (AttrDefaultItem, AttrValueItem)) and i.name == name)]
@@ -1651,13 +1791,92 @@ def _space_semicolon(chunk: list[str]) -> list[str]:
 
 
 def _to_int(value: Any) -> int:
-    if isinstance(value, str):
-        text = value.strip()
+    try:
+        return parse_int_value(value)
+    except DbcEditError as exc:
+        raise DbcEditError(f"值表取值必须是整数：{value}") from exc
+
+
+def enum_options(args: str) -> list[str]:
+    """Labels of an ENUM attribute definition (``"Yes","No"``); empty when malformed."""
+    text = args.strip()
+    if not text:
+        return []
+    labels: list[str] = []
+    position = 0
+    for match in re.finditer(r'"((?:[^"\\]|\\.)*)"', text):
+        if text[position:match.start()].strip(" \t,"):
+            return []
+        labels.append(unescape_text(match.group(1)))
+        position = match.end()
+    if text[position:].strip(" \t,"):
+        return []
+    return labels
+
+
+def _numeric_args_ok(vtype: str, args: str) -> bool:
+    parts = args.split()
+    if len(parts) != 2:
+        return False
+    for part in parts:
         try:
-            return int(text, 0)
+            if vtype in ("INT", "HEX"):
+                int(part, 0)
+            elif not math.isfinite(float(part)):
+                return False
         except ValueError:
-            return int(text, 10)
-    return int(value)
+            return False
+    return True
+
+
+def numeric_range(args: str) -> tuple[float, float] | None:
+    """Declared bounds of an INT/HEX/FLOAT attribute definition.
+
+    ``None`` when the range is missing or unreadable, and for ``0 0``, which
+    CANdb++ files use for "no limit"."""
+    parts = args.split()
+    if len(parts) != 2:
+        return None
+    bounds: list[float] = []
+    for part in parts:
+        try:
+            bounds.append(int(part, 0))
+        except ValueError:
+            try:
+                bounds.append(float(part))
+            except ValueError:
+                return None
+    low, high = bounds
+    if low == 0 and high == 0:
+        return None
+    return low, high
+
+
+def check_attr_number(name: str, args: str, number: float | int) -> None:
+    """Reject a number outside the attribute's declared range."""
+    bounds = numeric_range(args)
+    if bounds is not None and not bounds[0] <= number <= bounds[1]:
+        raise DbcEditError(f"属性 {name} 的取值要在 {format_number(bounds[0])}..{format_number(bounds[1])} 之间")
+
+
+def _attr_default_token(name: str, vtype: str, default: Any, options: list[str], args: str) -> str:
+    """CANdb++ requires quoted defaults for STRING/ENUM and numeric ones otherwise."""
+    if vtype in ("STRING", "ENUM"):
+        text = str(default).strip()
+        if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+            text = unescape_text(text[1:-1])
+        if vtype == "ENUM" and options and text not in options:
+            raise DbcEditError(f"ENUM 默认值必须是：{', '.join(options)}")
+        return f'"{escape_text(text)}"'
+    if vtype in ("INT", "HEX"):
+        number: float | int = parse_int_value(default)
+    else:
+        try:
+            number = float(default)
+        except (TypeError, ValueError) as exc:
+            raise DbcEditError(f"属性 {name} 的默认值不是数字：{default}") from exc
+    check_attr_number(name, args, number)
+    return format_numeric(default) if vtype == "FLOAT" else str(number)
 
 
 def normalize_choices(value: Any) -> list[tuple[int, str]]:
@@ -1731,6 +1950,8 @@ def _op_set_attr_value(doc: DbcDocument, op: dict[str, Any]) -> None:
             target = doc.find_signal(message, op["signal"]).name
     elif scope == "BU_":
         target = doc.node_file(op["node"])
+        if target not in doc.nodes():
+            raise DbcEditError(f"找不到节点：{op['node']}")
     elif scope != "":
         raise DbcEditError("属性作用域无效")
     definition = doc.attr_def(scope, op["name"])
@@ -1743,12 +1964,28 @@ def _op_set_attr_value(doc: DbcDocument, op: dict[str, Any]) -> None:
     if definition.vtype == "STRING":
         token = f'"{escape_text(str(value))}"'
     elif definition.vtype == "ENUM":
-        options = re.findall(_STRING, definition.args)
-        if str(value) not in options:
-            raise DbcEditError(f"属性 {op['name']} 的取值必须是：{', '.join(options)}")
-        token = f'"{escape_text(str(value))}"'
+        options = enum_options(definition.args)
+        if isinstance(value, str) and value in options:
+            index = options.index(value)
+        else:
+            try:
+                index = parse_int_value(value)
+            except DbcEditError as exc:
+                raise DbcEditError(f"属性 {op['name']} 的取值必须是：{', '.join(options)}") from exc
+            if not 0 <= index < len(options):
+                raise DbcEditError(f"属性 {op['name']} 的取值必须在 0..{len(options) - 1} 之间")
+        token = str(index)
+    elif definition.vtype in ("INT", "HEX"):
+        number = parse_int_value(value)
+        check_attr_number(op["name"], definition.args, number)
+        token = str(number)
     else:
-        token = format_number(float(value) if definition.vtype == "FLOAT" else int(float(value)))
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise DbcEditError(f"属性 {op['name']} 的值不是数字：{value}") from exc
+        check_attr_number(op["name"], definition.args, number)
+        token = format_number(number)
     doc.set_attr_value(op["name"], token, scope, raw_id, target)
 
 
@@ -1769,6 +2006,10 @@ OPERATIONS: dict[str, Callable[[DbcDocument, dict[str, Any]], None]] = {
     "delete_node": lambda d, o: d.delete_node(o["node"]),
     "set_comment": _op_set_comment,
     "set_value_table": lambda d, o: d.set_value_table(o["name"], normalize_choices(o.get("choices"))),
+    "rename_value_table": lambda d, o: d.rename_value_table(o["name"], o["new_name"]),
+    "set_signal_group": lambda d, o: d.set_signal_group(o["message"], o["name"], o.get("repetitions", 1),
+                                                        o.get("signals", []), o.get("new_name")),
+    "delete_signal_group": lambda d, o: d.delete_signal_group(o["message"], o["name"]),
     "set_attr_def": lambda d, o: d.set_attr_def(o.get("scope", ""), o["name"], o["type"], o.get("args", ""),
                                                 o.get("default")),
     "delete_attr_def": lambda d, o: d.delete_attr_def(o.get("scope", ""), o["name"]),

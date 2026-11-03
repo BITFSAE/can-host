@@ -11,7 +11,8 @@ import cantools
 from canhost.dbc import codec
 from canhost.dbc.catalog import build_catalog
 from canhost.dbc.document import (
-    DbcDocument, DbcEditError, escape_text, format_number, message_key, parse_message_key, unescape_text,
+    DbcDocument, DbcEditError, ValueDescItem, ValueTableItem, escape_text, format_number, message_key,
+    parse_message_key, unescape_text,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dbc" / "sample.dbc"
@@ -61,6 +62,30 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual(len(dummy), 1)
         self.assertIn("VECTOR__INDEPENDENT_SIG_MSG", document.to_text())
         self.assertEqual(message_key(dummy[0].raw_id), "v")
+
+    def test_short_value_table_names_do_not_confuse_the_parser(self) -> None:
+        text = ('VERSION ""\n\nBS_:\n\nBU_: ECU\n\nBO_ 5 M: 8 ECU\n'
+                ' SG_ S : 0|8@1+ (1,0) [0|255] "" ECU\n\n'
+                'VAL_TABLE_ T 0 "off" 1 "on" ;\n'
+                'VAL_ 5 S 0 "off" 1 "on" ;\n')
+        document = DbcDocument.parse(text)
+        self.assertEqual(document.to_text(), text)
+        self.assertEqual([(i.name, i.pairs) for i in document.of_type(ValueTableItem)],
+                         [("T", [(0, "off"), (1, "on")])])
+        self.assertEqual([(i.signal, i.pairs) for i in document.of_type(ValueDescItem)],
+                         [("S", [(0, "off"), (1, "on")])])
+
+    def test_value_descriptions_may_wrap_one_pair_per_line(self) -> None:
+        """CANdb++ 保存的 VAL_ / VAL_TABLE_ 常常每对取值一行，名称后面直接换行。"""
+        text = ('VERSION ""\n\nBS_:\n\nBU_: ECU\n\nBO_ 5 M: 8 ECU\n'
+                ' SG_ S : 0|8@1+ (1,0) [0|255] "" ECU\n\n'
+                'VAL_TABLE_ T\n 0 "off"\n 1 "on" ;\n'
+                'VAL_ 5 S\n 0 "off"\n 1 "on" ;\n')
+        document = DbcDocument.parse(text)
+        self.assertEqual(document.warnings, [])
+        self.assertEqual(document.to_text(), text)
+        self.assertEqual([i.pairs for i in document.of_type(ValueTableItem)], [[(0, "off"), (1, "on")]])
+        self.assertEqual([i.pairs for i in document.of_type(ValueDescItem)], [[(0, "off"), (1, "on")]])
 
     def test_multi_line_comment_text_and_unparsable_statement(self) -> None:
         document = DbcDocument.parse(fixture_text())
@@ -298,6 +323,114 @@ class EditTests(unittest.TestCase):
         self.apply({"op": "set_signal", "message": "s:768", "signal": "Cur", "fields": {"ext_mux": None}})
         self.assertNotIn("SG_MUL_VAL_ 768", self.document.to_text())
 
+    def test_duplicate_signal_keeps_extended_multiplexing_and_group_membership(self) -> None:
+        self.apply({"op": "set_signal", "message": "s:768", "signal": "Cur",
+                    "fields": {"ext_mux": {"signal": "Sel", "ranges": [[1, 3]]}}})
+        self.apply({"op": "set_signal_group", "message": "s:768", "name": "Fork",
+                    "repetitions": 1, "signals": ["Cur", "Common"]})
+        self.apply({"op": "duplicate_signal", "message": "s:768", "signal": "Cur", "name": "CurCopy"})
+        self.apply({"op": "set_signal", "message": "s:768", "signal": "CurCopy",
+                    "fields": {"start": 32, "length": 16}})
+        text = self.document.to_text()
+        self.assertIn("SG_MUL_VAL_ 768 CurCopy Sel 1-3;", text)
+        self.assertIn("SIG_GROUP_ 768 Fork 1 : Cur CurCopy Common;", text)
+        cantools.database.load_string(text, database_format="dbc", strict=True)
+
+    def test_enum_defaults_are_quoted_and_values_are_indices(self) -> None:
+        self.apply({"op": "set_attr_def", "scope": "BO_", "name": "SendMode", "type": "ENUM",
+                    "args": '"Cycle","Event"', "default": "Cycle"})
+        self.assertIn('BA_DEF_DEF_ "SendMode" "Cycle";', self.document.to_text())
+        self.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291",
+                    "name": "SendMode", "value": "Event"})
+        self.assertIn('BA_ "SendMode" BO_ 291 1;', self.document.to_text())
+        self.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291",
+                    "name": "SendMode", "value": 0})
+        self.assertIn('BA_ "SendMode" BO_ 291 0;', self.document.to_text())
+        cantools.database.load_string(self.document.to_text(), database_format="dbc", strict=True)
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_attr_def", "scope": "BO_", "name": "Bad", "type": "ENUM",
+                                 "args": '"A","B"', "default": "C"})
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_attr_def", "scope": "BO_", "name": "Bad2", "type": "INT",
+                                 "args": "zero 10", "default": "0"})
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291",
+                                 "name": "SendMode", "value": 2})
+
+    def test_signal_groups_are_updated_with_renames_and_deletes(self) -> None:
+        self.apply({"op": "set_signal_group", "message": "s:768", "name": "Fork",
+                    "repetitions": 2, "signals": ["Ana", "Cur"]})
+        self.assertIn("SIG_GROUP_ 768 Fork 2 : Ana Cur;", self.document.to_text())
+        self.apply({"op": "set_signal", "message": "s:768", "signal": "Ana", "fields": {"name": "Analog"}})
+        self.assertIn("SIG_GROUP_ 768 Fork 2 : Analog Cur;", self.document.to_text())
+        self.apply({"op": "delete_signal", "message": "s:768", "signal": "Cur"})
+        self.assertIn("SIG_GROUP_ 768 Fork 2 : Analog;", self.document.to_text())
+        self.apply({"op": "delete_signal", "message": "s:768", "signal": "Analog"})
+        self.assertNotIn("SIG_GROUP_", self.document.to_text())
+
+    def test_signal_group_can_be_renamed_in_place(self) -> None:
+        self.apply({"op": "set_signal_group", "message": "s:768", "name": "Fork",
+                    "repetitions": 2, "signals": ["Ana", "Cur"]})
+        self.apply({"op": "set_signal_group", "message": "s:768", "name": "Other",
+                    "repetitions": 1, "signals": ["Common"]})
+        self.apply({"op": "set_signal_group", "message": "s:768", "name": "Fork", "new_name": "Split",
+                    "repetitions": 3, "signals": ["Ana"]})
+        text = self.document.to_text()
+        self.assertIn("SIG_GROUP_ 768 Split 3 : Ana;", text)
+        self.assertNotIn("SIG_GROUP_ 768 Fork", text)
+        with self.assertRaises(DbcEditError):  # 目标名称已被同一报文的其他组占用
+            self.document.apply({"op": "set_signal_group", "message": "s:768", "name": "Split",
+                                 "new_name": "Other", "repetitions": 1, "signals": ["Ana"]})
+        with self.assertRaises(DbcEditError):  # 改名只作用于已有的组
+            self.document.apply({"op": "set_signal_group", "message": "s:768", "name": "Missing",
+                                 "new_name": "Fresh", "repetitions": 1, "signals": ["Ana"]})
+        self.assertIn("SIG_GROUP_ 768 Split 3 : Ana;", self.document.to_text())
+
+    def test_attribute_values_and_defaults_respect_the_declared_range(self) -> None:
+        self.apply({"op": "set_attr_def", "scope": "BO_", "name": "Retries", "type": "INT",
+                    "args": "0 10", "default": "3"})
+        self.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291", "name": "Retries", "value": "10"})
+        self.assertIn('BA_ "Retries" BO_ 291 10;', self.document.to_text())
+        for bad in ("11", -1, "x"):
+            with self.assertRaises(DbcEditError, msg=str(bad)):
+                self.document.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291",
+                                     "name": "Retries", "value": bad})
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_attr_def", "scope": "BO_", "name": "Retries", "type": "INT",
+                                 "args": "0 10", "default": "50"})
+        # “0 0”是 CANdb++ 里“不限范围”的写法。
+        self.apply({"op": "set_attr_def", "scope": "BO_", "name": "Loose", "type": "INT",
+                    "args": "0 0", "default": "0"})
+        self.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291", "name": "Loose", "value": "99999"})
+        self.assertIn('BA_ "Loose" BO_ 291 99999;', self.document.to_text())
+
+    def test_value_table_values_must_be_integers(self) -> None:
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_value_table", "name": "Bad", "choices": {"1.5": "x"}})
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "set_value_table", "name": "Bad", "choices": {"abc": "x"}})
+        self.apply({"op": "set_value_table", "name": "Good", "choices": {"0x10": "sixteen", "2.0": "two"}})
+        self.assertIn('VAL_TABLE_ Good 16 "sixteen" 2 "two"', self.document.to_text())
+
+    def test_rename_value_table(self) -> None:
+        self.apply({"op": "set_value_table", "name": "OnOff", "choices": {"0": "Off", "1": "On"}})
+        self.apply({"op": "rename_value_table", "name": "OnOff", "new_name": "Enabled"})
+        text = self.document.to_text()
+        self.assertIn("VAL_TABLE_ Enabled 0", text)
+        self.assertNotIn("VAL_TABLE_ OnOff", text)
+        with self.assertRaises(DbcEditError):
+            self.document.apply({"op": "rename_value_table", "name": "Missing", "new_name": "X"})
+
+    def test_large_raw_initial_value_is_not_rounded(self) -> None:
+        raw = (1 << 63) - 1
+        self.apply({"op": "add_signal", "message": "s:1024",
+                    "fields": {"name": "Big", "start": 0, "length": 64}})
+        self.apply({"op": "set_signal", "message": "s:1024", "signal": "Big",
+                    "fields": {"initial_raw": raw}})
+        text = self.document.to_text()
+        self.assertIn(f'BA_ "GenSigStartValue" SG_ 1024 Big {raw};', text)
+        self.assertNotIn("9.223372036854776e+18", text)
+
     def test_comments_value_tables_and_attributes(self) -> None:
         self.apply({"op": "set_comment", "scope": "signal", "message": "s:291", "signal": "Temp",
                     "comment": "冷却液温度"})
@@ -409,7 +542,9 @@ class EdgeCaseTests(unittest.TestCase):
         with self.assertRaises(DbcEditError):
             self.document.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291", "name": "SendMode", "value": "Never"})
         self.document.apply({"op": "set_attr_value", "scope": "BO_", "message": "s:291", "name": "SendMode", "value": "Event"})
-        self.assertIn('BA_ "SendMode" BO_ 291 "Event";', self.document.to_text())
+        # ENUM 属性值在 DBC 里写的是索引，不是带引号的文字。
+        self.assertIn('BA_ "SendMode" BO_ 291 1;', self.document.to_text())
+        cantools.database.load_string(self.document.to_text(), database_format="dbc", strict=True)
         self.document.apply({"op": "delete_attr_def", "scope": "BO_", "name": "SendMode"})
         self.assertNotIn("SendMode", self.document.to_text())
 

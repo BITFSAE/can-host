@@ -61,6 +61,92 @@ async function main() {
   run("dbcCommit = () => { commits += 1; }; dbcEdit.drag = { a: 0, b: 5 }; dbcFinishDrag()");
   assert.equal(context.commits, 0);
 
+  // Dragging from another signal's bit moves that signal, not the current selection.
+  run(`dbcUi.files = [{ id: "edit", readonly: false }]; dbcUi.fileId = "edit";
+    dbcUi.details.set("edit", { catalog: { messages: [{ key: "s:1", signals: [
+      { name: "A", bits: [0], byte_order: "intel", mux: { role: "none" } },
+      { name: "B", bits: [1], byte_order: "intel", mux: { role: "none" } }] }] } });
+    dbcUi.selected = { key: "s:1", signal: "A" }; dbcEdit.drag = { a: 1, b: 2, owner: "B" };
+    dbcCommit = ops => { commits += 1; opsSeen = ops; };`);
+  context.commits = 0;
+  run("dbcFinishDrag()");
+  assert.equal(context.commits, 1);
+  assert.equal(run("opsSeen[0].signal"), "B");
+  assert.equal(run("dbcUi.selected.signal"), "B");
+
+  // A single click on empty space clears the selection; an owned bit selects its signal.
+  run(`dbcUi.selected = { key: "s:1", signal: "B" }; dbcEdit.drag = { a: 5, b: 5 }; dbcFinishDrag();`);
+  assert.equal(run("dbcUi.selected.signal"), null);
+  run(`dbcEdit.drag = { a: 1, b: 1 }; dbcFinishDrag();`);
+  assert.equal(run("dbcUi.selected.signal"), "B");
+
+  // Context menus expose editing actions and disable them for a read-only file.
+  run(`dbcUi.files = [{ id: "ro", readonly: true }]; dbcUi.fileId = "ro";`);
+  const messageMenu = run('dbcMessageMenuItems({ key: "s:1", signals: [], virtual: false })');
+  assert.ok(messageMenu.some(item => item.label === "查看报文属性"));
+  assert.ok(messageMenu.some(item => item.label === "新建报文…" && item.disabled));
+  const signalMenu = run('dbcSignalMenuItems({ key: "s:1", signals: [{ name: "A" }] }, { name: "A" })');
+  assert.ok(signalMenu.some(item => item.label === "查看信号属性"));
+  assert.ok(signalMenu.some(item => item.label === "删除信号…" && item.disabled));
+
+  // Right-click "new signal at this bit" keeps the clicked position and byte order.
+  assert.equal(run('dbcSignalFits({ dlc: 1, signals: [{ bits: [0] }] }, 1, 1, "intel")'), true);
+  assert.equal(run('dbcSignalFits({ dlc: 1, signals: [{ bits: [1] }] }, 1, 1, "intel")'), false);
+  context.opsSeen = null;
+  run(`dbcUi.files = [{ id: "w", readonly: false }]; dbcUi.fileId = "w"; dbcEdit.newOrder = "motorola";
+    dbcCommit = ops => { opsSeen = ops; return true; };`);
+  await run('dbcCreateSignalAt({ key: "s:9", signals: [{ name: "Signal_2", bits: [0] }] }, 7, 8)');
+  assert.equal(run("opsSeen[0].fields.start"), 7);
+  assert.equal(run("opsSeen[0].fields.length"), 8);
+  assert.equal(run("opsSeen[0].fields.byte_order"), "motorola");
+  assert.equal(run("opsSeen[0].fields.name"), "Signal_3");
+
+  // With a multiplexing view selected, clicks and menus act on the signal the bit grid shows.
+  const muxMessage = `{ key: "s:768", dlc: 8, signals: [
+    { name: "Sel", bits: [0, 1, 2, 3, 4, 5, 6, 7], byte_order: "intel", mux: { role: "multiplexor" } },
+    { name: "Ana", bits: [8, 9], byte_order: "intel", mux: { role: "multiplexed", value: 0 } },
+    { name: "Cur", bits: [8, 9], byte_order: "intel", mux: { role: "multiplexed", value: 1 } },
+    { name: "Hid", bits: [24], byte_order: "intel", mux: { role: "multiplexed", value: 2 } }] }`;
+  run(`dbcEdit.muxView = ""`);
+  assert.equal(run(`dbcSignalAtBit(${muxMessage}, 8).name`), "Ana");
+  run(`dbcEdit.muxView = "1"`);
+  assert.equal(run(`dbcSignalAtBit(${muxMessage}, 8).name`), "Cur");
+  assert.equal(run(`dbcSignalAtBit(${muxMessage}, 20)`), null);
+  run(`dbcEdit.muxView = "0"`);
+  assert.equal(run(`dbcSignalAtBit(${muxMessage}, 8).name`), "Ana");
+  // A bit that only another branch uses is not offered as a free place for a new signal.
+  run(`dbcUi.files = [{ id: "w", readonly: false }]; dbcUi.fileId = "w"; dbcEdit.muxView = "1"`);
+  assert.equal(run(`dbcSignalAtBit(${muxMessage}, 24)`), null);
+  assert.equal(run(`dbcBitMenuItems(${muxMessage}, 24, null)`)[0].disabled, true);
+  assert.equal(run(`dbcBitMenuItems(${muxMessage}, 20, null)`)[0].disabled, false);
+  const outside = run(`dbcBitMenuItems({ dlc: 1, signals: [] }, 9, null)`);
+  assert.equal(outside[0].disabled, true);
+  run(`dbcEdit.muxView = ""`);
+
+  // Attribute edits send the enum index, text for numbers (exact for 64-bit values) and null to clear.
+  context.opsSeen = null;
+  run(`dbcCommit = ops => { opsSeen = ops; return true; };`);
+  await run(`dbcCommitAttribute({ dataset: { attr: "Mode", attrScope: "BO_" }, tagName: "SELECT", value: "1" }, { key: "s:7" })`);
+  assert.deepEqual(JSON.parse(JSON.stringify(run("opsSeen"))),
+    [{ op: "set_attr_value", scope: "BO_", name: "Mode", value: 1, message: "s:7" }]);
+  await run(`dbcCommitAttribute({ dataset: { attr: "Mode", attrScope: "BO_" }, tagName: "SELECT", value: "" }, { key: "s:7" })`);
+  assert.equal(run("opsSeen[0].value"), null);
+  await run(`dbcCommitAttribute({ dataset: { attr: "Big", attrScope: "" }, tagName: "INPUT", value: " 9223372036854775807 " }, null)`);
+  assert.equal(run("opsSeen[0].value"), "9223372036854775807");
+  assert.equal(run("opsSeen[0].scope"), "");
+  await run(`dbcCommitAttribute({ dataset: { attr: "Role", attrScope: "BU_", attrNode: "ECU" }, tagName: "INPUT", value: "master" }, null)`);
+  assert.equal(run("opsSeen[0].node"), "ECU");
+
+  // Renaming a signal group sends new_name and keeps addressing the old one.
+  context.opsSeen = null;
+  run(`dbcPrompt = async () => ({ name: "Split", repetitions: 2, signals: "A, B，C" });`);
+  await run(`dbcEditSignalGroup({ key: "s:7", signal_groups: [{ name: "Fork", repetitions: 1, signals: ["A"] }] }, "Fork")`);
+  assert.deepEqual(JSON.parse(JSON.stringify(run("opsSeen[0]"))),
+    { op: "set_signal_group", message: "s:7", name: "Fork", repetitions: 2, signals: ["A", "B", "C"], new_name: "Split" });
+  await run(`dbcEditSignalGroup({ key: "s:7", signal_groups: [] }, null)`);
+  assert.equal(run("opsSeen[0].name"), "Split");
+  assert.equal(run("'new_name' in opsSeen[0]"), false);
+
   // Once an input changes, neither the old payload nor its late reply is usable.
   run(`state.api = { dbc_encode: (...args) => new Promise(resolve => pending.push({ args, resolve })) };
     dbcUi.source = "main"; dbcUi.live.main = { connection: { connected: true, mode: "pcan" } };

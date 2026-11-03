@@ -106,6 +106,23 @@ class PageWiringTests(unittest.TestCase):
             self.assertIn(f"--sigbg-{index}:", css)
         self.assertEqual(css.count(":root[data-theme=\"light\"] {\n  --series-1"), 1)
 
+    def test_cancel_and_close_buttons_skip_native_validation(self) -> None:
+        """method=dialog 的表单也会跑必填校验；取消和关闭必须用 formnovalidate，否则弹窗关不掉。"""
+        buttons = re.findall(r'<button[^>]*value="cancel"[^>]*>', HTML)
+        self.assertTrue(buttons)
+        self.assertEqual([tag for tag in buttons if "formnovalidate" not in tag], [])
+
+    def test_message_and_signal_context_menus_are_wired(self) -> None:
+        self.assertIn('addEventListener("contextmenu", dbcTreeMenu)', SOURCES["dbc.js"])
+        self.assertIn('addEventListener("contextmenu", dbcEditorMenu)', SOURCES["dbc-editor.js"])
+        self.assertIn("function dbcOpenContextMenu", SOURCES["dbc.js"])
+        self.assertIn("function dbcMessageMenuItems", SOURCES["dbc-editor.js"])
+        self.assertIn("function dbcSignalMenuItems", SOURCES["dbc-editor.js"])
+        self.assertIn('event.key === "F2"', SOURCES["dbc-editor.js"])
+        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".dbc-context-menu", css)
+        self.assertIn(".dbc-menu-sep", css)
+
 
 @unittest.skipUnless(shutil.which("node"), "需要 node 运行页面脚本")
 class ScriptTests(unittest.TestCase):

@@ -8,17 +8,26 @@ same text.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
 from .document import (
-    AttrDefItem, AttrDefaultItem, AttrValueItem, DbcDocument, ExtMuxItem, GEN_SIG_START_VALUE, LONG_SYMBOL,
-    MessageItem, NO_NODE, SigValTypeItem, SignalItem, TxBuItem, ValueTableItem, message_key, parse_number,
-    unescape_text,
+    AttrDefItem, AttrDefaultItem, AttrValueItem, DbcDocument, ExtMuxItem, GEN_MSG_CYCLE_TIME,
+    GEN_SIG_START_VALUE, LONG_SYMBOL, MessageItem, NO_NODE, SigGroupItem, SigValTypeItem, SignalItem,
+    TxBuItem, ValueTableItem, enum_options, message_key, parse_number, unescape_text,
 )
 from .layout import INTEL, MOTOROLA, signal_bits, span_bytes
 
 _STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
+SAFE_INTEGER = 1 << 53
+
+
+def _json_number(value: Any) -> Any:
+    """Keep integers beyond JavaScript's exact range as text, as raw values do."""
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) >= SAFE_INTEGER:
+        return str(value)
+    return value
 
 
 def attribute_value(token: str) -> Any:
@@ -27,11 +36,23 @@ def attribute_value(token: str) -> Any:
     if token.startswith('"'):
         match = _STRING.fullmatch(token)
         return unescape_text(match.group(1)) if match else token
+    if token.lower().lstrip("+-").startswith("0x"):
+        try:
+            return int(token, 16)
+        except ValueError:
+            return token
+    if "." not in token and "e" not in token.lower():
+        try:
+            return int(token, 10)
+        except ValueError:
+            return token
     try:
         number = float(token)
     except ValueError:
         return token
-    return int(number) if number == int(number) and "." not in token and "e" not in token.lower() else number
+    if not math.isfinite(number):
+        return token
+    return number
 
 
 def value_type_of(doc: DbcDocument, raw_id: int, signal: str) -> str:
@@ -39,6 +60,13 @@ def value_type_of(doc: DbcDocument, raw_id: int, signal: str) -> str:
         if isinstance(item, SigValTypeItem) and item.raw_id == raw_id and item.signal == signal:
             return {1: "float32", 2: "float64"}.get(item.vtype, "int")
     return "int"
+
+
+def _number_token_ok(token: str) -> bool:
+    try:
+        return math.isfinite(float(token))
+    except (TypeError, ValueError):
+        return False
 
 
 def raw_range(length: int, signed: bool, value_type: str) -> tuple[float, float]:
@@ -57,14 +85,26 @@ def signal_entry(doc: DbcDocument, message: MessageItem, signal: SignalItem) -> 
     factor, offset = parse_number(signal.factor, 1.0), parse_number(signal.offset)
     low, high = raw_range(signal.length, signal.signed, value_type)
     ends = sorted((low * factor + offset, high * factor + offset))
+    finite_ends = [value if math.isfinite(value) else None for value in ends]
     ext = next((i for i in doc.items if isinstance(i, ExtMuxItem)
                 and i.raw_id == message.raw_id and i.signal == signal.name), None)
     choices = doc.choices_of(message.raw_id, signal.name) or []
     initial = doc.attr_value(GEN_SIG_START_VALUE, "SG_", message.raw_id, signal.name)
-    attrs = {i.name: attribute_value(i.value) for i in doc.items
+    attrs = {i.name: _json_number(attribute_value(i.value)) for i in doc.items
              if isinstance(i, AttrValueItem) and i.scope == "SG_" and i.raw_id == message.raw_id
-             and i.target == signal.name and i.name != LONG_SYMBOL["SG_"]}
-    initial_raw = parse_number(initial.value) if initial is not None else None
+             and i.target == signal.name
+             and i.name not in (LONG_SYMBOL["SG_"], GEN_SIG_START_VALUE)}
+    initial_raw = attribute_value(initial.value) if initial is not None else None
+    if initial_raw is not None and not isinstance(initial_raw, (int, float)):
+        initial_raw = None
+    initial_physical = None
+    if initial_raw is not None:
+        try:
+            initial_physical = initial_raw * factor + offset
+        except OverflowError:  # 超长整数乘以因子时超出 float 范围
+            initial_physical = None
+    if isinstance(initial_physical, float) and not math.isfinite(initial_physical):
+        initial_physical = None
     parent = None
     if ext is not None:
         try:
@@ -92,24 +132,50 @@ def signal_entry(doc: DbcDocument, message: MessageItem, signal: SignalItem) -> 
         },
         "comment": doc.comment_of("SG_", message.raw_id, signal.name),
         "choices": [{"value": value, "label": label} for value, label in choices],
-        "initial_raw": initial_raw,
-        "initial": (initial_raw * factor + offset) if initial_raw is not None else None,
+        "initial_raw": _json_number(initial_raw),
+        "initial": initial_physical,
         "attrs": attrs,
         "bits": signal_bits(signal.start, signal.length, order),
-        "phys_range": [ends[0], ends[1]],
+        "phys_range": finite_ends if all(value is not None for value in finite_ends) else None,
+        "number_errors": [name for name, token in
+                          (("因子", signal.factor), ("偏移", signal.offset),
+                           ("最小值", signal.minimum), ("最大值", signal.maximum))
+                          if not _number_token_ok(token)],
+        "initial_text": initial.value if initial is not None else None,
     }
 
 
-def message_entry(doc: DbcDocument, message: MessageItem) -> dict[str, Any]:
+def _signal_groups(doc: DbcDocument) -> dict[int, list[SigGroupItem]]:
+    """``SIG_GROUP_`` statements by message, collected in one pass over the document."""
+    groups: dict[int, list[SigGroupItem]] = {}
+    for item in doc.items:
+        if isinstance(item, SigGroupItem):
+            groups.setdefault(item.raw_id, []).append(item)
+    return groups
+
+
+def message_entry(doc: DbcDocument, message: MessageItem,
+                  groups_by_message: dict[int, list[SigGroupItem]] | None = None) -> dict[str, Any]:
     tx = next((i for i in doc.items if isinstance(i, TxBuItem) and i.raw_id == message.raw_id), None)
     senders = [message.sender] if message.sender != NO_NODE else []
     if tx:
         senders += [n for n in tx.nodes if n not in senders and n != NO_NODE]
     senders = [doc.node_display(name) for name in senders]
-    attrs = {i.name: attribute_value(i.value) for i in doc.items
+    attrs = {i.name: _json_number(attribute_value(i.value)) for i in doc.items
              if isinstance(i, AttrValueItem) and i.scope == "BO_" and i.raw_id == message.raw_id
-             and i.name != LONG_SYMBOL["BO_"]}
+             and i.name not in (LONG_SYMBOL["BO_"], GEN_MSG_CYCLE_TIME)}
     signals = [signal_entry(doc, message, s) for s in doc.signals(message)]
+    if groups_by_message is None:
+        groups_by_message = _signal_groups(doc)
+    groups = []
+    for item in groups_by_message.get(message.raw_id, []):
+        members = []
+        for file_name in item.signals:
+            try:
+                members.append(doc.signal_display(message, doc.find_signal(message, file_name)))
+            except Exception:
+                members.append(file_name)
+        groups.append({"name": item.name, "repetitions": item.repetitions, "signals": members})
     return {
         "key": message_key(message.raw_id),
         "id": message.frame_id,
@@ -124,6 +190,7 @@ def message_entry(doc: DbcDocument, message: MessageItem) -> dict[str, Any]:
         "comment": doc.comment_of("BO_", message.raw_id),
         "attrs": attrs,
         "signals": signals,
+        "signal_groups": groups,
         "bytes": max(message.dlc, span_bytes(bit for s in signals for bit in s["bits"])),
     }
 
@@ -133,8 +200,9 @@ def build_catalog(doc: DbcDocument) -> dict[str, Any]:
     sends = {name: 0 for name in nodes}
     receives = {name: 0 for name in nodes}
     messages = []
+    groups_by_message = _signal_groups(doc)
     for message in doc.messages():
-        entry = message_entry(doc, message)
+        entry = message_entry(doc, message, groups_by_message)
         messages.append(entry)
         for sender in entry["senders"]:
             if sender in sends:
@@ -146,12 +214,22 @@ def build_catalog(doc: DbcDocument) -> dict[str, Any]:
             if receiver in receives:
                 receives[receiver] += 1
     defaults = {i.name: attribute_value(i.value) for i in doc.items if isinstance(i, AttrDefaultItem)}
+    node_attrs = {
+        file_name: {i.name: _json_number(attribute_value(i.value)) for i in doc.items
+                    if isinstance(i, AttrValueItem) and i.scope == "BU_" and i.target == file_name
+                    and i.name != LONG_SYMBOL["BU_"]}
+        for file_name in doc.nodes()
+    }
+    global_attrs = {i.name: _json_number(attribute_value(i.value)) for i in doc.items
+                    if isinstance(i, AttrValueItem) and i.scope == ""}
     return {
         "version": next((i.text for i in doc.items if i.kind == "VERSION"), ""),
         "comment": doc.comment_of(""),
+        "attrs": global_attrs,
         "nodes": [
             {"name": name, "file_name": file_name,
              "comment": doc.comment_of("BU_", None, file_name),
+             "attrs": node_attrs.get(file_name, {}),
              "sends": sends[name], "receives": receives[name]}
             for name, file_name in zip(nodes, doc.nodes())
         ],
@@ -162,8 +240,16 @@ def build_catalog(doc: DbcDocument) -> dict[str, Any]:
         ],
         "attr_defs": [
             {"scope": item.scope, "name": item.name, "type": item.vtype, "args": item.args.strip(),
-             "default": defaults.get(item.name)}
+             "default": _json_number(defaults.get(item.name)),
+             "choices": enum_options(item.args) if item.vtype == "ENUM" else []}
             for item in doc.of_type(AttrDefItem)
         ],
+        "attr_values": [
+            {"name": item.name, "scope": item.scope, "raw_id": item.raw_id, "target": item.target,
+             "value": attribute_value(item.value)}
+            for item in doc.of_type(AttrValueItem)
+        ],
+        "attr_defaults": [{"name": item.name, "value": attribute_value(item.value)}
+                          for item in doc.of_type(AttrDefaultItem)],
         "warnings": list(doc.warnings),
     }

@@ -121,6 +121,96 @@ function dbcNumber(value) {
   return String(Number(value.toPrecision(10)));
 }
 
+/* ---------- 右键菜单 ---------- */
+
+const dbcMenuState = { node: null, returnFocus: null, cleanup: null };
+
+/** 界面缩放用 CSS zoom 实现；鼠标坐标是缩放后的视觉像素，菜单定位要用缩放前的布局像素。 */
+function dbcUiScale() {
+  const zoom = Number(getComputedStyle(document.documentElement).zoom);
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+}
+
+/** 菜单统一挂在 body 上，位置按视口夹紧；滚轮、窗口变化、失焦或点外面都会关闭。 */
+function dbcCloseContextMenu(restoreFocus = false) {
+  const menu = dbcMenuState.node;
+  if (!menu) return;
+  dbcMenuState.cleanup?.();
+  menu.remove();
+  const returnFocus = dbcMenuState.returnFocus;
+  dbcMenuState.node = null;
+  dbcMenuState.returnFocus = null;
+  dbcMenuState.cleanup = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function dbcOpenContextMenu(items, x, y) {
+  dbcCloseContextMenu();
+  if (!items?.length) return;
+  const menu = document.createElement("div");
+  menu.id = "dbcContextMenu";
+  menu.className = "dbc-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = items.map((item, index) => item.separator
+    ? '<div class="dbc-menu-sep" role="separator"></div>'
+    : `<button type="button" role="menuitem" data-menu="${index}" class="${item.danger ? "danger" : ""}" ${item.disabled ? "disabled" : ""}>${escapeHtml(item.label)}</button>`).join("");
+  document.body.appendChild(menu);
+  const scale = dbcUiScale();
+  const pad = 8 / scale;
+  const rect = menu.getBoundingClientRect();
+  const statusbar = document.querySelector(".statusbar");
+  const bottomInset = statusbar ? statusbar.getBoundingClientRect().height / scale : 0;
+  const viewWidth = window.innerWidth / scale;
+  const viewHeight = window.innerHeight / scale - bottomInset;
+  menu.style.left = `${Math.max(pad, Math.min(x / scale, viewWidth - rect.width - pad))}px`;
+  menu.style.top = `${Math.max(pad, Math.min(y / scale, viewHeight - rect.height - pad))}px`;
+  dbcMenuState.node = menu;
+  dbcMenuState.returnFocus = document.activeElement;
+  const outside = event => { if (!menu.contains(event.target)) dbcCloseContextMenu(); };
+  const keydown = event => {
+    const buttons = [...menu.querySelectorAll("button:not(:disabled)")];
+    if (event.key === "Escape") { event.preventDefault(); dbcCloseContextMenu(true); return; }
+    if (!buttons.length || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const index = buttons.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].focus();
+  };
+  menu.addEventListener("click", event => {
+    const button = event.target.closest("button[data-menu]");
+    if (!button || button.disabled) return;
+    const item = items[Number(button.dataset.menu)];
+    dbcCloseContextMenu();
+    item?.run?.();
+  });
+  const close = () => dbcCloseContextMenu();
+  menu.addEventListener("keydown", keydown);
+  document.addEventListener("pointerdown", outside, true);
+  // 只响应滚轮和窗口变化：重画时的程序化 scrollTop 不应把菜单关掉。
+  window.addEventListener("wheel", close, true);
+  window.addEventListener("resize", close);
+  window.addEventListener("blur", close);
+  dbcMenuState.cleanup = () => {
+    document.removeEventListener("pointerdown", outside, true);
+    window.removeEventListener("wheel", close, true);
+    window.removeEventListener("resize", close);
+    window.removeEventListener("blur", close);
+  };
+  menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+}
+
+function dbcContextMenu(event, items) {
+  event.preventDefault();
+  dbcOpenContextMenu(items, event.clientX, event.clientY);
+}
+
+/** 键盘打开菜单（Shift+F10 / 菜单键）：贴着当前报文或信号行显示。 */
+function dbcOpenContextMenuAt(node, items) {
+  const rect = node.getBoundingClientRect();
+  dbcOpenContextMenu(items, rect.left + 16, rect.bottom - 2);
+}
+
 function dbcAgeText(ms) {
   if (ms === null || ms === undefined) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -219,7 +309,7 @@ function dbcResetFileView(fileId) {
   dbcUi.fileId = fileId;
   dbcUi.selected = { key: null, signal: null };
   dbcUi.filter = "";
-  if (typeof dbcEdit !== "undefined") dbcEdit.muxView = "";
+  if (typeof dbcEdit !== "undefined") { dbcEdit.muxView = ""; dbcEdit.nodeAttrs?.clear(); }
   if (typeof dbcSend !== "undefined") {
     clearTimeout(dbcSend.timer);
     dbcSend.token += 1;
@@ -255,6 +345,16 @@ function dbcSelectMessage(key, signal = null) {
   if (key !== dbcUi.selected.key) { dbcScrollReset(); dbcUi.commentOpen = false; }
   dbcUi.selected = { key, signal };
   dbcUi.signatures.editor = "";
+  renderDbc();
+}
+
+/** 切换功能页签；右键菜单和页签按钮共用。 */
+function dbcOpenTab(tab) {
+  if (!DBC_TABS.includes(tab)) return;
+  dbcUi.tab = tab;
+  dbcUi.signatures = {};
+  dbcUi.rowCache.clear();
+  schedulePoll(0);
   renderDbc();
 }
 
@@ -459,7 +559,7 @@ function renderDbcTree() {
   const groups = new Map();
   for (const message of catalog.messages) {
     if (query) {
-      const haystack = `${message.name} ${message.id_text} ${message.signals.map(signal => signal.name).join(" ")}`.toLowerCase();
+      const haystack = `${message.name} ${message.file_name} ${message.id_text} ${message.signals.map(signal => `${signal.name} ${signal.file_name}`).join(" ")}`.toLowerCase();
       if (!haystack.includes(query)) continue;
     }
     const group = message.virtual ? DBC_UNUSED_GROUP : (message.senders[0] || "未指定发送节点");
@@ -500,6 +600,54 @@ function renderDbcTreeDots(container) {
     const cls = `dbc-dot ${info.dot}`.trim();
     if (dot.className !== cls) dot.className = cls;
     if (dot.title !== info.label) dot.title = info.label;
+  }
+}
+
+/* ---------- 报文目录的右键与快捷键 ---------- */
+
+function dbcTreeMenu(event) {
+  const button = event.target.closest?.("#dbcTree .dbc-msg[data-key]");
+  if (!button) {
+    // 只有目录空白处给“新建报文”，分组标题和报文集中的按钮保持原生菜单。
+    const blank = event.target === event.currentTarget || event.target.closest?.(".empty-state");
+    if (blank && dbcCatalog() && !dbcReadonly()) {
+      dbcContextMenu(event, [{ label: "新建报文…", run: () => dbcNewMessage() }]);
+    }
+    return;
+  }
+  const key = button.dataset.key;
+  if (key !== dbcUi.selected.key) dbcSelectMessage(key);
+  const entry = dbcMessageEntry(key);
+  if (entry) {
+    // 选中会重画目录，焦点要落到重画后的按钮上，Esc 关闭菜单时才回得到原处。
+    $$("#dbcTree .dbc-msg[data-key]").find(node => node.dataset.key === key)?.focus({ preventScroll: true });
+    dbcContextMenu(event, dbcMessageMenuItems(entry));
+  }
+}
+
+function dbcTreeMenuKey(button) {
+  const entry = dbcMessageEntry(button?.dataset.key);
+  if (entry) dbcOpenContextMenuAt(button, dbcMessageMenuItems(entry));
+}
+
+/** 目录里的按键：回车/空格已在按钮里处理，这里补编辑快捷键。 */
+function dbcTreeKeydown(event) {
+  const button = event.target.closest?.(".dbc-msg[data-key]");
+  if (!button) return;
+  const entry = dbcMessageEntry(button.dataset.key);
+  if (!entry) return;
+  if (event.key === "F10" && event.shiftKey) {
+    event.preventDefault();
+    dbcTreeMenuKey(button);
+  } else if (event.key === "F2" && !dbcReadonly() && !entry.virtual) {
+    event.preventDefault();
+    dbcRenameMessage(entry);
+  } else if (event.key === "Delete" && !dbcReadonly() && !entry.virtual) {
+    event.preventDefault();
+    dbcDeleteMessage(entry);
+  } else if (event.key === "Insert" && !dbcReadonly()) {
+    event.preventDefault();
+    dbcNewMessage();
   }
 }
 
@@ -544,7 +692,7 @@ function renderDbcLive() {
     dbcPatchRows("signals", rows, []);
     $("#dbcLiveEmpty")?.classList.remove("hidden");
   } else {
-    const rowsData = summary?.signals || entry.signals.map(signal => ({ name: signal.name, unit: signal.unit, state: entry.virtual ? "unassigned" : "waiting", has_label: signal.choices.length > 0 }));
+    const rowsData = summary?.signals || entry.signals.map(signal => ({ name: signal.name, file_name: signal.file_name, unit: signal.unit, state: entry.virtual ? "unassigned" : "waiting", has_label: signal.choices.length > 0 }));
     dbcPatchRows("signals", rows, rowsData.map(row => dbcSignalRowData(entry, row, summary)));
     const hint = $("#dbcLiveEmpty");
     hint?.classList.toggle("hidden", !!summary || entry.virtual || entry.signals.length === 0);
@@ -685,7 +833,9 @@ function dbcPrompt({ title, fields, ok = "确定", message = "", danger = false 
       for (const field of fields) {
         const node = $(`#dbcField_${field.name}`);
         if (!node.reportValidity()) return;
-        values[field.name] = field.type === "checkbox" ? node.checked : field.type === "number" ? Number(node.value) : node.value.trim();
+        values[field.name] = field.type === "checkbox" ? node.checked
+          : field.type === "number" ? (node.value.trim() === "" ? "" : Number(node.value))
+          : node.value.trim();
         if (field.required && (values[field.name] === "" || Number.isNaN(values[field.name]))) {
           node.classList.add("invalid");
           node.focus();
@@ -816,7 +966,8 @@ function bindDbcControls() {
     button?.click(); button?.focus();
   });
   $("#dbcTree")?.addEventListener("keydown", event => {
-    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    dbcTreeKeydown(event);
+    if (event.defaultPrevented || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     const rows = $$("#dbcTree .dbc-msg");
     if (!rows.length) return;
     event.preventDefault();
@@ -826,6 +977,7 @@ function bindDbcControls() {
     dbcSelectMessage(rows[next].dataset.key);
     $$("#dbcTree .dbc-msg")[next]?.focus();
   });
+  $("#dbcTree")?.addEventListener("contextmenu", dbcTreeMenu);
   // 拖入窗口的文件由后端接管（pywebview 提供完整路径）；这里只阻止浏览器把它当页面打开。
   for (const type of ["dragover", "drop"]) {
     window.addEventListener(type, event => {
@@ -842,12 +994,8 @@ function bindDbcControls() {
     renderDbc();
   });
   $("#dbcTabs")?.addEventListener("click", event => {
-    const button = event.target.closest("button[data-tab]"); if (!button || !DBC_TABS.includes(button.dataset.tab)) return;
-    dbcUi.tab = button.dataset.tab;
-    dbcUi.signatures = {};
-    dbcUi.rowCache.clear();
-    schedulePoll(0);
-    renderDbc();
+    const button = event.target.closest("button[data-tab]"); if (!button) return;
+    dbcOpenTab(button.dataset.tab);
   });
   $("#dbcOpenButton")?.addEventListener("click", dbcOpenDialog);
   $("#dbcNewButton")?.addEventListener("click", dbcNewFile);
@@ -876,7 +1024,10 @@ function bindDbcControls() {
     }
     const button = event.target.closest(".dbc-msg");
     if (button) {
-      dbcSelectMessage(button.dataset.key);
+      const entry = dbcMessageEntry(button.dataset.key);
+      // 双击报文的第二次 click 直接进编辑；只依赖 dblclick 会在目录重画后丢失。
+      if (event.detail >= 2 && entry) dbcEditMessage(entry);
+      else dbcSelectMessage(button.dataset.key);
       if (window.matchMedia("(max-width: 800px)").matches) closeDirectory();
     }
   });
@@ -921,6 +1072,13 @@ async function dbcFilesClick(event) {
   if (actor?.dataset.fileAct === "bus") return;
   if (actor?.dataset.fileAct === "close") return dbcCloseFile(id);
   if (actor?.dataset.fileAct === "reload") {
+    const file = dbcUi.files.find(item => item.id === id);
+    if (file?.dirty) {
+      const answer = await dbcPrompt({ title: "重新载入 DBC",
+        message: `${file.name} 有未保存的修改。重新载入会用磁盘上的内容替换它们，修改将丢失。`,
+        fields: [], ok: "放弃修改并重新载入", danger: true });
+      if (!answer) return;
+    }
     const result = await state.api.dbc_reload(id);
     if (!result?.ok) toast(result?.error || "重新载入失败", true);
     return dbcSync();

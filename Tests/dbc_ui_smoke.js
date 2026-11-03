@@ -68,6 +68,13 @@ const extended = (low, high) => ({ mux: { role: "multiplexed", value: low, ext: 
 assert.equal(run(`dbcSignalsCoexist(${JSON.stringify(extended(0, 1))}, ${JSON.stringify(extended(2, 3))})`), false);
 assert.equal(run(`dbcSignalsCoexist(${JSON.stringify(extended(0, 2))}, ${JSON.stringify(extended(2, 3))})`), true);
 
+// 2c. 新信号空位按目标字节序计算；新报文 ID 从低位空档开始找
+assert.deepEqual(run('dbcFreeRun({ dlc: 8, signals: [] }, 8, "motorola")'), { start: 7, length: 8 });
+assert.deepEqual(run('dbcFreeRun({ dlc: 8, signals: [{ bits: [0,1,2,3,4,5,6,7] }] }, 8, "motorola")'),
+  { start: 15, length: 8 });
+assert.deepEqual(run('dbcFreeRun({ dlc: 8, signals: [] }, 8, "intel")'), { start: 0, length: 8 });
+assert.equal(run('dbcNextFreeId({ messages: [{ id: 256, extended: false }, { id: 257, extended: false }] })'), 258);
+
 // 3. 数值与时间文字
 assert.equal(run("dbcNumber(3.0)"), "3");
 assert.equal(run("dbcNumber(0.30000000000000004)"), "0.3");
@@ -160,5 +167,19 @@ run(`dbcPlot.series = [{ sid: "a", source: "main", key: "s:1", signal: "X", colo
 const csv = run("dbcPlotCsv()").split("\r\n");
 assert.equal(csv[0], "时间 s,X [V],Y");
 assert.deepEqual(csv.slice(1), ["1.000000,10,", "2.000000,20,5", "3.000000,,6"]);
+
+// 10. 属性与信号组：属性值按作用域生成，枚举用索引；信号组只读也能显示
+run(`dbcUi.files = [{ id: "f", readonly: false }]; dbcUi.fileId = "f";
+  dbcUi.details.set("f", { catalog: { attr_defs: [
+    { scope: "BO_", name: "Mode", type: "ENUM", args: '"A","B"', default: "A", choices: ["A", "B"] },
+    { scope: "BO_", name: "GenMsgCycleTime", type: "INT", args: "0 65535", default: 0, choices: [] }
+  ] } });`);
+const attrHtml = run('dbcAttributeFieldsHtml("BO_", { Mode: 1 })');
+assert.match(attrHtml, /data-attr="Mode"/);
+assert.match(attrHtml, /<option value="1" selected>B<\/option>/);
+assert.doesNotMatch(attrHtml, /data-attr="GenMsgCycleTime"/);
+const groupHtml = run(`dbcSignalGroupsHtml({ signal_groups: [{ name: "Pair", repetitions: 2, signals: ["A", "B"] }] }, "")`);
+assert.match(groupHtml, /Pair/);
+assert.match(groupHtml, /data-act="group-edit"/);
 
 console.log("dbc ui smoke ok");

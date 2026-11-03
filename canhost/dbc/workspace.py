@@ -392,6 +392,9 @@ class DbcWorkspace:
                     del file.undo[:-UNDO_LIMIT]
                     file.redo.clear()
             file.path, file.name, file.encoding = target, target.name, chosen
+            # A central-library file saved as a copy is editable from now on;
+            # saving a working copy back under vehicle-interfaces makes it read-only.
+            file.readonly = is_central(target)
             file.saved_text = file.document.to_text()
             file.revision += 1
             file.disk_stamp = file._stamp()
@@ -482,12 +485,12 @@ class DbcWorkspace:
             by_file: dict[str, dict[str, Any]] = {}
             for (frame_id, extended), (file, decode, message) in sorted(table.items()):
                 key = message_key(frame_id | (EXTENDED_FLAG if extended else 0))
-                names[key] = message.name
-                if not include_messages and key not in wanted:
-                    continue
                 if file.id not in by_file:
                     by_file[file.id] = {m["key"]: m for m in file.analysis()[0]["messages"]}
                 entry = by_file[file.id].get(key)
+                names[key] = entry["name"] if entry else message.name
+                if not include_messages and key not in wanted:
+                    continue
                 frame = seen.get((frame_id, extended))
                 summary = self._summarize(key, file, message, entry, frame, clock)
                 if include_messages:
@@ -524,7 +527,8 @@ class DbcWorkspace:
         expected = message.cycle_time or None
         summary: dict[str, Any] = {
             "key": key, "id": message.frame_id, "extended": message.is_extended_frame,
-            "id_text": entry["id_text"] if entry else key, "name": message.name, "file": file.id,
+            "id_text": entry["id_text"] if entry else key,
+            "name": entry["name"] if entry else message.name, "file_name": message.name, "file": file.id,
             "dlc": message.length, "signal_count": len(message.signals), "expected_cycle_ms": expected,
             "comment": entry["comment"] if entry else "",
         }
@@ -557,11 +561,14 @@ class DbcWorkspace:
             if result["status"] == "error":
                 summary["issue"] = "error"
                 summary["error"] = result.get("error")
+        # cantools applies SystemSignalLongSymbol and exposes the display name,
+        # so the catalog maps back to the same key.
         catalog_signals = {s["name"]: s for s in entry["signals"]} if entry else {}
         for signal in message.signals:
             info = catalog_signals.get(signal.name, {})
             row = {
-                "name": signal.name, "unit": signal.unit or "", "mux": info.get("mux", {}).get("role", "none"),
+                "name": signal.name, "file_name": info.get("file_name", signal.name),
+                "unit": info.get("unit", signal.unit) or "", "mux": info.get("mux", {}).get("role", "none"),
                 "mux_value": info.get("mux", {}).get("value"), "comment": info.get("comment", ""),
                 "length": signal.length, "has_label": bool(signal.choices),
             }
@@ -585,12 +592,21 @@ class DbcWorkspace:
             return {"ok": False, "error": str(exc)}
         frame_id, extended = raw_id & ID_MASK, bool(raw_id & EXTENDED_FLAG)
         with self.lock:
-            resolved = self.resolve(bus, frame_id, extended)
-            if resolved is None:
+            entry = self._table(bus).get((frame_id, extended))
+            if entry is None:
                 return {"ok": False, "error": "当前总线上没有绑定包含该报文的 DBC"}
-            decode, message = resolved
+            file, decode, message = entry
+            catalog_entry = self._catalog_entry(file, frame_id, extended)
+            if catalog_entry is not None:
+                # cantools addresses signals by their display (long) name;
+                # accept the 32-character file name as an alias as well.
+                known = {s["name"] for s in catalog_entry["signals"]}
+                aliases = {s["file_name"]: s["name"] for s in catalog_entry["signals"]
+                           if s["file_name"] not in known}
+                values = {aliases.get(str(name), str(name)): value
+                          for name, value in (values or {}).items()}
             try:
-                data = decode.encode(message, values or {})
+                data = decode.encode(message, values)
             except DbcEncodeError as exc:
                 return {"ok": False, "error": str(exc)}
             return {"ok": True, "id": frame_id, "extended": extended, "name": message.name,
