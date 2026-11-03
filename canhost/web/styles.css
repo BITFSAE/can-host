@@ -463,7 +463,7 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 :root[data-rail="collapsed"] .rail-fact-button > i { display: none; }
 :root[data-rail="collapsed"] .nav-item span { display: none; }
 :root[data-rail="collapsed"] .nav-item { grid-template-columns: 20px; justify-content: center; padding: 0; min-height: 44px; }
-:root[data-rail="collapsed"] .nav-item .badge { position: absolute; margin: -14px 0 0 var(--sp-5); }
+:root[data-rail="collapsed"] .nav-item .badge { position: absolute; top: 2px; right: 0; min-width: 18px; margin: 0; padding: 0 var(--sp-1); font-size: var(--fs-unit); line-height: 16px; }
 
 :root[data-rail="collapsed"] #nav { width: 48px; }
 :root[data-rail="collapsed"] .nav-tools { width: 48px; }
@@ -4036,10 +4036,12 @@ select {
 #page-dbc .tag { white-space: nowrap; }
 
 /* ---- 顶栏：标题、功能标签、数据源与文件操作合成一行 ---- */
-.dbc-header { flex: none; flex-wrap: wrap; justify-content: flex-start; gap: var(--sp-2) var(--sp-3); margin: 0; padding: var(--sp-2) var(--sp-3); }
+.dbc-header { flex: none; flex-flow: row wrap; align-items: center; justify-content: flex-start; gap: var(--sp-2) var(--sp-3); margin: 0; padding: var(--sp-2) var(--sp-3); }
 .dbc-title { flex: none; margin-right: var(--sp-2); color: var(--text); font-size: var(--fs-body); font-weight: 700; line-height: 1.2; }
-.dbc-header #dbcTabs button { min-height: 28px; padding-inline: var(--sp-4); }
-.dbc-header .tool-header-connection { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-left: auto; }
+.dbc-header #dbcTabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.dbc-header #dbcTabs button { flex: none; min-height: 28px; padding-inline: var(--sp-4); }
+/* 窄窗口下操作组可以收缩并在组内换行，不能按内容宽度撑出顶栏。 */
+.dbc-header .tool-header-connection { display: flex; flex-wrap: wrap; flex-shrink: 1; align-items: center; gap: var(--sp-2); min-width: 0; max-width: 100%; margin-left: auto; }
 .dbc-header .outline-button { min-height: 30px; padding-inline: var(--sp-3); }
 .dbc-icon-button {
   display: inline-grid;
@@ -4139,8 +4141,9 @@ select {
 .dbc-file-empty { display: grid; gap: var(--sp-2); }
 .dbc-file-empty button { justify-self: start; }
 .dbc-side-bar { flex: none; padding: var(--sp-2); border-bottom: 1px solid var(--line-soft); }
-.dbc-side-bar .search { width: 100%; height: 32px; }
+.dbc-side-bar .search { grid-template-columns: 34px minmax(0, 1fr) auto; width: 100%; height: 32px; }
 .dbc-side-bar .search input { min-width: 0; }
+.dbc-side-bar .search .dbc-file-close { margin: 0 var(--sp-1) 0 0; }
 .dbc-search-results { flex: none; padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--line-soft); color: var(--text-2); font-size: var(--fs-label); }
 .dbc-search-results:empty { display: none; }
 
@@ -4564,6 +4567,11 @@ select {
   .dbc-detail .dbc-form-grid { grid-template-columns: minmax(0, 1fr); }
   .dbc-send-row { grid-template-columns: minmax(0, 1fr) 110px 32px; }
   .dbc-fold-summary { display: none; }
+}
+@media (max-width: 560px) {
+  /* 手机宽度：五个功能标签等分一行，不再靠隐藏滚动才能点到“比对”。 */
+  .dbc-header #dbcTabs { display: flex; width: 100%; }
+  .dbc-header #dbcTabs button { flex: 1 1 0; min-width: 0; padding-inline: var(--sp-1); }
 }
 @media (max-width: 800px) {
   .dbc-header .tool-header-connection { margin-left: 0; }

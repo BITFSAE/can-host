@@ -112,6 +112,17 @@ class PageWiringTests(unittest.TestCase):
         self.assertTrue(buttons)
         self.assertEqual([tag for tag in buttons if "formnovalidate" not in tag], [])
 
+    def test_narrow_window_layout_rules_are_kept(self) -> None:
+        """窄窗口下的三处版式：搜索清除按钮要有自己的网格列、顶栏固定横向换行、折叠导航的角标贴着图标。"""
+        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".dbc-side-bar .search { grid-template-columns: 34px minmax(0, 1fr) auto;", css)
+        self.assertIn(".dbc-header { flex: none; flex-flow: row wrap;", css)
+        self.assertIn(".dbc-header .tool-header-connection { display: flex; flex-wrap: wrap; flex-shrink: 1;", css)
+        badge = re.search(r':root\[data-rail="collapsed"\] \.nav-item \.badge \{([^}]*)\}', css)
+        self.assertIsNotNone(badge)
+        self.assertIn("right: 0", badge.group(1))
+        self.assertNotIn("margin: -14px", badge.group(1))
+
     def test_message_and_signal_context_menus_are_wired(self) -> None:
         self.assertIn('addEventListener("contextmenu", dbcTreeMenu)', SOURCES["dbc.js"])
         self.assertIn('addEventListener("contextmenu", dbcEditorMenu)', SOURCES["dbc-editor.js"])
