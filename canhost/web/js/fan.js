@@ -195,22 +195,57 @@ function bindFanControls() {
   renderBatteryFanCalibFields();
 }
 
+/* 确认框里的“当前”一行只供现场核对，不参与命令校验：
+   任一项过期或缺失都整行写未更新，不用旧读数冒充当前状态。
+   阈值与风扇页其他 CANB 读数一致（1.5 s），超温读数单位取 °C。 */
+function fanConditionLine() {
+  const fan = state.vehicleSnapshot?.fan || {};
+  const diag = fan.diagnostic || {};
+  const power = fan.power_status || {};
+  const diagFresh = hasDataAge(fan.diagnostic_age) && isFresh(fan.diagnostic_age, 1.5);
+  const powerFresh = hasDataAge(fan.power_status_age) && isFresh(fan.power_status_age, 1.5);
+  const motorTemp = diag.motor_temp_c;
+  const controllerTemp = diag.controller_temp_c;
+  const tempsValid = [motorTemp, controllerTemp]
+    .every(value => value != null && Number.isFinite(Number(value)));
+  if (!diagFresh || !powerFresh || !diag.mode_name || !tempsValid || !power.power_supply_name) {
+    return "当前状态未更新";
+  }
+  return `当前：${diag.mode_name} · 电机 ${fmt(motorTemp, 1)} °C`
+    + ` · 控制器 ${fmt(controllerTemp, 1)} °C · 供电 ${power.power_supply_name}`;
+}
+
+function stopFanConfirmRefresh() {
+  if (state.fanConfirmTimer) {
+    clearInterval(state.fanConfirmTimer);
+    state.fanConfirmTimer = null;
+  }
+}
+
 function confirmFanCommand(name, values, title, message, destructive = false) {
   if (!fanConnectionAvailable()) return toast("请先在整车页连接 CANB（真实 PCAN）", true);
+  stopFanConfirmRefresh();
   state.pendingCommand = null;
   state.pendingIvtAction = null;
   state.pendingFanAction = null;
   state.pendingFanCommand = { name, values };
   const conn = state.vehicleSnapshot.connection;
+  const paintPayload = () => text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
+    + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s\n`
+    + fanConditionLine());
   text("#confirmTitle", title);
   text("#confirmMessage", message);
   setConfirmModeBadge(destructive ? "风扇高危操作 · 需二次确认" : "CANB 风扇命令", destructive ? "bad" : "");
-  text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
-    + `总线：CANB · ${(conn.bitrate || 500000) / 1000} kbit/s`);
+  paintPayload();
   $("#confirmCheck").checked = false;
   $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";
   $("#confirmDialog").showModal();
+  // 确认框可能停留几十秒；每 500 ms 重算“当前”，过期后改为未更新。
+  state.fanConfirmTimer = setInterval(() => {
+    if (!$("#confirmDialog")?.open) return stopFanConfirmRefresh();
+    paintPayload();
+  }, 500);
 }
 
 /**
@@ -219,6 +254,7 @@ function confirmFanCommand(name, values, title, message, destructive = false) {
  */
 function confirmFanAction(title, message, checkLabel, run, destructive = false) {
   if (!fanConnectionAvailable()) return toast("请先在整车页连接 CANB（真实 PCAN）", true);
+  stopFanConfirmRefresh();
   state.pendingCommand = null;
   state.pendingIvtAction = null;
   state.pendingFanCommand = null;

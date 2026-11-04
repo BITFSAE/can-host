@@ -10,6 +10,11 @@ const SAVE_LABELS = {
   alarm_thresholds: "告警阈值", alarm_switches: "告警开关", charge_config: "充电请求",
   current_direction: "电流方向",
 };
+// 命令名 → 页面草稿字段：写入被接受后保持草稿，等周期回报与之相符才宣布一致。
+const WRITE_DIRTY_KEYS = {
+  alarm_thresholds: "thresholds", alarm_switches: "switches",
+  charge_config: "charge", current_direction: "direction",
+};
 const IMD_FREQUENCY_NOTES = {
   0: "无有效 PWM", 1: "DCP", 2: "DCP", 3: "SST", 4: "设备错误", 5: "接地线错误", 15: "未知频率",
 };
@@ -47,20 +52,29 @@ function resetChargeTiming() {
 
 function bindBmsControls() {
   $("#onlyAbnormal").addEventListener("change", renderCells);
-  $("#sendThresholds").addEventListener("click", () => confirmCommand(
-    "alarm_thresholds",
-    { ov_mv: +$("#ovInput").value, uv_mv: +$("#uvInput").value, ot_c: +$("#otInput").value, ut_c: +$("#utInput").value },
-    "写入单体告警阈值", `OV ${$("#ovInput").value} mV\nUV ${$("#uvInput").value} mV\nOT ${$("#otInput").value} °C\nUT ${$("#utInput").value} °C`
-  ));
+  $("#sendThresholds").addEventListener("click", () => {
+    const { values, error } = thresholdWriteValues(
+      ["#ovInput", "#uvInput", "#otInput", "#utInput"].map(id => $(id).value));
+    if (error) return toast(error, true);
+    confirmCommand("alarm_thresholds", values, "写入单体告警阈值",
+      `OV ${values.ov_mv} mV\nUV ${values.uv_mv} mV\nOT ${values.ot_c} °C\nUT ${values.ut_c} °C`);
+  });
   $("#sendSwitches").addEventListener("click", () => {
     const switches = {};
     $$("#switchList input").forEach(input => switches[input.dataset.key] = input.checked);
-    confirmCommand("alarm_switches", { switches }, "写入告警开关", "将当前页面的全部开关作为一组写入主控。基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。", true);
+    const summary = switchWriteSummary(state.bootstrap?.switch_catalog || [], switches);
+    if (!summary.total) return toast("开关清单尚未载入，暂不能写入", true);
+    confirmCommand("alarm_switches", { switches }, "写入告警开关",
+      `将整组写入 ${summary.total} 项：开启 ${summary.on}，关闭 ${summary.off}。清单见下方（可滚动），请逐项核对。`
+      + "基础安全保护关闭后故障仍检测并上报，只是不再触发保护动作；写入后以周期回报值为准。",
+      true, `将要写入（开/关  名称）：\n${summary.detail}`);
   });
-  $("#sendChargeConfig").addEventListener("click", () => confirmCommand(
-    "charge_config", { voltage_v: +$("#chargeVoltage").value, current_a: +$("#chargeCurrent").value },
-    "写入充电请求", `${$("#chargeVoltage").value} V  /  ${$("#chargeCurrent").value} A`
-  ));
+  $("#sendChargeConfig").addEventListener("click", () => {
+    const { values, error } = chargeWriteValues($("#chargeVoltage").value, $("#chargeCurrent").value);
+    if (error) return toast(error, true);
+    confirmCommand("charge_config", values,
+      "写入充电请求", `${values.voltage_v} V  /  ${values.current_a} A`);
+  });
   $("#syncRtc").addEventListener("click", () => {
     const now = new Date(); const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
     confirmCommand("rtc", { datetime: local }, "RTC 校时", `写入上位机本地时间：${local.replace("T", " ")}`);
@@ -100,13 +114,17 @@ function bindBmsControls() {
       toast("剪贴板不可用，请手动选择复制", true);
     }
   });
-  ["#ovInput", "#uvInput", "#otInput", "#utInput"].forEach(id => $(id).addEventListener("input", () => state.dirty.thresholds = true));
-  ["#chargeVoltage", "#chargeCurrent"].forEach(id => $(id).addEventListener("input", () => state.dirty.charge = true));
+  const markDraft = key => {
+    state.dirty[key] = true;
+    if (state.pendingWrites) delete state.pendingWrites[key];
+  };
+  ["#ovInput", "#uvInput", "#otInput", "#utInput"].forEach(id => $(id).addEventListener("input", () => markDraft("thresholds")));
+  ["#chargeVoltage", "#chargeCurrent"].forEach(id => $(id).addEventListener("input", () => markDraft("charge")));
   $("#switchList").addEventListener("change", () => {
-    state.dirty.switches = true;
+    markDraft("switches");
     updateSwitchRowState();
   });
-  $("#currentDirection").addEventListener("change", () => state.dirty.direction = true);
+  $("#currentDirection").addEventListener("change", () => markDraft("direction"));
 }
 
 function renderOverview() {
@@ -453,7 +471,7 @@ function drawTrend() {
     ctx.setLineDash([]);
   }
 
-  const drawSeries = (key, color, yOf, fill) => {
+  const drawSeries = (key, color, yOf, fill, dashed = false) => {
     const points = [];
     trends.forEach(item => {
       if (!Number.isFinite(item[key])) return;
@@ -463,7 +481,10 @@ function drawTrend() {
     ctx.beginPath();
     points.forEach((point, index) => index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    // PRE 与包电压同为灰色，再用虚线区分，避免两条实线叠在一起看不出来。
+    if (dashed) ctx.setLineDash([5, 4]);
     ctx.stroke();
+    ctx.setLineDash([]);
     if (fill) {
       const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotHeight);
       gradient.addColorStop(0, fill); gradient.addColorStop(1, "rgba(0,0,0,0)");
@@ -478,7 +499,7 @@ function drawTrend() {
   };
 
   if (left) {
-    drawSeries("precharge", colors.precharge, yLeft, cssVar("--chart-precharge-fill", "rgba(133, 141, 137, .10)"));
+    drawSeries("precharge", colors.precharge, yLeft, cssVar("--chart-precharge-fill", "rgba(133, 141, 137, .10)"), true);
     drawSeries("voltage", colors.voltage, yLeft, cssVar("--chart-voltage-fill", "rgba(174, 182, 178, .13)"));
   }
   if (right) drawSeries("current", colors.current, yRight, null);
@@ -582,6 +603,150 @@ function flashPersistenceState() {
   return { available: true, reason: "" };
 }
 
+/**
+ * 阈值输入 → 命令值。固件按整数保存，先取整；空输入或非数字不能被 Number("") 变成 0 写下去。
+ * 取值范围仍由后端 build_command 校验，这里只保证“用户填了什么就写什么”。
+ */
+function thresholdWriteValues(raw) {
+  const texts = (raw || []).map(value => String(value ?? "").trim());
+  if (texts.length !== 4 || texts.some(value => value === "")) {
+    return { error: "请填写完整的保护阈值" };
+  }
+  const [ov, uv, ot, ut] = texts.map(value => Math.round(Number(value)));
+  const values = { ov_mv: ov, uv_mv: uv, ot_c: ot, ut_c: ut };
+  if (!Object.values(values).every(Number.isFinite)) return { error: "请填写完整的保护阈值" };
+  return { values };
+}
+
+/** 充电请求输入 → 命令值：电压必须为正，电流不能为负；空输入同样不能当 0。 */
+function chargeWriteValues(voltageRaw, currentRaw) {
+  const voltageText = String(voltageRaw ?? "").trim();
+  const currentText = String(currentRaw ?? "").trim();
+  if (!voltageText || !currentText) return { error: "请填写完整的充电请求" };
+  const voltage = Number(voltageText), current = Number(currentText);
+  if (!Number.isFinite(voltage) || !Number.isFinite(current) || voltage <= 0 || current < 0) {
+    return { error: "请填写有效的充电请求" };
+  }
+  return { values: { voltage_v: voltage, current_a: current } };
+}
+
+/** 23 项开关整组写入前的清单：确认框必须给出每一项的开/关，不能只写“全部开关”。 */
+function switchWriteSummary(catalog, switches) {
+  const items = (catalog || []).map(item => ({ name: item.name, on: !!switches?.[item.key] }));
+  const on = items.filter(item => item.on).length;
+  return {
+    total: items.length, on, off: items.length - on,
+    detail: items.map(item => `${item.on ? "开" : "关"}  ${item.name}`).join("\n"),
+  };
+}
+
+function sameReportedValue(reported, wanted, tolerance = 0) {
+  if (reported == null || wanted == null) return false;
+  const a = Number(reported), b = Number(wanted);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= tolerance;
+}
+
+/** 只有主控周期回报与本次写入相符，才算“已与主控一致”；回报缺失或过期一律不算。 */
+function writeEchoMatches(name, values, snapshot) {
+  const config = snapshot?.config || {};
+  if (name === "alarm_thresholds") {
+    if (!isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S)) return false;
+    const reported = config.thresholds || {};
+    return ["ov_mv", "uv_mv", "ot_c", "ut_c"]
+      .every(key => sameReportedValue(reported[key], values?.[key], 0.001));
+  }
+  if (name === "alarm_switches") {
+    if (!isFresh(config.switches_age, SLOW_DATA_FRESH_MAX_S)) return false;
+    const reported = config.switches || {};
+    const wanted = values?.switches || {};
+    const keys = Object.keys(wanted);
+    return keys.length > 0 && keys.every(key =>
+      Object.prototype.hasOwnProperty.call(reported, key) && !!reported[key] === !!wanted[key]);
+  }
+  if (name === "charge_config") {
+    const relay = snapshot?.relay || {};
+    if (!isFresh(relay.command_age)) return false;
+    return sameReportedValue(relay.request_voltage_v, values?.voltage_v, 0.051)
+      && sameReportedValue(relay.request_current_a, values?.current_a, 0.051);
+  }
+  if (name === "current_direction") {
+    if (!isFresh(config.runtime_age)) return false;
+    return sameReportedValue(config.current_direction_inverted, values?.inverted ? 1 : 0, 0);
+  }
+  return false;
+}
+
+function pendingWriteFor(name) {
+  const key = WRITE_DIRTY_KEYS[name];
+  return key ? state.pendingWrites?.[key] || null : null;
+}
+
+/** 每次渲染先结算一次；各命令分别等待，超过 8 s 仍未回读就明确标红。 */
+function settlePendingWrite() {
+  const pendingWrites = state.pendingWrites || {};
+  Object.entries(pendingWrites).forEach(([key, pending]) => {
+    if (writeEchoMatches(pending.name, pending.values, state.snapshot)) {
+      state.dirty[key] = false;
+      delete pendingWrites[key];
+    } else if (Date.now() - pending.at > 8000) {
+      pending.overdue = true;
+    }
+  });
+}
+
+/** 连接或数据源变化后，上一辆车/上一条总线的草稿不能再写入。 */
+function resetConfigDrafts(reason) {
+  const hadDraft = ["thresholds", "switches", "charge", "direction"]
+    .some(key => state.dirty[key])
+    || Object.keys(state.pendingWrites || {}).length > 0;
+  state.dirty.thresholds = false;
+  state.dirty.switches = false;
+  state.dirty.charge = false;
+  state.dirty.direction = false;
+  state.pendingWrites = {};
+  state.saveWatch = null;
+  state.inputsInitialized = { thresholds: false, switches: false, charge: false };
+  if (hadDraft && reason) toast(reason, true);
+}
+
+function syncConfigConnection(snapshot) {
+  const conn = snapshot?.connection || {};
+  const key = [conn.connected ? 1 : 0, conn.mode || "", conn.channel || "",
+    conn.bus_profile || "", conn.bitrate || ""].join("|");
+  if (state.configConnectionKey == null) {
+    state.configConnectionKey = key;
+    return;
+  }
+  if (state.configConnectionKey === key) return;
+  state.configConnectionKey = key;
+  resetConfigDrafts("连接已变化，未写入的页面参数已清除");
+}
+
+function writeSyncView(name, hasReport) {
+  const pending = pendingWriteFor(name);
+  if (pending) {
+    return pending.overdue
+      ? { text: "已下发 · 回读不一致", className: "bad" }
+      : { text: "已下发 · 等待回读", className: "warn" };
+  }
+  if (state.dirty[WRITE_DIRTY_KEYS[name]]) return { text: "页面值待写入", className: "warn" };
+  return { text: hasReport ? "已与主控一致" : "等待主控回报",
+    className: hasReport ? "ok" : "neutral" };
+}
+
+/** 画布上方的“待写入/等待回读”标签：干净时隐藏，避免常驻占位。 */
+function updateWriteTag(selector, name, hasReport) {
+  const node = $(selector);
+  const key = WRITE_DIRTY_KEYS[name];
+  if (!node || !key) return;
+  const visible = !!pendingWriteFor(name) || state.dirty[key];
+  node.hidden = !visible;
+  if (!visible) return;
+  const view = writeSyncView(name, hasReport);
+  node.textContent = view.text;
+  node.className = `tag ${view.className}`;
+}
+
 function setPersistentButtonState(selector, normallyDisabled, flashState) {
   const node = $(selector);
   node.disabled = normallyDisabled || !flashState.available;
@@ -589,6 +754,7 @@ function setPersistentButtonState(selector, normallyDisabled, flashState) {
 }
 
 function renderConfig() {
+  settlePendingWrite();
   const config = state.snapshot.config || {};
   const rawThresholds = config.thresholds || {};
   const thresholdsFresh = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S);
@@ -606,9 +772,9 @@ function renderConfig() {
   text("#displayUv", hasThresholdReport ? `${thresholds.uv_mv} mV` : "等待数据");
   text("#displayOt", hasThresholdReport ? `${thresholds.ot_c} °C` : "等待数据");
   text("#displayUt", hasThresholdReport ? `${thresholds.ut_c} °C` : "等待数据");
-  const thresholdLabel = state.dirty.thresholds ? "页面值待写入" : hasThresholdReport ? "已与主控一致" : "等待主控回报";
-  text("#thresholdSync", thresholdLabel);
-  $("#thresholdSync").className = `tag ${state.dirty.thresholds ? "warn" : hasThresholdReport ? "ok" : "neutral"}`;
+  const thresholdView = writeSyncView("alarm_thresholds", hasThresholdReport);
+  text("#thresholdSync", thresholdView.text);
+  $("#thresholdSync").className = `tag ${thresholdView.className}`;
   if (!hasThresholdReport && !state.dirty.thresholds) {
     ["#ovInput", "#uvInput", "#otInput", "#utInput"].forEach(id => $(id).value = "");
     state.inputsInitialized.thresholds = false;
@@ -622,10 +788,11 @@ function renderConfig() {
 
   text("#switchVersion", hasSwitchReport && config.switch_version != null
     ? `配置版本 V${config.switch_version}` : "等待数据");
+  const switchCatalog = state.bootstrap?.switch_catalog || [];
   const statusList = $("#switchStatusList");
   if (statusList && state.bootstrap?.switch_catalog) {
-    const enabledCount = state.bootstrap.switch_catalog.filter(item => switches[item.key]).length;
-    text("#switchStatusSummary", hasSwitchReport ? `启用 ${enabledCount} / ${state.bootstrap.switch_catalog.length}` : "等待回报");
+    const enabledCount = switchCatalog.filter(item => switches[item.key]).length;
+    text("#switchStatusSummary", hasSwitchReport ? `启用 ${enabledCount} / ${switchCatalog.length}` : "等待回报");
     [...statusList.querySelectorAll(".protection-switch")].forEach((node, index) => {
       const item = state.bootstrap.switch_catalog[index];
       if (!item) return;
@@ -645,7 +812,9 @@ function renderConfig() {
     state.inputsInitialized.switches = true;
   }
   $$("#switchList input").forEach(input => input.disabled = !hasSwitchReport && !state.dirty.switches);
-  setPersistentButtonState("#sendSwitches", !hasSwitchReport && !state.dirty.switches, flashState);
+  setPersistentButtonState("#sendSwitches", !switchCatalog.length || (!hasSwitchReport && !state.dirty.switches), flashState);
+  if (!switchCatalog.length) $("#sendSwitches").title = "开关清单尚未载入，暂不能写入";
+  updateWriteTag("#switchWriteState", "alarm_switches", hasSwitchReport);
   updateSwitchRowState();
   if (directionKnown && !state.dirty.direction && document.activeElement !== $("#currentDirection")) {
     $("#currentDirection").value = config.current_direction_inverted ? "1" : "0";
@@ -654,6 +823,7 @@ function renderConfig() {
   }
   $("#currentDirection").disabled = !directionKnown && !state.dirty.direction;
   setPersistentButtonState("#sendCurrentDirection", !directionKnown && !state.dirty.direction, flashState);
+  updateWriteTag("#directionWriteState", "current_direction", directionKnown);
 }
 
 function watchFlashSave(command, ack) {
@@ -731,8 +901,11 @@ function renderSaveStatus(runtime) {
 }
 
 function renderControls() {
+  settlePendingWrite();
   const { relay, fault, connection, overview } = state.snapshot;
   const requestFresh = isFresh(relay.command_age);
+  const chargeHasReport = requestFresh && relay.request_voltage_v != null && relay.request_current_a != null;
+  updateWriteTag("#chargeWriteState", "charge_config", chargeHasReport);
   if (requestFresh && relay.request_voltage_v != null && !state.dirty.charge
       && (!state.inputsInitialized.charge || ![$("#chargeVoltage"), $("#chargeCurrent")].includes(document.activeElement))) {
     $("#chargeVoltage").value = relay.request_voltage_v; $("#chargeCurrent").value = relay.request_current_a; state.inputsInitialized.charge = true;
@@ -843,7 +1016,8 @@ function updateSwitchRowState() {
     const enabled = input.checked;
     row.classList.toggle("on", enabled);
     if (state.dirty.switches) {
-      label.textContent = "待写入";
+      // 保留当前开关值，只加“待写/待回读”，避免整列都变成同一句状态文字。
+      label.textContent = `${enabled ? "开" : "关"} · ${pendingWriteFor("alarm_switches") ? "待回读" : "待写"}`;
       row.classList.add("dirty");
     } else if (!hasReport) {
       label.textContent = "等待";
@@ -1040,7 +1214,8 @@ function renderCells() {
   state.cellRefs.placeholder.classList.toggle("hidden", !(onlyAbnormal && abnormalTotal === 0));
 }
 
-function confirmCommand(name, values, title, message, destructive = false) {
+function confirmCommand(name, values, title, message, destructive = false, details = "") {
+  if (typeof stopFanConfirmRefresh === "function") stopFanConfirmRefresh();
   const conn = state.snapshot?.connection;
   if (!conn?.connected) return toast("请先连接 CAN", true);
   if (conn.mode === "replay") return toast("历史回放为只读，不能发送命令", true);
@@ -1053,7 +1228,8 @@ function confirmCommand(name, values, title, message, destructive = false) {
   text("#confirmPayload", `通道：${conn.channel || "PCAN"}\n`
     + `总线：CAN1 · ${conn.bitrate ? conn.bitrate / 1000 : 500} kbit/s\n`
     + `主控状态：${state.snapshot.overview.state_name}\n`
-    + `告警等级：${state.snapshot.overview.alarm_level_name}`);
+    + `告警等级：${state.snapshot.overview.alarm_level_name}`
+    + (details ? `\n\n${details}` : ""));
   $("#confirmCheck").checked = false; $("#doConfirm").disabled = true;
   $("#doConfirm").className = destructive ? "danger-button" : "action-button";
   $("#confirmDialog").showModal();

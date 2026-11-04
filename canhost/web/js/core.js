@@ -32,6 +32,9 @@ var state = {
   inputsInitialized: { thresholds: false, switches: false, charge: false },
   dirty: { thresholds: false, switches: false, charge: false, direction: false,
            batteryFanCaps: false },
+  pendingWrites: {},
+  fanConfirmTimer: null,
+  configConnectionKey: null,
   onlyActiveAlarms: false,
   theme: document.documentElement.dataset.theme || "dark",
   uiScale: 1,
@@ -345,11 +348,18 @@ function showPage(page) {
   if (!PAGE_ORDER.includes(page)) return;
   state.page = page;
   const isTool = TOOL_PAGES.includes(page);
-  if (isTool) $(".nav-tools")?.setAttribute("open", "");
+  const navTools = $(".nav-tools");
+  if (navTools) {
+    navTools.classList.toggle("has-active", isTool);
+    if (isTool) navTools.setAttribute("open", "");
+  }
   $$(".nav-item").forEach(node => {
     node.classList.toggle("active", node.dataset.page === page);
-    if (node.dataset.page === page) node.setAttribute("aria-current", "page");
-    else node.removeAttribute("aria-current");
+    if (node.dataset.page === page) {
+      node.setAttribute("aria-current", "page");
+      // 工程工具展开后当前项可能在导航视口外，切换页面时把它带回可见范围。
+      node.scrollIntoView?.({ block: "nearest" });
+    } else node.removeAttribute("aria-current");
   });
   $$(".page").forEach(node => node.classList.toggle("active", node.id === `page-${page}`));
   document.body.classList.toggle("is-tool-page", isTool);
@@ -399,6 +409,7 @@ function bindCoreControls() {
   $("#saveConnectionSettings")?.addEventListener("click", saveConnectionPreferences);
   $("#confirmCheck").addEventListener("change", event => $("#doConfirm").disabled = !event.target.checked);
   $("#confirmDialog").addEventListener("close", () => {
+    if (typeof stopFanConfirmRefresh === "function") stopFanConfirmRefresh();
     state.pendingCommand = null;
     state.pendingIvtAction = null;
     state.pendingEncoderAction = null;
@@ -943,6 +954,7 @@ function effectiveBmsSnapshot() {
 
 function render() {
   const snap = state.snapshot; if (!snap) return;
+  if (typeof syncConfigConnection === "function") syncConfigConnection(snap);
   renderConnection();
   renderTelemetryBadge();
   renderCellBadge();
@@ -1408,10 +1420,16 @@ async function sendPendingCommand() {
   if (!state.pendingCommand) return;
   $("#doConfirm").disabled = true;
   const command = state.pendingCommand.name;
+  const commandValues = state.pendingCommand.values;
   const result = await state.api.send_command(command, state.pendingCommand.values, true);
   if (result.ok) {
-    const dirtyMap = { alarm_thresholds: "thresholds", alarm_switches: "switches", charge_config: "charge", current_direction: "direction" };
-    if (dirtyMap[command]) state.dirty[dirtyMap[command]] = false;
+    const dirtyKey = WRITE_DIRTY_KEYS[command];
+    if (dirtyKey) {
+      // 写入被接受不等于主控已经采纳：保持草稿，等周期回报匹配后再宣布一致。
+      // 各命令分别等待，连续写入阈值和开关时不能互相覆盖。
+      state.dirty[dirtyKey] = true;
+      state.pendingWrites[dirtyKey] = { name: command, values: commandValues, at: Date.now() };
+    }
     watchFlashSave(command, result.ack);
     $("#confirmDialog").close(); toast(result.message || "命令已发送");
     state.pendingCommand = null;

@@ -342,7 +342,10 @@
             <article class="panel span-6">
               <header class="panel-head">
                 <h3>写入离车充电请求</h3>
-                <span class="tag neutral" id="chargeModeTag">模式未知</span>
+                <span class="head-actions">
+                  <span id="chargeWriteState" class="tag warn" hidden>页面值待写入</span>
+                  <span class="tag neutral" id="chargeModeTag">模式未知</span>
+                </span>
               </header>
               <div class="panel-body">
                 <div class="duo-fields">
@@ -374,7 +377,7 @@
             </article>
 
             <article class="panel span-12 command-panel">
-              <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><small class="muted">23 项整组写入 · 关闭后仍上报</small></header>
+              <header class="panel-head"><h3>写入告警与蜂鸣器开关</h3><span class="head-actions"><span id="switchWriteState" class="tag warn" hidden>页面值待写入</span><small class="muted">23 项整组写入 · 关闭后仍上报</small></span></header>
               <div class="panel-body">
                 <div id="switchList" class="switch-list"></div>
                 <div class="panel-foot"><button class="action-button" type="button" id="sendSwitches">写入告警开关</button></div>
@@ -394,6 +397,7 @@
                   <li>
                     <span class="action-text"><b>电流方向</b><small>周期状态帧会自动回读当前值</small></span>
                     <span class="action-controls">
+                      <span id="directionWriteState" class="tag warn" hidden>页面值待写入</span>
                       <select id="currentDirection" aria-label="电流方向"><option value="" disabled>等待数据</option><option value="0">正常</option><option value="1">反转</option></select>
                       <button class="outline-button" type="button" id="sendCurrentDirection">写入</button>
                     </span>
@@ -1136,7 +1140,7 @@
                     <div><dt>保护</dt><dd id="fanProtectionReport" role="status">等待数据</dd></div>
                     <div><dt>降功率</dt><dd id="fanDerateReport" role="status"></dd></div>
                   </dl>
-                  <div class="panel-foot"><button class="action-button" id="sendFanProfile" type="button" disabled>应用档位</button><button class="outline-button" id="clearFanFaults" type="button" disabled>解除停转锁定</button></div>
+                  <div class="panel-foot"><button class="action-button" id="sendFanProfile" type="button" disabled>应用档位</button><button class="danger-outline" id="clearFanFaults" type="button" disabled>解除停转锁定</button></div>
                 </div>
               </article>
 
@@ -1377,7 +1381,7 @@
             <button id="dbcDirectoryToggle" class="dbc-icon-button dbc-directory-toggle" type="button" aria-controls="dbcDirectory" aria-expanded="true" aria-label="报文目录" title="收起报文目录">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M9.5 4.5v15"/></svg>
             </button>
-            <h2 class="dbc-title">DBC 工作台</h2>
+            <div class="dbc-title-block"><h2 class="dbc-title">DBC 工作台</h2><span class="tool-header-desc">实时解码、曲线、编辑与比对</span></div>
             <div class="segmented" id="dbcTabs" role="tablist" aria-label="DBC 功能">
               <button type="button" role="tab" data-tab="live" class="active">实时</button>
               <button type="button" role="tab" data-tab="plot">曲线</button>

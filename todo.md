@@ -1,5 +1,11 @@
 # 进度与待办
 
+## 2026-11-04 界面审查修复（未发布）
+
+- 变化见 [CHANGELOG](CHANGELOG.md#未发布)。
+- 验证：全量 812 项通过（1 项平台跳过）；新增 `Tests/test_control_ui.py`（7 项，已用故意改坏回读、输入校验和风扇过期判断的方式确认会失败）；`node --check` bms/core/fan；Playwright 1440x900、1460x920、1280x800 深浅主题截图，1280x800 另测 110%/120%/130% 缩放；开关键盘焦点、23 行确认框高度、充电/方向待写标签与“已下发 · 等待回读”实测。
+- 未验证：Windows WebView2 与 macOS WKWebView 原生窗口；macOS 12 早期未更新的 WKWebView（Safari <16.2）不支持 `color-mix`，半透明底和边框会退化，发布前需在最低系统实机确认。
+
 ## 2026-11-03 v0.9.33 已发布
 
 - 发布代码为 `1ddfb1d`，已推送 main 和标签 `v0.9.33`。发布页：[GitHub](https://github.com/BITFSAE/can-host/releases/tag/v0.9.33)、[CNB 镜像](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.33)。版本说明五条：DBC 工作台编辑补齐、右键菜单与快捷操作、窄窗口版式修复、BMS 包过压规则文字、`lv1blk` 显示名；`未发布/待办` 只保留实体联调项。
