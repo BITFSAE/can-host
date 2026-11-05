@@ -99,7 +99,7 @@ class ModelTest(unittest.TestCase):
         values = model.default_values()
         sop = model.FRAME_BY_ID[0x4A0]
         self.assertTrue(d.decode_sop_limits(model.build_frame(sop, values, 3), True)["frame_valid"])
-        for defect in ("crc", "version", "reserved"):
+        for defect in ("crc", "version"):
             self.assertFalse(d.decode_sop_limits(model.build_frame(sop, values, 3, defect), True)["frame_valid"],
                              defect)
         self.assertFalse(d.decode_sop_status(model.build_frame(model.FRAME_BY_ID[0x4A3], values, 0, "version"))

@@ -250,20 +250,26 @@ def decode_sop_limits(data: bytes, little_endian: bool) -> dict[str, Any]:
     if len(data) != 8:
         return {"frame_valid": False, "crc_valid": False}
     crc_valid = crc8_sae_j1850(bytes.fromhex("04 A0") + data[:7]) == data[7]
-    valid = bool(data[6] & 1)
+    valid = bool(data[6] & 0x10)
+    power_valid = bool(data[6] & 0x20)
+    power = data[5] | ((data[6] & 0x0F) << 8)
+    if power & 0x800:
+        power -= 0x1000
     return {
         "discharge_power_kw": u16le(data) / 10.0 if valid else 0.0,
         "charge_power_kw": u16le(data, 2) / 10.0 if valid else 0.0,
-        "sequence": data[4], "protocol_version": data[5], "limits_valid": valid,
+        "sequence": data[4], "protocol_version": data[6] >> 6, "limits_valid": valid,
         "drive_allowed": valid and u16le(data) > 0,
         "regen_allowed": valid and u16le(data, 2) > 0,
+        "actual_power_kw": power / 10.0 if power_valid else None,
+        "power_valid": power_valid,
         "crc_valid": crc_valid,
-        "frame_valid": crc_valid and data[5] == 2 and data[6] & 0xFE == 0,
+        "frame_valid": crc_valid and data[6] >> 6 == SOP_PROTOCOL_VERSION,
     }
 
 
 def decode_sop_status(data: bytes) -> dict[str, Any]:
-    if len(data) != 8 or data[7] >> 4 != 2:
+    if len(data) != 8 or data[7] >> 4 != SOP_PROTOCOL_VERSION:
         return {"frame_valid": False}
     reason = u16le(data, 4)
     flags = data[7] & 0x0F
@@ -284,7 +290,7 @@ def decode_ecu_sop_ack(data: bytes) -> dict[str, Any]:
     crc_valid = crc8_sae_j1850(bytes.fromhex("04 A4") + data[:3]) == data[3]
     return {"sequence": data[0], "protocol_version": data[1], "flags": data[2],
             "limits_applied": bool(data[2] & 1), "crc_valid": crc_valid,
-            "frame_valid": crc_valid and data[1] == 2 and data[2] & 0xFE == 0}
+            "frame_valid": crc_valid and data[1] == SOP_PROTOCOL_VERSION and data[2] & 0xFE == 0}
 
 
 def sop_sequence_is_new(sequence: int, previous: int | None, age: float | None) -> bool:
@@ -854,7 +860,7 @@ ECU_INVERTER_TEMP_ID = 0x507
 ECU_IGBT_TEMP_ID = 0x508
 ECU_STATUS_ID = 0x509
 
-SOP_PROTOCOL_VERSION = 2
+SOP_PROTOCOL_VERSION = 3
 # Display-order wheels are FL, FR, RL, RR; ECU frames carry RL, RR, FL, FR.
 ECU_WIRE_ORDER = (2, 3, 0, 1)
 
@@ -892,18 +898,17 @@ def build_pack_status(voltage_v: float, current_a: float, soc_raw: float, *,
 
 
 def build_sop_limits(discharge_kw: float, regen_kw: float, sequence: int, *,
-                     limits_valid: bool = True, version: int = SOP_PROTOCOL_VERSION,
-                     reserved_bits: int = 0, crc_error: bool = False) -> bytes:
-    """BMS 0x4A0 (8 bytes, little endian, trailing CRC-8); see decode_sop_limits.
-
-    With ``limits_valid`` false the BMS sends zero power, so the builder does
-    too.  ``version``, ``reserved_bits`` and ``crc_error`` exist to produce the
-    frames the display must reject.
-    """
+                     limits_valid: bool = True, actual_power_kw: float | None = None,
+                     version: int = SOP_PROTOCOL_VERSION, crc_error: bool = False) -> bytes:
+    """V3：IVT 实测功率与 SOP 限值独立有效；功率按 0.1kW 向零截断。"""
     discharge = _scaled(discharge_kw, 0.1, 0, 0xFFFF) if limits_valid else 0
     regen = _scaled(regen_kw, 0.1, 0, 0xFFFF) if limits_valid else 0
+    power_valid = (actual_power_kw is not None and math.isfinite(actual_power_kw)
+                   and -204.8 <= actual_power_kw <= 204.7)
+    power = (math.trunc(round(actual_power_kw * 1000) / 100) & 0xFFF) if power_valid else 0
     body = (_u16(discharge, "little") + _u16(regen, "little")
-            + bytes([sequence & 0xFF, version & 0xFF, int(limits_valid) | (reserved_bits & 0xFE)]))
+            + bytes([sequence & 0xFF, power & 0xFF,
+                     power >> 8 | int(limits_valid) << 4 | int(power_valid) << 5 | (version & 3) << 6]))
     crc = crc8_sae_j1850(SOP_POWER_ID.to_bytes(2, "big") + body)
     return body + bytes([crc ^ 0xFF if crc_error else crc])
 

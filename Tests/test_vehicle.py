@@ -31,18 +31,18 @@ class VehicleProtocolTest(unittest.TestCase):
         self.assertTrue(snapshot["fault"]["received"])
         self.assertEqual(snapshot["fault"]["code_hex"], "0x00000000")
 
-    def test_sop_v2_single_frame_and_diagnostic(self) -> None:
+    def test_sop_v3_single_frame_and_diagnostic(self) -> None:
         protocol = VehicleProtocol()
-        frame = CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 02 01 29"), False)
+        frame = CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 00 D0 54"), False)
         protocol.ingest(frame)
         self.assertEqual(protocol.sop["limits"]["discharge_power_kw"], 74.0)
         received = protocol.last_sop_limits_monotonic
         protocol.ingest(frame)
         self.assertEqual(protocol.last_sop_limits_monotonic, received)
-        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 06 02 01 00"), False))
+        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 06 00 D0 00"), False))
         self.assertEqual(protocol.last_sop_limits_monotonic, received)
-        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 24"), False))
-        protocol.ingest(CanFrame(0x4A4, bytes.fromhex("05 02 01 98"), False))
+        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 34"), False))
+        protocol.ingest(CanFrame(0x4A4, bytes.fromhex("05 03 01 D4"), False))
         snapshot = protocol.snapshot({"connected": True})
         self.assertEqual(snapshot["sop"]["status"]["discharge_current_a"], 180.0)
         self.assertTrue(snapshot["sop"]["ecu_ack"]["limits_applied"])
@@ -91,7 +91,7 @@ class VehicleProtocolTest(unittest.TestCase):
     def test_quick_values(self) -> None:
         protocol = VehicleProtocol()
         protocol.ingest(CanFrame(0x5A0, bytes.fromhex("5D C0 00 96 01 68 00 7B"), False))
-        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 02 01 29"), False))
+        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 00 D0 54"), False))
         protocol.ingest(CanFrame(0x5A2, bytes([0x0B, 0xB8, 0x0D, 0x48, 0x00, 0x00, 50, 60]), False))
         quick = protocol.quick_values()
         self.assertEqual(quick["pdm"]["bus_voltage_v"], 24.0)

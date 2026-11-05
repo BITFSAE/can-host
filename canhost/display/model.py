@@ -42,8 +42,7 @@ DISPLAY_TIMEOUT_MS = {
 
 ECU_PERIODS_MS = (10, 20, 50, 100)
 DEFAULT_ECU_PERIOD_MS = 10
-DEFECT_NAMES = {"none": "正常", "short": "DLC 过短", "crc": "CRC 错误", "version": "版本错误",
-                "reserved": "保留位非零"}
+DEFECT_NAMES = {"none": "正常", "short": "DLC 过短", "crc": "CRC 错误", "version": "版本错误"}
 
 
 # ---------------------------------------------------------------------------
@@ -230,13 +229,13 @@ def _build_pack(v: Mapping[str, Any], n: int, d: str) -> bytes:
 def _build_sop_limits(v: Mapping[str, Any], n: int, d: str) -> bytes:
     return build_sop_limits(
         v["sop.discharge_kw"], v["sop.regen_kw"], n, limits_valid=v["sop.limits_valid"],
-        version=3 if d == "version" else 2, reserved_bits=0x02 if d == "reserved" else 0,
+        version=2 if d == "version" else 3,
         crc_error=d == "crc")
 
 
 def _build_sop_status(v: Mapping[str, Any], n: int, d: str) -> bytes:
     return build_sop_status(v["sop.discharge_a"], v["sop.regen_a"], inputs_valid=v["sop.inputs_valid"],
-                            version=3 if d == "version" else 2)
+                            version=2 if d == "version" else 3)
 
 
 def _build_data_logger(v: Mapping[str, Any], n: int, d: str) -> bytes:
@@ -287,7 +286,7 @@ def _tire_frame(frame_id: int) -> Builder:
 FRAMES: tuple[FrameSpec, ...] = (
     FrameSpec(PACK_STATUS_ID, "BMS 包状态", "bms", 500, 7, _build_pack),
     FrameSpec(SOP_POWER_ID, "SOP 功率限值", "sop", 10, 8, _build_sop_limits,
-              ("short", "crc", "version", "reserved")),
+              ("short", "crc", "version")),
     FrameSpec(SOP_STATUS_ID, "SOP 电流限值", "sop", 500, 8, _build_sop_status, ("short", "version")),
     FrameSpec(DATA_LOGGER_ID, "踏板与油压", "ecu", 50, 6, _build_data_logger),
     FrameSpec(ECU_TORQUE_ID, "四轮扭矩", "ecu", None, 8, _wheels_frame("torque_nm", 1.0)),

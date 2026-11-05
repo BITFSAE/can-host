@@ -29,8 +29,8 @@ class NodeFrameGoldenTest(unittest.TestCase):
         self.assertEqual((decoded["state"], decoded["alarm_level"]), (4, 2))
 
     def test_sop_frames_match_interface_samples(self) -> None:
-        self.assertEqual(d.build_sop_limits(74.0, 4.0, 5).hex(" "), "e4 02 28 00 05 02 01 29")
-        self.assertEqual(d.build_sop_status(180.0, 8.0).hex(" "), "08 07 50 00 00 00 ff 24")
+        self.assertEqual(d.build_sop_limits(74.0, 4.0, 5).hex(" "), "e4 02 28 00 05 00 d0 54")
+        self.assertEqual(d.build_sop_status(180.0, 8.0).hex(" "), "08 07 50 00 00 00 ff 34")
 
     def test_sop_limits_invalid_variants_are_rejected_by_the_existing_decoder(self) -> None:
         good = d.decode_sop_limits(d.build_sop_limits(74.0, 4.0, 5), True)
@@ -38,17 +38,14 @@ class NodeFrameGoldenTest(unittest.TestCase):
         self.assertEqual((good["discharge_power_kw"], good["charge_power_kw"], good["sequence"]), (74.0, 4.0, 5))
         bad_crc = d.decode_sop_limits(d.build_sop_limits(74.0, 4.0, 5, crc_error=True), True)
         self.assertFalse(bad_crc["crc_valid"] or bad_crc["frame_valid"])
-        wrong_version = d.decode_sop_limits(d.build_sop_limits(74.0, 4.0, 5, version=3), True)
+        wrong_version = d.decode_sop_limits(d.build_sop_limits(74.0, 4.0, 5, version=2), True)
         self.assertTrue(wrong_version["crc_valid"])
         self.assertFalse(wrong_version["frame_valid"])
-        reserved = d.decode_sop_limits(d.build_sop_limits(74.0, 4.0, 5, reserved_bits=0x02), True)
-        self.assertTrue(reserved["crc_valid"])
-        self.assertFalse(reserved["frame_valid"])
 
     def test_sop_limits_send_zero_power_when_limits_are_not_valid(self) -> None:
         frame = d.build_sop_limits(74.0, 4.0, 9, limits_valid=False)
         self.assertEqual(frame[:4], bytes(4))
-        self.assertEqual(frame[6], 0)
+        self.assertEqual(frame[6], 0xC0)
         self.assertTrue(d.decode_sop_limits(frame, True)["frame_valid"])
 
     def test_sop_status_input_health_and_version(self) -> None:
@@ -56,7 +53,7 @@ class NodeFrameGoldenTest(unittest.TestCase):
         self.assertTrue(valid["frame_valid"] and valid["input_health"] & 0x80)
         invalid_inputs = d.build_sop_status(150.0, 8.0, inputs_valid=False)
         self.assertEqual(invalid_inputs[6] & 0x80, 0)
-        self.assertFalse(d.decode_sop_status(d.build_sop_status(150.0, 8.0, version=3))["frame_valid"])
+        self.assertFalse(d.decode_sop_status(d.build_sop_status(150.0, 8.0, version=2))["frame_valid"])
 
     def test_sop_sequence_wraps_to_one_byte(self) -> None:
         self.assertEqual(d.build_sop_limits(1.0, 1.0, 256)[4], 0)

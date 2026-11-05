@@ -107,7 +107,7 @@ def crc8_sae_j1850(data: Sequence[int]) -> int:
 
 
 def build_sop_ack(limits: Sequence[int]) -> can.Message:
-    data = [limits[4], 2, 1]
+    data = [limits[4], 3, 1]
     data.append(crc8_sae_j1850([0x04, 0xA4, *data]))
     return can.Message(arbitration_id=CAN2_SOP_ACK_ID, is_extended_id=False, data=data)
 
@@ -375,7 +375,9 @@ def decode_bms_message(msg: can.Message) -> Optional[str]:
     if aid == CAN2_SOP_LIMITS_ID and len(data) == 8:
         return (f"SOP功率: 放电={(data[0]|data[1]<<8)/10.0:.1f}kW "
                 f"回收={(data[2]|data[3]<<8)/10.0:.1f}kW "
-                f"seq={data[4]} ver={data[5]} valid={data[6]&1}")
+                f"seq={data[4]} ver={data[6]>>6} valid={(data[6]>>4)&1} "
+                f"IVT={((data[5]|(data[6]&15)<<8) - (4096 if data[6]&8 else 0))/10.0:.1f}kW "
+                f"power_valid={(data[6]>>5)&1}")
     if aid == CAN2_SOP_STATUS_ID and len(data) == 8:
         return (f"SOP诊断: 放电={(data[0]|data[1]<<8)/10.0:.1f}A "
                 f"回充={(data[2]|data[3]<<8)/10.0:.1f}A "
@@ -802,7 +804,7 @@ class PcanBenchApp:
         if not self.args.sop_ack:
             return
         limits = self.monitor.sop_limits_data
-        if limits is None or limits[5] != 2 or limits[6] & 0xFE:
+        if limits is None or limits[6] >> 6 != 3:
             return
         if crc8_sae_j1850([0x04, 0xA0, *limits[:7]]) != limits[7]:
             return
@@ -834,7 +836,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--live-rx", action="store_true", help="实时打印已解码的主控回帧")
     p.add_argument("--verbose-rx", action="store_true", help="打印未解码的接收帧（配合 --live-rx）")
     p.add_argument("--canb-sop-ack", "--sop-ack", dest="sop_ack", action="store_true",
-                   help="CANB ECU确认模式：校验 V2 单帧 0x4A0 并发送 4 字节 0x4A4")
+                   help="CANB ECU确认模式：校验 V3 单帧 0x4A0 并发送 4 字节 0x4A4")
     return p.parse_args(argv)
 
 

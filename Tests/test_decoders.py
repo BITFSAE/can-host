@@ -39,8 +39,8 @@ class SharedDecoderTest(unittest.TestCase):
         data[0] = 0b00001001
         self.assertEqual(decode_alarm_levels(bytes(data))[:4], [1, 2, 0, 0])
 
-    def test_sop_v2_power_and_can1_mirror(self) -> None:
-        limits = decode_sop_limits(bytes.fromhex("E4 02 28 00 05 02 01 29"), True)
+    def test_sop_v3_power_and_can1_mirror(self) -> None:
+        limits = decode_sop_limits(bytes.fromhex("E4 02 28 00 05 00 D0 54"), True)
         self.assertTrue(limits["frame_valid"])
         self.assertEqual(limits["discharge_power_kw"], 74.0)
         self.assertEqual(limits["charge_power_kw"], 4.0)
@@ -48,22 +48,22 @@ class SharedDecoderTest(unittest.TestCase):
         self.assertNotIn("discharge_current_a", limits)
         mirror = decode_sop_limits(bytes.fromhex("07 08 00 50 02 E4 00 28"), False)
         self.assertEqual(mirror["discharge_current_a"], 180.0)
-        for payload in (bytes.fromhex("E4 02 28 00 05 02 01 28"), b"", bytes.fromhex("08 07 50 00 E4 02 50 00")):
+        for payload in (bytes.fromhex("E4 02 28 00 05 00 D0 55"), b"", bytes.fromhex("08 07 50 00 E4 02 50 00")):
             self.assertFalse(decode_sop_limits(payload, True)["frame_valid"])
 
     def test_sop_diagnostic_is_independent(self) -> None:
-        status = decode_sop_status(bytes.fromhex("08 07 50 00 00 00 FF 24"))
+        status = decode_sop_status(bytes.fromhex("08 07 50 00 00 00 FF 34"))
         self.assertTrue(status["frame_valid"])
         self.assertTrue(status["ack_fresh"])
         self.assertEqual(status["charge_current_a"], 8.0)
         self.assertFalse(decode_sop_status(bytes.fromhex("15 27 05 00 00 FF 60 9C"))["frame_valid"])
 
     def test_ecu_sop_ack_v2(self) -> None:
-        ack = decode_ecu_sop_ack(bytes.fromhex("05 02 01 98"))
+        ack = decode_ecu_sop_ack(bytes.fromhex("05 03 01 D4"))
         self.assertTrue(ack["frame_valid"])
         self.assertTrue(ack["limits_applied"])
         self.assertNotIn("discharge_power_kw", ack)
-        for payload in (b"", bytes.fromhex("05 02 01 99"), bytes.fromhex("15 03 E4 02 50 00 00 D7")):
+        for payload in (b"", bytes.fromhex("05 03 01 D5"), bytes.fromhex("15 03 E4 02 50 00 00 D7")):
             self.assertFalse(decode_ecu_sop_ack(payload)["frame_valid"])
 
     def test_ivt_result_is_little_endian(self) -> None:

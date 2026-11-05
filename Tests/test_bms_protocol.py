@@ -427,17 +427,17 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIsNone(imd["resistance_kohm"])
         self.assertTrue(imd["resistance_saturated"])
 
-    def test_canb_sop_v2_uses_single_frame_crc(self) -> None:
+    def test_canb_sop_v3_uses_single_frame_crc(self) -> None:
         protocol = BmsProtocol()
-        frame = CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 02 01 29"), False)
+        frame = CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 05 00 D0 54"), False)
         protocol.ingest(frame)
         self.assertEqual(protocol.sop["discharge_power_kw"], 74.0)
         received = protocol._sop_limits_received_at
         protocol.ingest(frame)
         self.assertEqual(protocol._sop_limits_received_at, received)
-        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 06 02 01 00"), False))
+        protocol.ingest(CanFrame(0x4A0, bytes.fromhex("E4 02 28 00 06 00 D0 00"), False))
         self.assertEqual(protocol._sop_limits_received_at, received)
-        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 24"), False))
+        protocol.ingest(CanFrame(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 34"), False))
         self.assertTrue(protocol.sop["status"]["ack_fresh"])
         self.assertTrue(protocol.sop["crc_valid"])
 

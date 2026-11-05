@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from ..decoders import CanFrame, crc8_sae_j1850
+from ..decoders import CanFrame, crc8_sae_j1850, build_sop_limits, build_sop_status, SOP_PROTOCOL_VERSION
 
 
 class VehicleSimulator:
@@ -83,13 +83,13 @@ class VehicleSimulator:
 
     def _emit_sop(self) -> None:
         seq = self.sop_sequence & 0xFF
-        body = bytes.fromhex("E4 02 28 00") + bytes([seq, 2, 1])
-        self._send(0x4A0, body + bytes([crc8_sae_j1850(bytes.fromhex("04 A0") + body)]))
+        voltage, current = self._pack()
+        self._send(0x4A0, build_sop_limits(74.0, 4.0, seq, actual_power_kw=voltage * current / 1000))
         # Diagnostic and confirmation are slow; they do not gate fast limits.
         if self.sop_sequence % 50 == 0:
-            self._send(0x4A3, bytes.fromhex("08 07 50 00 00 00 FF 24"))
+            self._send(0x4A3, build_sop_status(180.0, 8.0))
         if self.sop_sequence % 5 == 0:
-            ack = bytes([seq, 2, 1])
+            ack = bytes([seq, SOP_PROTOCOL_VERSION, 1])
             self._send(0x4A4, ack + bytes([crc8_sae_j1850(bytes.fromhex("04 A4") + ack)]))
         self.sop_sequence += 1
 

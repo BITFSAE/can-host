@@ -150,8 +150,9 @@ function renderVehicle() {
   ["#vehSopDisA", "#vehSopChgA", "#vehSopIntervention"].forEach(id => markStaleData(id, diagnosticKnown && !diagnosticFresh));
   text("#vehSopDisKw", limitsKnown ? fmt(limits.discharge_power_kw, 1) : "等待数据");
   text("#vehSopChgKw", limitsKnown ? fmt(limits.charge_power_kw, 1) : "等待数据");
+  text("#vehSopActualKw", limitsKnown ? (limits.power_valid ? fmt(limits.actual_power_kw, 1) : "无效") : "等待数据");
   text("#vehSopAge", limitsKnown ? dataAgeText(sop.limits_age) : "等待数据");
-  ["#vehSopAge", "#vehSopDisKw", "#vehSopChgKw", "#vehSopLimitsValid", "#vehSopDrive", "#vehSopRegen", "#vehSopCrc"]
+  ["#vehSopActualKw", "#vehSopAge", "#vehSopDisKw", "#vehSopChgKw", "#vehSopLimitsValid", "#vehSopDrive", "#vehSopRegen", "#vehSopCrc"]
     .forEach(id => markStaleData(id, limitsKnown && !limitsFresh));
   const flagText = value => limitsKnown ? (value ? "是" : "否") : "—";
   text("#vehSopLimitsValid", flagText(limits.limits_valid));
