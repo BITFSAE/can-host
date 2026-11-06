@@ -1,5 +1,12 @@
 # 进度与待办
 
+## 2026-11-05 v0.9.34 已发布
+
+- 发布代码为 `b58b4b1`。安装包见 [GitHub](https://github.com/BITFSAE/can-host/releases/tag/v0.9.34) 和 [CNB](https://cnb.cool/totok22/can-host/-/releases/tag/v0.9.34)。
+- 主分支 Windows 单元测试通过。[发布流水线](https://github.com/BITFSAE/can-host/actions/runs/42158996069) 在 Windows 和 macOS 各运行 814 项测试，分别跳过 5 项和 4 项平台测试；双平台打包和自检通过。
+- GitHub 和 CNB 各有 7 个附件。GitHub 的 3 个 SHA-256 校验文件与附件摘要一致。CNB 更新频道已刷新，流水线匿名校验 10 个发布的 70 个附件，失败 0 个。
+- 双通道 PCAN 现场复测和两个平台已安装版的自动更新仍待验证。
+
 ## 2026-11-05 双通道 BMS 监视复核
 
 - 历史双通道记录已出现 CAN1 包状态间隔 1.738 s 的情况。期间 CAN1 仍记录 695 条其他帧，CANB 仍收到包状态。显示回退见 [CHANGELOG](CHANGELOG.md#v0934--2026-11-05)。
