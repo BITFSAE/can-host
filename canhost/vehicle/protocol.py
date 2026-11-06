@@ -300,6 +300,7 @@ class VehicleProtocol:
         """Small subset polled by the always-visible quick-value strip."""
         now = self.clock()
         fan_rpm = self.fan.get("status", {}).get("rpm")
+        pack_state = self.pack.get("state")
         return {
             "pdm": {"bus_voltage_v": self.pdm["bus"]["voltage_v"],
                     "bus_current_a": self.pdm["bus"]["current_a"],
@@ -315,5 +316,7 @@ class VehicleProtocol:
                      "soc_pct": self.pack.get("soc_pct"), "voltage_valid": self.pack.get("voltage_valid", False),
                      "current_valid": self.pack.get("current_valid", False),
                      "soc_valid": self.pack.get("soc_valid", False),
+                     "state": pack_state,
+                     "state_name": STATE_NAMES.get(pack_state, f"未知 {pack_state}") if pack_state is not None else None,
                      "age": age(now, self.last_pack_monotonic)},
         }

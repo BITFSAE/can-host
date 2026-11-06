@@ -606,6 +606,23 @@ class BmsProtocol:
         self.overview["state_name"] = STATE_NAMES.get(self.overview.get("state"), f"未知 {self.overview.get('state')}")
         self.overview["alarm_level_name"] = ALARM_LEVEL_NAMES.get(self.overview.get("alarm_level"), "未知")
 
+    def fault_snapshot(self, now: float | None = None) -> dict[str, Any]:
+        """读取故障码和等级，不复制原始帧、历史和电芯数据。"""
+        now = self.clock() if now is None else now
+        alarm_names = (LEGACY_FAULT_V3_ALARM_NAMES
+                       if self.fault.get("version") == 3 else ALARM_NAMES)
+        alarms = [{"index": i, "name": alarm_names[i], "level": self.alarm_levels[i],
+                   "level_name": ALARM_LEVEL_NAMES[self.alarm_levels[i]], "in_fault_code": bool(self.fault.get("code", 0) & (1 << i))}
+                  for i in range(32)]
+        alarm_age = age(now, self.last_alarm_levels_monotonic)
+        for alarm in alarms:
+            alarm["received"] = self.alarm_levels_received
+            alarm["age"] = alarm_age
+        fault = dict(self.fault)
+        fault["received"] = self.last_fault_monotonic is not None
+        fault["age"] = age(now, self.last_fault_monotonic)
+        return {"fault": fault, "alarms": alarms}
+
     def snapshot(self, connection: dict[str, Any]) -> dict[str, Any]:
         now = self.clock()
         raw_cell_data_available = connection.get("bus_profile", "can1") == "can1"
@@ -641,14 +658,6 @@ class BmsProtocol:
                                 "voltage_frames": sum(a is not None and a <= self.slave_sample_timeout_s for a in ages),
                                 "temperature_frame": temp_age is not None and temp_age <= self.slave_sample_timeout_s,
                                 "age": max([a for a in ages if a is not None] + ([temp_age] if temp_age is not None else [0]))})
-        alarm_names = (LEGACY_FAULT_V3_ALARM_NAMES
-                       if self.fault.get("version") == 3 else ALARM_NAMES)
-        alarms = [{"index": i, "name": alarm_names[i], "level": self.alarm_levels[i],
-                   "level_name": ALARM_LEVEL_NAMES[self.alarm_levels[i]], "in_fault_code": bool(self.fault.get("code", 0) & (1 << i))}
-                  for i in range(32)]
-        for alarm in alarms:
-            alarm["received"] = self.alarm_levels_received
-            alarm["age"] = age(now, self.last_alarm_levels_monotonic)
         hv = dict(self.hv)
         hv["age"] = age(now, self.last_hv_monotonic)
         relay = dict(self.relay)
@@ -663,9 +672,6 @@ class BmsProtocol:
             runtime_diag.update(self.legacy_feedback)
             runtime_diag.update({"age": feedback_age,
                                  "charger_feedback_fresh": feedback_age is not None and feedback_age <= 0.5})
-        fault = dict(self.fault)
-        fault["received"] = self.last_fault_monotonic is not None
-        fault["age"] = age(now, self.last_fault_monotonic)
         rtc_reply = dict(self.rtc_reply)
         rtc_reply["age"] = age(now, self.last_rtc_reply_monotonic)
         overview = dict(self.overview)
@@ -686,8 +692,8 @@ class BmsProtocol:
             "overview": overview, "relay": relay, "hv": hv, "imd": imd,
             "battery_fan_detail": {**self.battery_fan_detail,
                                    "age": age(now, self.last_battery_fan_detail_monotonic)},
-            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": config, "fault": fault,
-            "alarms": alarms, "cells": cell_values, "temps": temp_values, "modules": modules,
+            "sop": dict(self.sop), "ivt": dict(self.ivt), "config": config, **self.fault_snapshot(now),
+            "cells": cell_values, "temps": temp_values, "modules": modules,
             "raw_cell_data_available": raw_cell_data_available,
             "slave_sample_timeout_s": self.slave_sample_timeout_s,
             "balance": list(self.balance), "rtc_reply": rtc_reply,

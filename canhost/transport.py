@@ -847,8 +847,10 @@ class CanService:
             mismatch = self._bus_mismatch_locked()
             if mismatch:
                 connection["bus_mismatch"] = mismatch
-            return {"connection": connection,
-                    **self.protocol.quick_values()}
+            snapshot = {"connection": connection, **self.protocol.quick_values()}
+            if connection["connected"] and self.canb_bms_protocol is not None:
+                snapshot["bms_fault"] = self.canb_bms_protocol.fault_snapshot()
+            return snapshot
 
     def _start_bench(self, profile: str) -> None:
         if profile != "can1":

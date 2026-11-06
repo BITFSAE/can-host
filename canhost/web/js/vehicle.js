@@ -83,6 +83,7 @@ async function disconnectVehicle() {
   catch (error) { return toast(`CANB 断开失败：${error}`, true); }
   finally { setBusConnecting("canb", false); }
   state.vehicleSnapshot = null;
+  state.quickSnapshot = null;
   state.canbBmsSnapshot = null;
   toast("CANB 已断开");
   await poll();

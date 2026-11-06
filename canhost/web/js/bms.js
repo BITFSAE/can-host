@@ -45,6 +45,22 @@ function liveFaultState(snapshot) {
     anyFresh: faultFresh || alarmLevelsFresh };
 }
 
+function monitoredFault(snapshot, vehicle) {
+  const main = { ...liveFaultState(snapshot), alarms: snapshot.alarms || [], mirror: false };
+  if (main.completeFresh || !dualPhysicalBms(snapshot.connection, vehicle?.connection)) return main;
+  const mirror = liveFaultState(vehicle.bms_fault);
+  if (!mirror.faultFresh) return main;
+  const alarms = vehicle.bms_fault.alarms || [];
+  if (!main.faultFresh) return { ...mirror, alarms, mirror: true };
+  // CAN1 的故障码仍新鲜时，只用同版本、同故障码的 CANB 等级补足明细。
+  if (mirror.alarmLevelsFresh && mirror.fault.code === main.fault.code
+      && mirror.fault.version === main.fault.version
+      && mirror.fault.alarm_level === main.fault.alarm_level) {
+    return { ...main, alarms, alarmLevelsFresh: true, completeFresh: true, mirror: true };
+  }
+  return main;
+}
+
 function resetChargeTiming() {
   state.chargeTiming = { active: false, elapsedMs: 0, lastTickMs: null, averageCurrentA: null,
     currentSumA: 0, currentSamples: 0, connectionKey: null };
@@ -127,38 +143,53 @@ function bindBmsControls() {
   $("#currentDirection").addEventListener("change", () => markDraft("direction"));
 }
 
+function dualPhysicalBms(main, canb) {
+  return main?.connected === true && main.mode === "pcan" && main.bus_profile === "can1"
+    && !main.bus_mismatch && canb?.connected === true && canb.mode === "pcan"
+    && canb.bus_profile === "canb" && !canb.bus_mismatch;
+}
+
+function overviewMirrorPack(main, vehicle) {
+  // 只为双实体连接的总览补包状态，保留 CAN1 的无效位、命令与回读来源。
+  if (!dualPhysicalBms(main, vehicle?.connection) || isFresh(main.summary_age)
+      || !isFresh(vehicle.pack?.age)) return null;
+  return vehicle.pack;
+}
+
 function renderOverview() {
   const { overview: o, relay, hv, imd, connection } = state.snapshot;
-  const faultState = liveFaultState(state.snapshot);
-  const overviewFresh = connection.summary_age != null && connection.summary_age <= 1.5;
-  const stale = !overviewFresh;
-  const voltageFresh = overviewFresh && o.voltage_valid;
-  const currentFresh = overviewFresh && o.current_valid;
-  const socFresh = overviewFresh && o.soc_valid;
+  const faultState = monitoredFault(state.snapshot, state.quickSnapshot?.vehicle);
+  const overviewFresh = isFresh(connection.summary_age);
+  const mirror = overviewMirrorPack(connection, state.quickSnapshot?.vehicle);
+  const pack = mirror || o;
+  const packFresh = overviewFresh || mirror !== null;
+  const voltageFresh = packFresh && pack.voltage_valid;
+  const currentFresh = packFresh && pack.current_valid;
+  const socFresh = packFresh && pack.soc_valid;
   const cellDataFresh = overviewFresh && o.cell_voltage_complete;
   const cellExtremesFresh = cellDataFresh && isFresh(o.cell_extremes_age);
   const cellSumFresh = cellDataFresh && isFresh(o.cell_sum_age);
-  const stateName = !overviewFresh ? "等待 CAN 数据" : o.state_name || "等待 CAN 数据";
+  const stateName = !packFresh ? "等待 CAN 数据" : pack.state_name || "等待 CAN 数据";
   text("#stateName", stateName);
   const stateNode = $("#stateName");
   if (stateNode) {
-    stateNode.className = `machine-value ${!overviewFresh ? "stale" : MACHINE_STATE_CLASSES[o.state] || "unknown"}`;
-    stateNode.title = overviewFresh ? `主控状态：${stateName}` : "等待主控状态";
+    stateNode.className = `machine-value ${!packFresh ? "stale" : MACHINE_STATE_CLASSES[pack.state] || "unknown"}`;
+    stateNode.title = packFresh ? `主控状态：${stateName}` : "等待主控状态";
   }
   // 状态条本身保持普通卡片样式，只通过文本状态和下方卡片的确定性颜色表达。
   setClass("#overviewStatus", "status-ok", false);
   setClass("#overviewStatus", "status-warn", false);
   setClass("#overviewStatus", "status-bad", false);
   const descriptions = { 2: "主控正在等待完整从控采样和 IVT U1。", 3: "高压未闭合，可以进行参数配置。", 4: "预充正在进行，配置命令将被主控忽略。", 5: "高压已闭合，优先监视电流、单体与告警。", 7: "故障已锁存，排除实时故障后再请求复位。" };
-  text("#stateDescription", stale ? "主控周期状态帧缺失或已经超时。" : descriptions[o.state] || "正在读取主控状态。");
+  text("#stateDescription", !packFresh ? "主控周期状态帧缺失或已经超时。" : descriptions[pack.state] || "正在读取主控状态。");
   text("#overviewClock", new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   text("#overviewFaultCode", faultState.faultFresh ? faultState.fault.code_hex : "等待数据");
-  text("#alarmLevelName", faultState.faultFresh ? o.alarm_level_name || "未知" : "等待数据");
-  $("#alarmLevelName").className = !faultState.faultFresh || o.alarm_level == null ? "" : o.alarm_level === 1 ? "bad" : o.alarm_level === 2 ? "warn" : "ok";
-  text("#packVoltage", voltageFresh ? fmt(o.voltage_v, 1) : "等待数据");
-  text("#packCurrent", currentFresh ? fmt(o.current_a, 1) : "等待数据");
-  text("#packSoc", socFresh ? fmt(o.soc_pct, 1) : "等待数据");
-  $("#socBar").style.width = socFresh ? `${Math.max(0, Math.min(100, o.soc_pct))}%` : "0%";
+  text("#alarmLevelName", faultState.faultFresh ? faultState.fault.alarm_level_name || "未知" : "等待数据");
+  $("#alarmLevelName").className = !faultState.faultFresh || faultState.fault.alarm_level == null ? "" : faultState.fault.alarm_level === 1 ? "bad" : faultState.fault.alarm_level === 2 ? "warn" : "ok";
+  text("#packVoltage", voltageFresh ? fmt(pack.voltage_v, 1) : "等待数据");
+  text("#packCurrent", currentFresh ? fmt(pack.current_a, 1) : "等待数据");
+  text("#packSoc", socFresh ? fmt(pack.soc_pct, 1) : "等待数据");
+  $("#socBar").style.width = socFresh ? `${Math.max(0, Math.min(100, pack.soc_pct))}%` : "0%";
   const delta = cellExtremesFresh && o.max_cell_mv != null && o.min_cell_mv != null ? o.max_cell_mv - o.min_cell_mv : null;
   text("#cellDelta", delta == null ? "等待数据" : fmt(delta, 0));
   text("#cellExtremes", delta == null ? "最高 / 最低 —" : `最高 ${o.max_cell_mv} / 最低 ${o.min_cell_mv} mV`);
@@ -189,7 +220,7 @@ function renderOverview() {
   setClass("#safetyEvent", "bad", false);
   setClass("#safetyEvent", "warn", safetyEventKnown && safetyEventActive);
   setClass("#safetyEvent", "ok", safetyEventKnown && !safetyEventActive);
-  const bmsFaultOutput = state.snapshot.fault?.flags?.bms_output_latched;
+  const bmsFaultOutput = faultState.fault.flags?.bms_output_latched;
   text("#bmsFaultSignal", !faultState.faultFresh ? "等待数据" : bmsFaultOutput ? "已输出" : "未输出");
   setClass("#bmsFaultSignal", "bad", faultState.faultFresh && bmsFaultOutput);
   setClass("#bmsFaultSignal", "ok", faultState.faultFresh && !bmsFaultOutput);
@@ -506,8 +537,8 @@ function drawTrend() {
 }
 
 function renderAlarmSummary() {
-  const alarms = state.snapshot.alarms || [];
-  const faultState = liveFaultState(state.snapshot);
+  const faultState = monitoredFault(state.snapshot, state.quickSnapshot?.vehicle);
+  const { alarms } = faultState;
   text("#faultCode", faultState.faultFresh ? faultState.fault.code_hex : "等待数据");
   const activeItems = faultState.completeFresh
     ? alarms.filter(item => item.level || item.in_fault_code) : [];
@@ -518,9 +549,9 @@ function renderAlarmSummary() {
     : faultState.faultFresh ? "等待等级"
     : faultState.alarmLevelsFresh ? "等待故障码" : "等待数据";
   text("#alarmActiveCount", alarmCountText);
-  text("#alarmPageLevel", faultState.faultFresh ? state.snapshot.overview?.alarm_level_name || "未知" : "等待数据");
-  $("#alarmPageLevel")?.classList.toggle("bad", faultState.faultFresh && state.snapshot.overview?.alarm_level === 1);
-  $("#alarmPageLevel")?.classList.toggle("warn", faultState.faultFresh && state.snapshot.overview?.alarm_level === 2);
+  text("#alarmPageLevel", faultState.faultFresh ? faultState.fault.alarm_level_name || "未知" : "等待数据");
+  $("#alarmPageLevel")?.classList.toggle("bad", faultState.faultFresh && faultState.fault.alarm_level === 1);
+  $("#alarmPageLevel")?.classList.toggle("warn", faultState.faultFresh && faultState.fault.alarm_level === 2);
   text("#activeAlarmCount", alarmCountText);
   const active = activeItems.slice(0, 3);
   $("#activeAlarmBrief").className = active.length ? "fault-brief" : "fault-brief empty-state";
@@ -550,8 +581,8 @@ function alarmRuleText(index, thresholds) {
 }
 
 function renderAlarms() {
-  const alarms = state.snapshot.alarms || [];
-  const faultState = liveFaultState(state.snapshot);
+  const faultState = monitoredFault(state.snapshot, state.quickSnapshot?.vehicle);
+  const { alarms } = faultState;
   const config = state.snapshot.config || {};
   const thresholds = isFresh(config.thresholds_age, SLOW_DATA_FRESH_MAX_S) ? (config.thresholds || {}) : {};
   alarms.forEach(alarm => {

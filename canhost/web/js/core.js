@@ -884,10 +884,11 @@ async function poll() {
     // Optional/side snapshots must never prevent the main BMS snapshot from
     // being rendered. If one of them fails (for example a transient PyWebView
     // bridge error), keep the main page live and retry on the next poll.
-    async function optionalSnapshot(loader, assign) {
+    async function optionalSnapshot(loader, assign, onError) {
       try {
         assign(await loader());
       } catch (error) {
+        onError?.();
         console.warn("可选数据快照获取失败：", error);
       }
     }
@@ -923,7 +924,8 @@ async function poll() {
       await optionalSnapshot(state.api.get_telemetry_snapshot, value => { state.telemetrySnapshot = value; });
     }
     if (!TOOL_PAGES.includes(page) && state.api.get_quick_snapshot) {
-      await optionalSnapshot(state.api.get_quick_snapshot, value => { state.quickSnapshot = value; });
+      await optionalSnapshot(state.api.get_quick_snapshot, value => { state.quickSnapshot = value; },
+        () => { state.quickSnapshot = null; });
     }
     if (!TOOL_PAGES.includes(page) && state.mainSnapshot?.connection?.connected !== true
         && state.api.get_canb_bms_snapshot) {
@@ -1038,12 +1040,32 @@ function updateScopeStrips(main, vehicle, bmsData) {
   const bmsMismatch = state.snapshot === state.mainSnapshot ? mainMismatch : vehicleMismatch;
   const mainWaiting = !bmsDataConnected;
   const cellsWaiting = !(mainConnected && main.bus_profile === "can1");
-  setBmsScopeStrip("#overviewScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
-    "点击底部“CAN1”或“CANB”按钮连接后开始监视。");
+  const quickVehicle = state.quickSnapshot?.vehicle;
+  const mirrorPack = state.page === "overview" && overviewMirrorPack(main, quickVehicle);
+  const mirrorFault = (state.page === "overview" || state.page === "alarms")
+    && monitoredFault(state.snapshot, quickVehicle).mirror;
+  if (mirrorPack || (state.page === "overview" && mirrorFault)) {
+    updateScopeStrip("#overviewScopeStrip", {
+      show: true,
+      title: `${mirrorPack && mirrorFault ? "包状态、故障监视" : mirrorPack ? "包状态" : "故障监视"}使用 CANB 镜像`,
+      detail: "CAN1 对应数据未收到或已过期；其他读数仍按原来源更新。",
+    });
+  } else {
+    setBmsScopeStrip("#overviewScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
+      "点击底部“CAN1”或“CANB”按钮连接后开始监视。");
+  }
   setBmsScopeStrip("#cellsScopeStrip", cellsWaiting, mainMismatch, "等待 CAN1 连接",
     "逐串电压与温度只在 CAN1 广播；连接 CAN1 后可查看 138 串电压与 48 路温度。");
-  setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
-    "连接底部 CAN1 或 CANB。");
+  if (state.page === "alarms" && mirrorFault) {
+    updateScopeStrip("#alarmsScopeStrip", {
+      show: true,
+      title: "故障监视使用 CANB 镜像",
+      detail: "CAN1 故障码或等级未收到或已过期；参数和故障记录仍按 CAN1 更新。",
+    });
+  } else {
+    setBmsScopeStrip("#alarmsScopeStrip", mainWaiting, bmsMismatch, "等待 BMS 数据",
+      "连接底部 CAN1 或 CANB。");
+  }
 
   const vehicleUsable = vehicleConnected && vehicle.bus_profile === "canb"
     && Number(vehicle.bitrate) === 500000 && !vehicleMismatch;
