@@ -1,0 +1,542 @@
+/* ── BMS 页面：运行总览、电芯与温度、故障诊断、参数控制与统一尺度 ── */
+
+/* ---------- Information architecture revision ---------- */
+
+.nav-group {
+  padding: var(--sp-2) var(--sp-2) 2px;
+  color: var(--text-3);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.nav-group.operation { margin-top: var(--sp-1); padding-top: var(--sp-2); border-top: 1px solid var(--line-soft); }
+
+.team-signature { padding: 0 var(--sp-2) var(--sp-2); }
+.team-logo { display: block; width: 108px; height: auto; opacity: .88; }
+:root[data-theme="light"] .team-logo { filter: brightness(0) saturate(100%); opacity: .76; }
+
+.overview-status {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--level-1);
+  overflow: hidden;
+}
+.machine-state { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-width: 0; padding: var(--sp-2) var(--sp-4); }
+.machine-state > span { color: var(--text-3); font-size: var(--fs-micro); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.machine-state > strong { font-family: var(--mono); font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.12; }
+.machine-state > strong.machine-value.stale,
+.machine-state > strong.machine-value.unknown { color: var(--text-2); }
+.machine-state > strong.machine-value.self-test { color: var(--info); }
+.machine-state > strong.machine-value.standby { color: var(--ok); }
+.machine-state > strong.machine-value.precharge { color: var(--warn); }
+.machine-state > strong.machine-value.hv-on { color: var(--action); }
+.machine-state > strong.machine-value.fault { color: var(--fault); }
+.machine-state > small { overflow: hidden; color: var(--text-3); font-size: var(--fs-label); text-overflow: ellipsis; white-space: nowrap; }
+.status-register { display: grid; grid-template-columns: repeat(5, minmax(84px, auto)); }
+.status-register > div { display: grid; align-content: center; gap: 3px; padding: var(--sp-2) var(--sp-3); border-left: 1px solid var(--line-soft); }
+.status-register dt { color: var(--text-3); font-size: var(--fs-unit); }
+.status-register dd { font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; white-space: nowrap; }
+.status-register dd.ok { color: var(--ok); }
+.status-register dd.warn { color: var(--warn); }
+.status-register dd.bad { color: var(--fault); }
+
+.primary-readouts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: var(--sp-2) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--level-1);
+  overflow: hidden;
+}
+.primary-readouts > article {
+  min-width: 0;
+  padding: 10px var(--sp-3);
+  border-right: 1px solid var(--line-soft);
+  background: transparent;
+}
+.primary-readouts > article:last-child { border-right: 0; }
+.primary-readouts article > span { color: var(--text-3); font-size: var(--fs-unit); }
+.primary-readouts p { display: flex; align-items: baseline; gap: 6px; margin: 3px 0 2px; }
+.primary-readouts p b { font-family: var(--mono); font-size: var(--fs-kpi); font-weight: 600; line-height: 1.08; letter-spacing: -.025em; }
+.primary-readouts p b.is-waiting,
+.readout-grid > * > b.is-waiting,
+.enc-tile b.is-waiting { font-size: var(--fs-value); font-weight: 500; color: var(--text-3); }
+.primary-readouts p:has(> b.is-waiting) > em,
+.readout-grid > *:has(> b.is-waiting) > em { display: none; }
+.primary-readouts p em { color: var(--text-3); font-style: normal; font-size: var(--fs-unit); font-family: var(--mono); }
+/* 条件栏用固定三列，避免“34 °C T1”这类读数在窄栏里折成两行。 */
+.condition-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#page-overview .condition-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.condition-list > div { min-width: 0; }
+.condition-list dd { white-space: nowrap; }
+.primary-readouts small, .state-note { display: block; overflow: hidden; color: var(--text-3); font-size: var(--fs-unit); text-overflow: ellipsis; white-space: nowrap; }
+.state-note.ok, .state-text.ok, .condition-list .ok { color: var(--ok); }
+.state-note.bad, .state-text.bad, .condition-list .bad, .state-table em.bad { color: var(--fault); }
+
+.overview-layout { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--sp-2); align-items: start; }
+.data-section { min-width: 0; border: 1px solid var(--line); border-radius: var(--r-flat); background: var(--surface-1); overflow: hidden; }
+.data-section > header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); height: 36px; padding: 0 var(--sp-3); border-bottom: 1px solid var(--line-soft); background: var(--level-1); }
+/* 卡片里任何相邻两块之间只画 1px：上边线由内容块自己提供，
+   取代此前散落各处的 border-top / border-bottom 与 nth-child 例外。 */
+.data-section > * + * { border-top: 1px solid var(--line-soft); }
+.data-section > header h3 { font-family: var(--cjk); font-size: var(--fs-body); font-weight: 600; }
+.data-section > header > span { color: var(--text-3); font-size: var(--fs-unit); }
+.hv-section { grid-column: span 4; }
+.section-note { padding: var(--sp-2) var(--sp-3); background: var(--warn-dim); color: var(--warn); font-size: var(--fs-label); line-height: 1.5; }
+.module-section { grid-column: span 5; }
+.condition-stack { grid-column: span 3; display: grid; align-content: start; gap: var(--sp-2); min-width: 0; }
+.trend-section { grid-column: span 8; }
+.overview-side-stack { grid-column: span 4; display: grid; gap: var(--sp-2); }
+.trend-body { padding: var(--sp-2) var(--sp-2) 4px; }
+#trendCanvas { display: block; width: 100%; height: 238px; }
+.trend-legend { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.trend-legend i { width: 14px; height: 2px; border-radius: var(--r-dot); background: var(--chart-voltage); }
+.trend-legend i.current { margin-left: var(--sp-2); background: var(--chart-current); }
+.trend-legend i.precharge { margin-left: var(--sp-2); background: repeating-linear-gradient(90deg, var(--chart-precharge) 0 5px, transparent 5px 9px); }
+.trend-legend b { font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; color: var(--text-2); }
+.charge-time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft); }
+.charge-time-grid > div { min-height: 48px; padding: var(--sp-2) var(--sp-3); background: var(--level-1); }
+.charge-time-grid dt { color: var(--text-3); font-size: var(--fs-unit); }
+.charge-time-grid dd { margin-top: 3px; font-family: var(--mono); font-size: var(--fs-body); font-weight: 600; }
+
+.relay-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line-soft); }
+.relay-tiles > div { display: grid; align-content: center; gap: 4px; min-height: 58px; padding: var(--sp-2) var(--sp-3); background: var(--level-1); }
+.relay-tiles span { color: var(--text-3); font-size: var(--fs-unit); white-space: nowrap; }
+.relay-tiles em { font-family: var(--cjk); font-style: normal; font-size: var(--fs-body); font-weight: 700; }
+.relay-tiles .closed em { color: var(--ok); }
+.state-table { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft); }
+.state-table > div { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: var(--sp-2) var(--sp-3); background: var(--level-1); }
+.state-table span { color: var(--text-3); font-size: var(--fs-label); }
+.state-table em { font-family: var(--cjk); font-style: normal; font-size: var(--fs-label); font-weight: 600; text-align: right; white-space: nowrap; }
+.state-table em.ok { color: var(--ok); }
+.state-table em.bad { color: var(--fault); }
+.precharge-summary > div { min-height: 34px; padding-block: var(--sp-2); }
+
+.module-table-head, .module-average-table > div { display: grid; grid-template-columns: 36px 1fr 1fr .8fr 56px; align-items: center; gap: var(--sp-2); }
+.module-table-head { padding: 6px var(--sp-3); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); font-weight: 600; }
+.module-table-head > span:nth-child(2),
+.module-table-head > span:nth-child(3),
+.module-table-head > span:nth-child(4),
+.module-average-table > div > span { text-align: right; font-variant-numeric: tabular-nums; }
+.module-average-table { display: grid; gap: 1px; background: var(--line-soft); }
+.module-average-table > div { min-height: 30px; padding: 4px var(--sp-3); background: var(--level-1); border-left: 2px solid transparent; font-family: var(--mono); font-size: var(--fs-label); }
+.module-average-table b { font-size: var(--fs-label); }
+.module-average-table em { justify-self: end; color: var(--fault); font-style: normal; font-weight: 600; }
+/* 状态列读数贴右端（上一条），表头必须同边，否则“状态”与“新鲜/已过期”错开半个列宽。 */
+.module-table-head > span:last-child { text-align: right; }
+.module-average-table .online em { color: var(--ok); }
+.module-average-table .stale { border-left-color: var(--warn); color: var(--text-2); }
+.module-average-table .stale em { color: var(--warn); }
+.module-average-table .offline { border-left-color: var(--fault); }
+.module-average-table > .module-empty {
+  display: block;
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-3);
+  border-left: 0;
+  background: var(--surface-1);
+  color: var(--text-3);
+  font-family: var(--cjk);
+  font-size: var(--fs-label);
+  line-height: 1.6;
+}
+
+.imd-primary-grid { display: grid; grid-template-columns: 1fr 1.35fr; gap: 1px; background: var(--line-soft); }
+.imd-primary-grid > div { min-height: 56px; padding: var(--sp-2) var(--sp-3); background: var(--level-1); }
+.imd-primary-grid span { display: block; color: var(--text-3); font-size: var(--fs-micro); }
+.imd-primary-grid b { display: block; margin-top: 2px; font-family: var(--mono); font-size: var(--fs-value-lg); font-weight: 700; line-height: 1.15; }
+.imd-primary-grid b.ok { color: var(--ok); }
+.imd-primary-grid b.bad { color: var(--fault); }
+.imd-primary-grid small { display: block; margin-top: 2px; overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+#page-overview .imd-primary-grid > div:first-child small { display: none; }
+.imd-section > header > span { font-family: var(--cjk); font-size: var(--fs-label); font-weight: 700; }
+.imd-section > header > span.ok { color: var(--ok); }
+.imd-section > header > span.bad { color: var(--fault); }
+.condition-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft); }
+.condition-list > div { min-height: 46px; padding: var(--sp-2) var(--sp-2); background: var(--level-1); }
+.condition-list dt { color: var(--text-3); font-size: var(--fs-micro); }
+.condition-list dd { margin-top: 3px; font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; }
+.condition-list dd small { margin-left: var(--sp-1); color: var(--text-3); font-size: var(--fs-micro); }
+.fault-brief { display: flex; align-items: stretch; min-height: 44px; color: var(--text-3); font-size: var(--fs-label); }
+.fault-brief:only-child { padding: var(--sp-3); }
+.fault-brief .brief-alarm { flex: 1; border-right: 1px solid var(--line-soft); }
+
+/* ---------- 未连接引导与空态（总览 / 整车页共用） ---------- */
+
+/* Combined cell and temperature page */
+.cell-overview-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--level-1);
+}
+.cell-summary-register {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(112px, 1fr));
+  gap: 1px;
+  flex: 1;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-ctl);
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.cell-summary-register > div {
+  display: grid;
+  gap: 2px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+}
+.cell-summary-register dt { color: var(--text-3); font-size: var(--fs-unit); }
+.cell-summary-register dd { font-family: var(--mono); font-size: var(--fs-value); font-weight: 600; color: var(--text); }
+.cell-data-issue, .module-issue { color: var(--fault); font-family: var(--cjk); font-size: var(--fs-label); font-weight: 700; white-space: nowrap; }
+.cell-data-issue.warn, .module-issue.warn { color: var(--warn); }
+/* 阈值行在 1280 宽会把“过压”竖排、把图例拆行；标签和数值本身不允许断行，
+   放不下时由外层换行（而不是压窄每个词）。 */
+.threshold-register { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); margin-bottom: var(--sp-2); padding: 6px var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-flat); background: var(--surface-1); }
+.threshold-register > strong { flex: none; font-family: var(--cjk); font-size: var(--fs-label); font-weight: 700; color: var(--text-2); }
+.threshold-register dl { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); min-width: 0; }
+.threshold-register dl > div { display: flex; flex: none; align-items: baseline; gap: 6px; }
+.threshold-register dt { color: var(--text-3); font-size: var(--fs-unit); white-space: nowrap; }
+.threshold-register dd { font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; color: var(--text); white-space: nowrap; }
+.cell-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); margin-left: auto; }
+.combined-module-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(230px, 1fr); }
+.combined-module-body > div + div { border-left: 1px solid var(--line); }
+.voltage-grid { grid-template-columns: repeat(12, minmax(58px, 1fr)); }
+.voltage-grid .cell-item:last-child:nth-child(8n + 7) { grid-column: span 2; }
+.temperature-grid { grid-template-columns: repeat(4, minmax(52px, 1fr)); }
+/* 四态清晰分离：低限蓝左杠、高限琥珀满框、过期斜纹哑色、失效红满框。 */
+.cell-item { min-height: 50px; padding: 5px 7px; border-left: 0; }
+.cell-item.low { box-shadow: inset 2px 0 0 var(--info); }
+.cell-item.high { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent); }
+.cell-item.stale { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 42%, transparent); }
+.cell-item.invalid { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fault) 65%, transparent); }
+.cell-item.low .cell-state-caption { color: var(--info); }
+.cell-item.high .cell-state-caption { color: var(--warn); }
+.cell-item.stale .cell-state-caption { color: var(--warn); }
+.cell-item.invalid .cell-state-caption { color: var(--fault); }
+
+/* Read-only diagnostics */
+.diagnostic-head { display: flex; align-items: center; gap: 28px; margin-bottom: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-flat); background: var(--surface-1); }
+.diagnostic-head > dl { display: flex; gap: var(--sp-4); }
+.diagnostic-head > dl > div { display: grid; gap: 1px; }
+.diagnostic-head dt { color: var(--text-3); font-size: var(--fs-label); }
+.diagnostic-head dd { font-family: var(--cjk); font-size: var(--fs-body); font-weight: 700; }
+.diagnostic-head dd.bad { color: var(--fault); }
+.diagnostic-head dd.warn { color: var(--warn); }
+.diagnostic-head > .switch:first-of-type { margin-left: auto; }
+.fault-readout > span { color: var(--text-3); font-size: var(--fs-label); }
+.alarm-matrix { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: var(--sp-2); }
+.alarm-item {
+  border: 0;
+  border-radius: var(--r-flat);
+  background: var(--surface-1);
+  box-shadow: inset -1px -1px 0 var(--line-soft);
+}
+.alarm-item.lv1 {
+  background: var(--fault-dim);
+}
+.alarm-item.lv2, .alarm-item.fc:not(.lv1) {
+  background: var(--warn-dim);
+}
+.protection-status { margin-bottom: var(--sp-2); }
+.switch-status-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.protection-switch { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2); min-height: 43px; padding: var(--sp-2) var(--sp-2); border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); color: var(--text-2); font-size: var(--fs-label); }
+.protection-switch i { width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--idle); }
+.protection-label { display: grid; gap: 1px; min-width: 0; }
+.protection-label > b { overflow: hidden; color: inherit; font-family: var(--cjk); font-size: var(--fs-label); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.protection-label small { overflow: hidden; color: var(--text-3); font-family: var(--mono); font-size: var(--fs-unit); text-overflow: ellipsis; white-space: nowrap; }
+.protection-switch > b { font-family: var(--cjk); font-size: var(--fs-label); font-weight: 700; color: var(--text-3); }
+.protection-switch.enabled { background: color-mix(in srgb, var(--ok) 5.5%, transparent); color: var(--text); }
+.protection-switch.enabled i { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-dim); }
+.protection-switch.enabled b { color: var(--ok); }
+.protection-switch.pending { color: var(--text-3); }
+.protection-switch.pending i { background: transparent; border: 1px solid var(--idle); }
+.protection-status .head-actions > b { color: var(--text); font-family: var(--mono); font-size: var(--fs-label); }
+.history-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.history-grid .event-list { max-height: 244px; }
+
+/* Remove decorative vertical accent bars. */
+.modal-error, .checkbox { border-left: 1px solid var(--line); }
+
+@media (max-width: 1420px) {
+  .status-register { grid-template-columns: repeat(5, minmax(72px, auto)); }
+  .status-register > div { padding-inline: var(--sp-2); }
+  .cell-summary-register { grid-template-columns: repeat(3, minmax(104px, auto)); }
+  .alarm-matrix { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .switch-status-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* 窄窗口先收阈值行的横向间距，图例让位给电芯格内自述状态标签。 */
+  .threshold-register { gap: var(--sp-2) var(--sp-3); }
+  .threshold-register dl { gap: var(--sp-2) var(--sp-3); }
+  #page-cells .threshold-register .cell-legend { display: none; }
+}
+@media (max-width: 1080px) {
+  .voltage-grid { grid-template-columns: repeat(8, minmax(52px, 1fr)); }
+}
+
+@media (max-width: 1260px) {
+  .nav-group { display: none; }
+  .nav-item { background: transparent; box-shadow: none; }
+  .nav-item.active { background: var(--surface-3); box-shadow: none; }
+  .nav-item:hover { background: var(--surface-2); }
+  .overview-status { grid-template-columns: 1fr; }
+  .status-register { border-top: 1px solid var(--line-soft); }
+  .primary-readouts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .primary-readouts p b { font-size: var(--fs-kpi); }
+  .hv-section, .module-section { grid-column: span 6; }
+  .condition-stack { grid-column: span 12; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .trend-section { grid-column: span 7; }
+  .overview-side-stack { grid-column: span 5; }
+  .condition-list { grid-template-columns: repeat(4, 1fr); }
+  .combined-module-body { grid-template-columns: 1fr; }
+  .combined-module-body > div + div { border-left: 0; border-top: 1px solid var(--line); }
+  .temperature-grid { grid-template-columns: repeat(8, minmax(52px, 1fr)); }
+  .alarm-matrix { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ---------- Unified component scale ---------- */
+
+.nav-item { min-height: 32px; font-size: var(--fs-body); }
+.nav-group { font-size: var(--fs-micro); }
+
+.page { padding-top: var(--sp-3); }
+.data-section > header { height: 36px; padding: 0 var(--sp-3); }
+.data-section > header h3, .panel-head h3 { font-size: var(--fs-body); }
+.data-section > header > span, .panel-head small { font-size: var(--fs-unit); }
+.machine-state > span, .primary-readouts article > span, .state-table span,
+.condition-list dt, .module-table-head, .cell-summary-register dt,
+.threshold-register dt, .diagnostic-head dt,
+.fault-readout > span { font-size: var(--fs-unit); }
+.machine-state > small { font-size: var(--fs-label); }
+.status-register dt { font-size: var(--fs-unit); }
+.status-register dd { font-size: var(--fs-label); }
+.primary-readouts p b { font-size: var(--fs-kpi); }
+.primary-readouts p em, .primary-readouts small, .state-note { font-size: var(--fs-unit); }
+.state-table > div { min-height: 36px; }
+.state-table em { font-size: var(--fs-label); }
+.module-table-head { padding-block: 6px; }
+.module-average-table > div { min-height: 30px; font-size: var(--fs-label); }
+.module-average-table b { font-size: var(--fs-label); }
+.condition-list > div { min-height: 46px; padding: var(--sp-2) var(--sp-2); }
+.condition-list dd { font-size: var(--fs-label); }
+.cell-summary-register dd { font-size: var(--fs-value); }
+.threshold-register dd { font-size: var(--fs-label); }
+.cell-item { min-height: 50px; padding: 5px 7px; }
+.cell-item small { font-size: var(--fs-micro); font-weight: 600; }
+.cell-item b { margin-top: 2px; font-size: var(--fs-body); }
+.cell-item em { font-size: var(--fs-micro); }
+.cell-module-head { min-height: 36px; padding-inline: var(--sp-3); }
+.cell-module-head strong { font-size: var(--fs-body); }
+.cell-module-head .module-stats { gap: var(--sp-3); font-size: var(--fs-label); }
+.cell-module-head .module-stats b { font-size: var(--fs-label); color: var(--text); }
+.alarm-item { min-height: 44px; padding: var(--sp-2) var(--sp-2); }
+.alarm-item b { font-size: var(--fs-body); }
+.alarm-item small { font-size: var(--fs-label); }
+.alarm-level { min-width: 54px; font-size: var(--fs-label); }
+.field-label { font-size: var(--fs-label); }
+.field > small { font-size: var(--fs-label); }
+.field-input { height: 36px; }
+.switch-row { min-height: 34px; font-size: var(--fs-label); }
+.action-button, .danger-button, .outline-button, .danger-outline { min-height: 30px; font-size: var(--fs-label); }
+.action-text b { font-size: var(--fs-body); }
+.action-text small { font-size: var(--fs-label); }
+.frame-table th, .frame-table td { font-size: var(--fs-label); }
+.statusbar, .status-group b { font-size: var(--fs-label); }
+
+/* ---------- Overview density pass ---------- */
+
+#page-overview .overview-status .machine-state { min-height: 68px; padding: var(--sp-2) var(--sp-4); }
+#page-overview .overview-status .status-register > div { padding: var(--sp-2) var(--sp-3); }
+#page-overview .primary-readouts { margin: var(--sp-2) 0; }
+#page-overview .primary-readouts > article {
+  padding: 10px var(--sp-3);
+  position: relative;
+}
+#page-overview .primary-readouts article > span {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-unit);
+  font-weight: 600;
+  line-height: 1.15;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+#page-overview .primary-readouts p { margin: 3px 0 2px; }
+#page-overview .primary-readouts p b { font-size: var(--fs-kpi); line-height: 1.05; letter-spacing: -.025em; }
+#page-overview .primary-readouts p em { font-size: var(--fs-unit); }
+#page-overview .primary-readouts small {
+  color: var(--text-3);
+  font-size: var(--fs-unit);
+  line-height: 1.2;
+}
+/* SOC 轨道：胶囊进度条 + 细线轮廓，深浅主题下都清晰可见。 */
+#page-overview .primary-readouts .meter { height: 4px; margin-top: var(--sp-2); border-radius: var(--r-dot); background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--line-soft); }
+#page-overview .primary-readouts .meter i { border-radius: var(--r-dot); background: var(--ok); }
+
+#page-overview .overview-layout { gap: var(--sp-2); }
+
+#page-overview .data-section > header h3 { font-size: var(--fs-body); }
+#page-overview .data-section > header > span { font-size: var(--fs-unit); }
+#page-overview .hv-section { grid-column: span 4; }
+#page-overview .module-section { grid-column: span 5; }
+#page-overview .condition-stack { grid-column: span 3; }
+#page-overview .hv-section > header > span,
+#page-overview .module-section > header > span,
+#page-overview .thermal-section > header > span { font-family: var(--cjk); font-size: var(--fs-unit); font-weight: 600; }
+#page-overview .overview-side-stack { gap: var(--sp-2); align-content: start; }
+#page-overview .trend-body { padding: var(--sp-2) var(--sp-2) 3px; }
+#page-overview #trendCanvas { height: 188px; }
+
+#page-overview .relay-tiles > div { min-height: 56px; padding: var(--sp-2) var(--sp-3); }
+#page-overview .relay-tiles span { font-size: var(--fs-unit); color: var(--text-3); }
+#page-overview .relay-tiles em { font-size: var(--fs-value); font-weight: 700; }
+#page-overview .state-table > div { min-height: 34px; padding: var(--sp-2) var(--sp-3); }
+#page-overview .state-table span { font-size: var(--fs-label); }
+#page-overview .state-table em { font-size: var(--fs-label); }
+
+#page-overview .module-table-head,
+#page-overview .module-average-table > div {
+  grid-template-columns: 36px 1fr 1fr .8fr 56px;
+  gap: var(--sp-2);
+  align-items: center;
+}
+#page-overview .module-table-head { padding: 6px var(--sp-3); font-size: var(--fs-micro); color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+#page-overview .module-average-table > div { min-height: 30px; padding: 4px var(--sp-3); font-size: var(--fs-label); transition: background .12s ease; }
+#page-overview .module-average-table > div:hover { background: var(--wash-soft); }
+#page-overview .module-average-table b { font-size: var(--fs-label); }
+
+#page-overview .condition-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#page-overview .condition-list > div { min-height: 40px; padding: var(--sp-2) var(--sp-2); }
+#page-overview .thermal-list > div:nth-child(4) { grid-column: span 2; }
+#page-overview .condition-list dt { font-size: var(--fs-micro); line-height: 1.15; }
+#page-overview .condition-list dd { margin-top: 2px; font-size: var(--fs-label); }
+#page-overview .condition-list dd small { margin-left: 4px; font-size: var(--fs-micro); }
+#page-overview .imd-section > header h3 { color: var(--text); font-size: var(--fs-body); font-weight: 600; }
+#page-overview .imd-section > header > span { font-size: var(--fs-unit); }
+#page-overview .imd-primary-grid > div { min-height: 54px; padding: var(--sp-2) var(--sp-3); }
+#page-overview .imd-primary-grid span { font-size: var(--fs-micro); white-space: nowrap; }
+#page-overview .imd-primary-grid b { margin-top: 2px; font-size: var(--fs-value); }
+#page-overview .imd-primary-grid small { font-size: var(--fs-micro); }
+#page-overview .imd-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#page-overview .imd-metrics > div { min-height: 42px; }
+#page-overview .charge-time-grid > div { min-height: 50px; padding: var(--sp-2) var(--sp-3); }
+#page-overview .charge-time-grid dt { font-size: var(--fs-micro); }
+#page-overview .charge-time-grid dd { margin-top: 3px; font-size: var(--fs-value); }
+#page-overview .fault-brief { min-height: 40px; font-size: var(--fs-label); }
+#page-overview .fault-brief:only-child {
+  padding: var(--sp-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+@media (max-width: 1260px) {
+  #page-overview .hv-section,
+  #page-overview .module-section { grid-column: span 6; }
+  #page-overview .condition-stack { grid-column: span 12; }
+  #page-overview .condition-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+}
+
+/* ---------- Control page density ---------- */
+
+#page-control { padding-top: var(--sp-3); padding-bottom: var(--sp-4); }
+#page-control .interlock { margin-bottom: var(--sp-2); }
+#page-control .grid { gap: var(--sp-2); }
+#page-control .panel-head {
+  min-height: 37px;
+  padding: var(--sp-2) var(--sp-2);
+  gap: var(--sp-2);
+}
+#page-control .panel-head h3 { font-size: var(--fs-body); }
+#page-control .panel-head > .tag { font-size: var(--fs-unit); padding: 2px var(--sp-2); }
+#page-control .panel-body { padding: var(--sp-2) var(--sp-2); }
+#page-control .panel-body.flush { padding: 0; }
+#page-control .interlock .panel-head .head-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2) var(--sp-2);
+}
+#page-control .interlock .panel-body { padding: var(--sp-2) var(--sp-2); }
+#page-control .interlock .note { font-size: var(--fs-label); line-height: 1.45; }
+#page-control .lock { gap: var(--sp-2); font-size: var(--fs-unit); }
+#page-control .lock i { width: 7px; height: 7px; }
+
+#page-control .field-grid { gap: var(--sp-2) var(--sp-2); }
+#page-control .duo-fields { gap: var(--sp-3); }
+#page-control .field { gap: 4px; }
+#page-control .field-label { font-size: var(--fs-label); }
+#page-control .field-input { padding: 0 var(--sp-2); }
+
+#page-control .field > small { font-size: var(--fs-unit); line-height: 1.25; }
+
+#page-control .field.big .field-input input { font-size: var(--fs-value-lg); }
+#page-control .field.big .field-input em { font-size: var(--fs-label); }
+
+#page-control .action-button,
+#page-control .danger-button,
+#page-control .outline-button,
+#page-control .danger-outline { min-height: 32px; font-size: var(--fs-label); }
+
+#page-control .charge-feedback-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+}
+#page-control .charge-feedback-facts > div {
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  padding-right: var(--sp-2);
+}
+#page-control .charge-feedback-facts > div + div {
+  padding-right: 0;
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--line-soft);
+}
+#page-control .charge-feedback-facts dt { font-size: var(--fs-unit); }
+#page-control .charge-feedback-facts > .charge-end-fact {
+  grid-column: 1 / -1;
+  padding: var(--sp-2) 0 0;
+  margin-top: var(--sp-2);
+  border-left: 0;
+  border-top: 1px solid var(--line-soft);
+}
+#page-control .charge-feedback-facts > .charge-end-fact dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#page-control #legacyChargeEnd.bad { color: var(--fault); }
+#page-control #legacyChargeEnd.ok { color: var(--ok); }
+#page-control .charge-feedback-facts dd {
+  overflow: hidden;
+  font-size: var(--fs-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#page-control .switch-list { gap: 0 var(--sp-3); }
+#page-control .switch-row { min-height: 34px; padding: 4px var(--sp-2); font-size: var(--fs-label); }
+#page-control .switch-label b { font-size: var(--fs-label); }
+#page-control .switch-label small { font-size: var(--fs-unit); }
+#page-control .switch-state { font-size: var(--fs-unit); }
+#page-control .action-list > li { gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
+#page-control .action-text b { font-size: var(--fs-label); }
+#page-control .action-text small { margin-top: 1px; font-size: var(--fs-unit); line-height: 1.35; }
+#page-control .action-controls { gap: var(--sp-2); }
+#page-control .maintenance-panel .action-list > li,
+#page-control .danger-panel .action-list > li { min-height: 50px; }
+#page-control .maintenance-panel,
+#page-control .danger-panel { align-self: start; }
+#page-control .danger-panel .panel-head h3 { color: var(--fault); }
+#page-control .danger-panel .panel-body { background: color-mix(in srgb, var(--fault) 2.5%, transparent); }

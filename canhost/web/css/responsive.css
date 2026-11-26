@@ -1,0 +1,31 @@
+/* ── 矮窗口趋势图与最终导航留白 ── */
+
+/* 总览主读数有页面级字号规则，占位文字需要同权重覆盖，避免“等待数据”按 KPI 字号显示。 */
+#page-overview .primary-readouts p b.is-waiting {
+  font-size: var(--fs-value);
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+/* ---------- 矮窗口：趋势图整块留在状态栏之上 ----------------------------
+
+   默认窗口 1460x920、界面 110% 缩放时，CSS zoom 不参与媒体查询：查询仍按
+   920/900px 判断，而内容实际只有约 836/818px 高，238px 的趋势图会把 x 轴压到
+   状态栏下面。因此阈值放宽到 940px，同时覆盖 1280x800。
+   总览页另有 188px 的页面级高度，特异性更高，必须一并写进这条规则。 */
+@media (max-height: 940px) {
+  #trendCanvas,
+  #vehicleTrendCanvas,
+  #page-overview #trendCanvas { height: 156px; }
+}
+
+/* 1280x800 下只靠缩图仍会把趋势压到折叠线以下；把主趋势提到栅格最前，
+   先看曲线再看明细。趋势块没有可聚焦控件，不会改变键盘顺序。 */
+@media (max-height: 860px) {
+  #page-overview .overview-layout .trend-section { order: -1; }
+  /* 整车页同样把趋势提到第一列最前，120%/130% 缩放下也不会被底栏盖住。 */
+  #page-vehicle .vehicle-trend-section { order: -1; }
+}
+
+/* 工程工具展开后切页时给当前项留出边距，避免贴住导航上下边缘。 */
+.nav-item { scroll-margin-block: var(--sp-2); }

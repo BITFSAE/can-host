@@ -1,0 +1,261 @@
+/* ── 全站层级、静默常态与页面节奏收敛 ── */
+
+/* ==========================================================================
+   ---------- 排版与层级统一层 ----------
+   本段是界面的唯一排版权威，位于文件末尾以便覆盖此前的逐页补丁。
+   规则只有三条：字号取自 --fs-*，间距取自 --sp-*，容器层级不超过三层。
+   新增页面样式时不得再写裸的 font-size / padding / border-radius 数值。
+   ========================================================================== */
+
+/* ---- 1. 字号：全站收敛到 6 档 ------------------------------------------ */
+
+.nav-group { font-size: var(--fs-unit); letter-spacing: .12em; }
+.nav-item { font-size: var(--fs-body); }
+.brand-title { font-size: var(--fs-body); }
+.rail-facts dt, .rail-facts dd { font-size: var(--fs-label); }
+
+.statusbar, .status-group b { font-size: var(--fs-label); }
+.status-group .label, .quick-cell .label, .quick-cell em { font-size: var(--fs-unit); }
+.quick-cell b { font-size: var(--fs-value); }
+
+.data-section > header h3, .panel-head h3 { font-size: var(--fs-body); font-weight: 600; }
+.data-section > header > span, .panel-head small, .panel-context, .state-text { font-size: var(--fs-label); }
+
+.field-label { font-size: var(--fs-label); }
+.field-input input { font-size: var(--fs-value); }
+.field-input em { font-size: var(--fs-unit); }
+.field > small { font-size: var(--fs-unit); }
+.field > select, .field > input, .field > textarea { font-size: var(--fs-body); }
+
+.action-button, .danger-button, .outline-button, .danger-outline { font-size: var(--fs-body); }
+.tool-header-desc { font: var(--fs-label) var(--mono); }
+
+.switch-label small, .protection-label small { font-size: var(--fs-unit); }
+.switch-label b, .protection-label > b { font-size: var(--fs-label); }
+.switch-state, .protection-switch > b { font-size: var(--fs-label); }
+
+.alarm-item b { font-size: var(--fs-body); }
+.alarm-item small { font-size: var(--fs-label); line-height: 1.45; }
+.alarm-level { font-size: var(--fs-label); }
+
+.event-item { font-size: var(--fs-label); }
+.event-item > time, .event-item > b { font-size: var(--fs-label); }
+
+.frame-table th, .frame-table td { font-size: var(--fs-label); }
+.monitor-frame-table th { font-size: var(--fs-unit); }
+.transmit-table th { font-size: var(--fs-unit); }
+.transmit-table td, .transmit-table input, .transmit-table select { font-size: var(--fs-unit); }
+
+/* 9px 及以下只保留给真正的下标，不再用于可读标签。 */
+.cell-item small, .cell-item em, .cell-item .cell-state-caption { font-size: var(--fs-unit); }
+.cell-item b { font-size: var(--fs-value); }
+.cell-module-head strong { font-size: var(--fs-value); }
+.cell-module-head .range, .cell-module-head .module-stats { font-size: var(--fs-label); }
+.cell-module-head .module-stats b { font-size: var(--fs-label); }
+
+.telemetry-counters dt, .updater-release-meta dt,
+.update-result-meta dt { font-size: var(--fs-unit); }
+.telemetry-counters dd, .updater-release-meta dd, .update-result-meta dd { font-size: var(--fs-label); }
+.release-notes li, .release-history-entry > ul > li { font-size: var(--fs-label); }
+
+/* ---- 2. 间距与圆角：只允许令牌值 --------------------------------------- */
+
+.data-section, .panel, .cell-module, .table-wrap, .tool-header-bar,
+.overview-status, .primary-readouts, .cell-overview-bar, .threshold-register,
+.diagnostic-head, .telemetry-status-strip, .telemetry-fault-hero,
+.transmit-dock, .bench-result, .bench-command-row input {
+  border-radius: var(--r-flat);
+}
+
+.switch-row, .field-input,
+.field > select, .field > input, .segmented, .bench-slave, .ivt-check-summary,
+.ivt-target-brief > div, .ivt-action-fact, .ivt-result, .ivt-identity > div,
+.simulator-output-card, .simulator-config-section,
+.release-history-entry, .payload, .checkbox, .toast {
+  border-radius: var(--r-ctl);
+}
+
+/* ---- 3. 层级：删掉“每层都加边框 + 内高光”的等重写法 ------------------- */
+
+/* 外层面板是唯一的卡片层级；去掉重复的内高光与悬浮抬升。 */
+.data-section, .panel {
+  box-shadow: none;
+  background: var(--level-1);
+}
+.data-section > header, .panel-head {
+  background: transparent;
+  border-bottom: 1px solid var(--line-soft);
+}
+/* 面板内的子块只做轻微明度区分，边框留给真正需要分隔的地方。 */
+.bench-slave, .simulator-output-card, .ivt-check-summary,
+.ivt-target-brief > div, .ivt-action-fact, .ivt-identity > div {
+  background: var(--level-2);
+  border-color: transparent;
+}
+.panel-body { padding: var(--sp-3); }
+/* 子块标题自带 12px 左右内边距，只为 `.panel-body.flush` 这类无内边距容器准备。
+   正文已经有内边距时它会把标题再缩进一层（字段标签在 12px，标题文字在 50px），
+   所以这里去掉左右内边距，让标题与下面的字段左对齐；标题下边框是分组的
+   起始线，与首行内容之间补上 --sp-2，避免字段标签紧贴分割线。 */
+.panel-body:not(.flush) > .sub-head { padding-inline: 0; margin-bottom: var(--sp-2); }
+.data-section { min-width: 0; }
+
+/* 面板内不得再嵌套带边框的卡片：第二层一律退化为分隔线。 */
+.panel .data-section, .data-section .data-section, .panel .panel {
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-flat);
+}
+
+.grid { gap: var(--sp-3); }
+.tool-layout, .fan-workspace-grid, .history-grid, .telemetry-grid,
+.simulator-output-grid, .field-grid { gap: var(--sp-3); }
+.overview-layout { gap: var(--sp-2); }
+
+/* ---- 4. 正常状态保持安静：删掉与文字重复的整块语义底色 --------------- */
+
+/* 开关行、保护开关：正常态只留一个安静的状态点和中性文字。 */
+.switch-row.on,
+.protection-switch.enabled { background: transparent; }
+.switch-row.on .switch-dot,
+.protection-switch.enabled i { box-shadow: none; }
+/* 开/启用是常态，不该比“正常”读数更抢眼：文字回到中性色，
+   绿色只留给状态点，靠点判断开合。 */
+.switch-row.on .switch-state,
+.protection-switch.enabled b { color: var(--text-2); }
+.switch-row:not(.on) .switch-state,
+.protection-switch:not(.enabled) > b { color: var(--text-3); }
+/* “开 · 待写”是待确认动作，优先级高于常态的“开”，所以放在 .on 之后。 */
+.switch-row.dirty .switch-state { color: var(--warn); }
+
+/* 状态点保留颜色区分，去掉光晕。 */
+.lock.ok i { box-shadow: none; }
+.bus-connect.active .bus-dot { box-shadow: none; }
+.telemetry-status-main .status-dot.connected { box-shadow: none; }
+#recordButton.active > i { box-shadow: none; }
+.updater-state-badge.active::before,
+.updater-state-badge.ok::before,
+.updater-state-badge.warn::before,
+.updater-state-badge.bad::before { box-shadow: none; }
+
+.cell-item { border-radius: 0; }
+
+/* 输出路径卡：未启用是中性信息，不是故障状态。 */
+.simulator-output-card.failed { border-color: color-mix(in srgb, var(--fault) 42%, transparent); }
+.simulator-output-card.failed > b { color: var(--fault); }
+
+/* ---- 5. 页面节奏：统一内边距与底部收口 --------------------------------- */
+
+.page,
+#page-overview, #page-cells, #page-alarms, #page-control,
+#page-vehicle, #page-fan, #page-telemetry { padding-top: var(--sp-4); }
+#page-bench, #page-ivt, #page-simulator { padding-top: var(--sp-4); }
+#page-frames { padding-top: var(--sp-3); }
+
+.page > *:last-child { margin-bottom: 0; }
+
+/* ---- 6. 未连接与空状态：统一到同一处安静提示 --------------------------- */
+
+.empty-state { padding: var(--sp-5) var(--sp-4); font-size: var(--fs-label); }
+.empty-state.large { padding: 48px var(--sp-4); }
+
+@media (max-width: 1260px) {
+  .panel-body { padding: var(--sp-3); }
+}
+
+/* ---- 收尾：清掉仍在使用的旧字号与零散圆角 ----------------------------- */
+
+.overview-status .status-register dd, .machine-state > strong { font-size: var(--fs-value-lg); }
+.overview-status .machine-state > small { font-size: var(--fs-label); }
+.state-table em, .relay-tiles em, .condition-list dd, .charge-time-grid dd,
+.module-average-table > div, .cell-summary-register dd, .threshold-register dd { font-size: var(--fs-value); }
+.primary-readouts article > span, .state-table span, .condition-list dt,
+.cell-summary-register dt, .threshold-register dt, .module-table-head,
+.relay-tiles span, .charge-time-grid dt { font-size: var(--fs-label); }
+.imd-primary-grid b, .fault-readout b { font-size: var(--fs-value-lg); }
+.imd-primary-grid span, .imd-primary-grid small { font-size: var(--fs-unit); }
+.veh-ecu-head b { font-size: var(--fs-unit); }
+.veh-ecu-row b { font-size: var(--fs-unit); }
+.veh-ecu-row span { font-size: var(--fs-label); }
+.link-button { font-size: var(--fs-body); }
+.note, .ivt-period-note, .ivt-difference, .event-item p { font-size: var(--fs-label); }
+.tool-header-info h2 { font-size: var(--fs-value-lg); }
+.tag { font-size: var(--fs-label); }
+.unit, .field-input em, .quick-cell em { font-size: var(--fs-unit); }
+
+/* Late component shorthands set control backgrounds; keep the select chevron
+   singular and aligned after those rules in both themes. */
+select {
+  background-position: calc(100% - var(--sp-2)) 50% !important;
+  background-repeat: no-repeat !important;
+  background-size: 16px 16px !important;
+}
+
+/* 协议缩写、来源标记等次级下标统一到 --fs-unit，不再使用 9px/10px。 */
+.switch-label small, .protection-label small, .module-table-head,
+.veh-ecu-head, .trend-legend b,
+.condition-list dd small, .imd-primary-grid small, .primary-readouts small,
+.primary-readouts p em, .panel-head > small, .panel-head span:not(.tag),
+.tool-header-desc, .monitor-inline-stats, .transmit-actions button,
+.ivt-detail summary { font-size: var(--fs-unit); }
+
+/* 逐页密度补丁用了 ID 选择器，这里用同等权重做最后一次收敛。 */
+#page-control .switch-label small, #page-control .switch-label b,
+#page-control .switch-state, #page-control .field-label,
+#page-control .field-input em, #page-control .field > small,
+#page-control .action-text small, #page-control .lock { font-size: var(--fs-unit); }
+#page-control .action-text b, #page-control .panel-head h3 { font-size: var(--fs-body); }
+#page-overview .module-table-head, #page-overview .condition-list dt,
+#page-overview .condition-list dd small, #page-overview .imd-primary-grid small,
+#page-overview .primary-readouts small, #page-overview .primary-readouts p em,
+#page-overview .data-section > header > span,
+#page-overview .charge-time-grid dt { font-size: var(--fs-unit); }
+#page-overview .condition-list dd, #page-overview .charge-time-grid dd,
+#page-overview .imd-primary-grid b { font-size: var(--fs-value); }
+.veh-tire-head b, .veh-tire-head span { font-size: var(--fs-unit); }
+.monitor-frame-table th, .monitor-frame-table td { font-size: var(--fs-unit); }
+.transmit-table th, .transmit-table td { font-size: var(--fs-unit); }
+
+/* 按钮与图例是同一层级，统一到正文字号，避免 12px/12.5px/13px 混杂。 */
+#page-control .action-button, #page-control .danger-button,
+#page-control .outline-button, #page-control .danger-outline,
+#page-control .segmented button, .panel-foot > .action-button,
+.action-controls > .outline-button, .action-controls > .danger-outline,
+.segmented > button, .transmit-actions > button, .replay-bar > button {
+  font-size: var(--fs-body);
+}
+.cell-legend .chip, .ivt-check-summary,
+.cell-data-issue, .module-issue, .fan-diag-summary {
+  font-size: var(--fs-label);
+}
+
+/* ---- 工程工具页：一屏装得下就一屏铺满，不留半屏空白 ------------------- */
+
+/* 台架：注入场景与从控模型并排，而不是上下堆叠后留下大块空区。 */
+#page-bench .bench-layout {
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr);
+  align-items: stretch;
+}
+#page-bench .bench-actions-panel { grid-column: 1; }
+#page-bench .bench-state-panel { grid-column: 2; }
+#page-bench .bench-result { max-height: 168px; }
+#page-bench .bench-slave-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* 遥测模拟器：输出路径与当前帧并排，统计整行收口。 */
+#page-simulator .simulator-layout {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+#page-simulator .simulator-counter-panel { grid-column: 1 / -1; }
+
+/* IVT：左栏读取核对，右栏两级动作；周期设置整行收口。 */
+#page-ivt .ivt-layout { align-items: start; }
+
+@media (max-width: 1080px) {
+  #page-bench .bench-layout,
+  #page-simulator .simulator-layout { grid-template-columns: minmax(0, 1fr); }
+  #page-bench .bench-actions-panel,
+  #page-bench .bench-state-panel,
+  #page-simulator .simulator-counter-panel { grid-column: 1; }
+  #page-bench .bench-slave-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

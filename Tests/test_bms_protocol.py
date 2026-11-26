@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import csv
 import json
+import re
 from types import SimpleNamespace
 from datetime import datetime, timedelta
 import sqlite3
@@ -19,6 +20,15 @@ from canhost.app import Api, _simulation_available, _update_health_path_from_arg
 from canhost.bms.protocol import BmsProtocol, build_command, command_ack_matches, switch_catalog
 from canhost.decoders import CanFrame, CHROMA_VOLT_STD_ID, build_pack_status
 from canhost.bms.simulator import BmsSimulator
+
+WEB = Path(__file__).resolve().parents[1] / "canhost" / "web"
+
+
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', html)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
 
 
 class BmsProtocolTest(unittest.TestCase):
@@ -1268,7 +1278,7 @@ class BmsProtocolTest(unittest.TestCase):
     def test_cell_ui_labels_expired_last_valid_values_instead_of_flashing_blank(self) -> None:
         web = Path(__file__).parents[1] / "canhost" / "web"
         js = (web / "js" / "bms.js").read_text(encoding="utf-8")
-        css = (web / "styles.css").read_text(encoding="utf-8")
+        css = read_css()
         html = (web / "index.html").read_text(encoding="utf-8")
         self.assertIn("function hasRetainedStaleValue(item)", js)
         self.assertIn("function measurementDisplayValue(item)", js)

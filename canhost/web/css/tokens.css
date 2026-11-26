@@ -1,0 +1,255 @@
+/* ── 主题令牌（深/浅）、基础重置、滚动条与字号工具类 ── */
+
+/* BITFSAE CAN HOST — compact pit-wall instrumentation.
+   Information density and deterministic status colours take priority over decoration. */
+
+/* 规则里的半透明语义色统一写成 color-mix(in srgb, var(--语义) N%, transparent)：
+   N% 保留原 alpha，颜色取自主题令牌，深/浅主题切换时底色和边框一起跟随。 */
+
+:root {
+  --app-height: 100vh;
+  color-scheme: dark;
+  /* Zinc 低饱和度暗色层级（对标 T3 Code / Base Mira 桌面质感） */
+  --bg: #09090b;
+  --surface-ground: #09090b;
+  --surface-1: #111114;
+  --surface-2: #18181b;
+  --surface-3: #222226;
+  --surface-card: #111114;
+  --surface-elevated: #18181b;
+  --surface-hi: #27272a;
+  --line: rgba(255, 255, 255, .10);
+  --line-soft: rgba(255, 255, 255, .06);
+  --line-highlight: rgba(255, 255, 255, .05);
+  --line-strong: rgba(255, 255, 255, .18);
+  --wash-faint: rgba(255, 255, 255, .02);
+  --wash-soft: rgba(255, 255, 255, .04);
+  --console-bg: rgba(0, 0, 0, .24);
+  --scroll-thumb: rgba(255, 255, 255, .16);
+  --scroll-thumb-hover: rgba(255, 255, 255, .28);
+  --modal-ring: rgba(255, 255, 255, .07);
+  --backdrop: rgba(4, 5, 8, .72);
+  --switch-knob: #fafafa;
+
+  /* Text */
+  --text: #f4f4f5;
+  --text-2: #a1a1aa;
+  --text-3: #8b8b94;
+
+  /* Semantics — 赛场遥测确定性语义色，绝不用于纯装饰 */
+  --ok: #22c55e;
+  --ok-dim: rgba(34, 197, 94, .12);
+  --warn: #eab308;
+  --warn-dim: rgba(234, 179, 8, .13);
+  --fault: #ef4444;
+  --fault-dim: rgba(239, 68, 68, .13);
+  --fault-hover: #f87171;
+  --on-fault: #ffffff;
+  --error-surface: #271315;
+  --error-text: #fecaca;
+  --idle: #71717a;
+  --idle-dim: rgba(113, 113, 122, .14);
+  --info: #38bdf8;
+  --info-dim: rgba(56, 189, 248, .12);
+
+  /* Interaction accent */
+  --accent: #d4d4d8;
+  --accent-dim: rgba(212, 212, 216, .12);
+  --accent-ink: #09090b;
+  --action: #22d3ee;
+  --action-border: #06b6d4;
+  --action-hover: #67e8f9;
+  --action-ink: #082f49;
+  --ring: rgba(6, 182, 212, .45);
+  --curr: #eab308;
+
+  /* Canvas colors are tokens too: charts must switch with the surrounding UI. */
+  --chart-voltage: #e4e4e7;
+  --chart-current: #eab308;
+  --chart-precharge: #71717a;
+  --chart-label: #71717a;
+  --chart-grid: rgba(255, 255, 255, .06);
+  --chart-axis: #a1a1aa;
+  --chart-zero: rgba(255, 255, 255, .16);
+  --chart-voltage-fill: rgba(228, 228, 231, .09);
+  --chart-current-fill: rgba(234, 179, 8, .10);
+  --chart-precharge-fill: rgba(113, 113, 122, .08);
+
+  /* 圆角令牌（Base Mira 克制桌面圆角）：容器 6px、控件 5px、微标 4px、状态点/胶囊 9999px。 */
+  --r-flat: 6px;
+  --r-ctl: 5px;
+  --r-pill: 4px;
+  --r-dot: 9999px;
+  --shadow: 0 18px 48px rgba(0, 0, 0, .62);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .42);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 2px 8px rgba(0, 0, 0, .32);
+  --shadow-glow-ok: 0 0 0 2px var(--ok-dim);
+  --shadow-glow-warn: 0 0 0 2px var(--warn-dim);
+  --shadow-glow-fault: 0 0 0 2px var(--fault-dim);
+  --shadow-glow-action: 0 0 0 2px var(--ring);
+
+  /* ---- 排版与间距基线（Base Mira 高信息密度） ----------------
+     字号分档：微标 10px → 单位 10.5px → 字段标签 11.5px → 正文 12.5px → 读数 14.5px → 主读数 19px → KPI 28px。 */
+  --fs-micro: 10px;
+  --fs-unit: 10.5px;
+  --fs-label: 11.5px;
+  --fs-body: 12.5px;
+  --fs-value: 14.5px;
+  --fs-value-lg: 19px;
+  --fs-kpi: 28px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+
+  /* 层级只有三层，靠明度差与 1px 细线区分。 */
+  --level-1: var(--surface-1);
+  --level-2: var(--surface-2);
+  --level-3: var(--surface-3);
+
+  /* 字体栈按目标平台 Windows 11 / macOS 优先；等宽栈附带中文字体防止中文帧名落回宋体。 */
+  --mono: "Cascadia Mono", "SF Mono", Menlo, Consolas, "Microsoft YaHei UI", "PingFang SC", monospace;
+  --ui: "Segoe UI Variable Text", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --cjk: "Segoe UI Variable Text", -apple-system, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+
+/* Light mode: crisp Zinc-100 engineering worksheet with white cards and WCAG-AA semantics. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f5;
+  --surface-ground: #eceef0;
+  --surface-1: #ffffff;
+  --surface-2: #f4f4f5;
+  --surface-3: #e4e4e7;
+  --surface-card: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-hi: #e4e4e7;
+  --line: rgba(9, 9, 11, .12);
+  --line-soft: rgba(9, 9, 11, .07);
+  --line-highlight: rgba(255, 255, 255, .85);
+  --line-strong: rgba(9, 9, 11, .22);
+  --wash-faint: rgba(9, 9, 11, .025);
+  --wash-soft: rgba(9, 9, 11, .045);
+  --console-bg: rgba(9, 9, 11, .04);
+  --scroll-thumb: rgba(9, 9, 11, .18);
+  --scroll-thumb-hover: rgba(9, 9, 11, .32);
+  --modal-ring: rgba(9, 9, 11, .08);
+  --backdrop: rgba(9, 9, 11, .42);
+  --switch-knob: #ffffff;
+
+  --text: #09090b;
+  --text-2: #52525b;
+  --text-3: #666670;
+
+  --ok: #15803d;
+  --ok-dim: rgba(21, 128, 61, .10);
+  --warn: #a16207;
+  --warn-dim: rgba(161, 98, 7, .11);
+  --fault: #b91c1c;
+  --fault-dim: rgba(185, 28, 28, .10);
+  --fault-hover: #991b1b;
+  --on-fault: #ffffff;
+  --error-surface: #fef2f2;
+  --error-text: #991b1b;
+  --idle: #71717a;
+  --idle-dim: rgba(113, 113, 122, .12);
+  --info: #0369a1;
+  --info-dim: rgba(3, 105, 161, .10);
+
+  --accent: #27272a;
+  --accent-dim: rgba(39, 39, 42, .10);
+  --accent-ink: #fafafa;
+  --action: #0e7490;
+  --action-border: #0891b2;
+  --action-hover: #155e75;
+  --action-ink: #ffffff;
+  --ring: rgba(14, 116, 144, .35);
+  --curr: #a16207;
+
+  --shadow: 0 18px 42px rgba(9, 9, 11, .14);
+  --shadow-sm: 0 1px 2px rgba(9, 9, 11, .06);
+  --shadow-card: 0 1px 3px rgba(9, 9, 11, .06);
+  --shadow-glow-ok: 0 0 0 2px var(--ok-dim);
+  --shadow-glow-warn: 0 0 0 2px var(--warn-dim);
+  --shadow-glow-fault: 0 0 0 2px var(--fault-dim);
+  --shadow-glow-action: 0 0 0 2px var(--ring);
+
+  --chart-voltage: #27272a;
+  --chart-current: #a16207;
+  --chart-precharge: #71717a;
+  --chart-label: #71717a;
+  --chart-grid: rgba(9, 9, 11, .08);
+  --chart-axis: #52525b;
+  --chart-zero: rgba(9, 9, 11, .18);
+  --chart-voltage-fill: rgba(39, 39, 42, .08);
+  --chart-current-fill: rgba(161, 98, 7, .09);
+  --chart-precharge-fill: rgba(113, 113, 122, .08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+/* 下拉与折叠指示统一使用圆端 SVG，保持跨平台的尺寸与笔画一致。 */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: var(--sp-5) !important;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%237c7f7d' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: var(--select-chevron) !important;
+  background-position: calc(100% - var(--sp-2)) 50%;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  color-scheme: dark;
+}
+:root[data-theme="light"] select {
+  color-scheme: light;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%2366747b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+button { cursor: pointer; }
+h1, h2, h3, p, dl, dd, dt, ol, ul { margin: 0; }
+ol, ul { padding: 0; list-style: none; }
+code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
+
+:focus-visible {
+  outline: 2px solid var(--action-border);
+  outline-offset: 1px;
+  box-shadow: none;
+  border-radius: var(--r-ctl);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border: 2px solid transparent; background-clip: content-box; border-radius: var(--r-dot); }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); border: 2px solid transparent; background-clip: content-box; }
+
+/* Numeric readouts never reflow as digits change */
+.mono, td, .mini-facts dd, .status-group b, .fault-readout b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.hidden { display: none !important; }
+.muted { color: var(--text-3); }
+
+.label {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: .06em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}

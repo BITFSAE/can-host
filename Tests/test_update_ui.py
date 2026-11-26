@@ -16,6 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "canhost" / "web"
 
 
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', html)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
+
+
 class FrontendIdTest(unittest.TestCase):
     def test_update_scripts_only_reference_ids_declared_in_index(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -58,7 +65,7 @@ class FrontendIdTest(unittest.TestCase):
 
     def test_download_preparation_is_indeterminate_instead_of_fake_zero_percent(self) -> None:
         updater = (WEB / "js" / "updater.js").read_text(encoding="utf-8")
-        styles = (WEB / "styles.css").read_text(encoding="utf-8")
+        styles = read_css()
         self.assertIn('downloadStage === "archive"', updater)
         self.assertIn('progressText.textContent', updater)
         self.assertIn('"处理中"', updater)

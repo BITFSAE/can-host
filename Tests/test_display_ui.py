@@ -14,6 +14,15 @@ from canhost.display import model
 from canhost.display.service import DisplayBenchService
 
 WEB = Path(__file__).resolve().parents[1] / "canhost" / "web"
+
+
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', html)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
+
+
 SCRIPT = (WEB / "js" / "display.js").read_text(encoding="utf-8")
 HTML = (WEB / "index.html").read_text(encoding="utf-8")
 CORE = (WEB / "js" / "core.js").read_text(encoding="utf-8")
@@ -149,7 +158,7 @@ class DisplayPageWiringTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_all_page_elements_use_only_shared_design_tokens(self) -> None:
-        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        css = read_css()
         block = css[css.index("/* ---------- 车手屏联调 ---------- */"):]
         # Font sizes and spacing come from the token scale; raw px font sizes are not allowed.
         self.assertEqual(re.findall(r"font-size:\s*\d+px", block), [])

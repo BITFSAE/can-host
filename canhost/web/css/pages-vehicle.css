@@ -1,0 +1,540 @@
+/* ── 整车与遥测：整车风扇、常看值快捷条、整车总览与 MQTT 遥测故障 ── */
+
+/* ---------- Fan tool page & Integrated Tool Header ---------- */
+
+.tool-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--surface-1);
+}
+
+.tool-header-info {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.tool-header-info h2 {
+  font-size: var(--fs-value-lg);
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.tool-header-desc {
+  font: var(--fs-label) var(--mono);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.tool-header-connection {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.tool-connection-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.tool-connection-controls select {
+  height: var(--sp-5);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-ctl);
+  background: var(--surface-2);
+  color: var(--text);
+  font: var(--fs-label) var(--mono);
+  cursor: pointer;
+  transition: border-color .14s ease;
+}
+
+.tool-connection-controls select:hover {
+  border-color: var(--line);
+}
+
+.tool-connection-controls .tool-channel-select {
+  min-width: 135px;
+}
+
+.tool-connection-controls button {
+  height: 34px;
+  min-width: 72px;
+}
+
+@media (max-width: 900px) {
+  .tool-header-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+  }
+  .tool-header-connection {
+    justify-content: space-between;
+  }
+}
+
+/* ---------- 整车风扇页 ----------
+
+   现状（只读横条）→ 按对象分两列 → 电池箱标定（整行）
+   （左列整车 FanController，右列 F405 电池箱风扇）。
+   读数用 .readout-grid（单元网格），输入用 .field-grid（字段网格）；
+   卡片内不再出现第二个带边框的盒子，分组只用 .sub-head 的 1px 线。 */
+
+.fan-workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  align-items: start;
+}
+.fan-telemetry-panel, .fan-calib-panel { grid-column: 1 / -1; }
+.fan-column { display: grid; align-content: start; gap: var(--sp-3); min-width: 0; }
+.fan-calib-block { grid-column: 1 / -1; }
+.fan-calib-block > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 42px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.fan-calib-block > summary::-webkit-details-marker { display: none; }
+.fan-calib-block > summary::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-45deg);
+  transition: transform .16s ease, border-color .16s ease;
+}
+.fan-calib-block[open] > summary::before { transform: rotate(45deg); }
+.fan-calib-block > summary::after {
+  content: "展开";
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: var(--fs-unit);
+  letter-spacing: .04em;
+}
+.fan-calib-block[open] > summary::after { content: "收起"; }
+.fan-calib-block > summary:hover { background: var(--surface-2); border-color: var(--line-strong); }
+.fan-calib-block > summary:hover::before { border-color: var(--text); }
+.fan-calib-block > summary b { font-family: var(--cjk); font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.fan-calib-block > summary span { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-label); text-overflow: ellipsis; white-space: nowrap; }
+.fan-calib-block[open] > summary { border-bottom-color: transparent; }
+.fan-calib-inner { display: grid; gap: var(--sp-3); padding-top: var(--sp-3); }
+.fan-calib-inner .fan-calib-panel { grid-column: auto; }
+
+@media (max-width: 1180px) {
+  .fan-workspace-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 遥测横条：与卡片边齐平，读数之间只有 1px 缝隙。两组读数的列数各随其
+   子标题成组，跨组不再强行对齐。列数必须整除单元数，否则末行的空单元
+   会露出网格底色。 */
+.fan-live-grid { --cols: 7; }
+.fan-loop-grid { --cols: 5; }
+.fan-fault-grid { --cols: 4; }
+
+.readout-grid > * > .meter { flex-basis: 100%; margin-top: var(--sp-1); }
+
+/* 温度来源有效位：同一单元内的多路来源共用一个贴右端的容器，避免各自
+   漂在不同横坐标上。 */
+.fan-chip-group { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+/* 温度来源有效性标记：只表示该路来源帧是否有效，帧号在悬浮提示里。 */
+.fan-source-chip { display: none; width: 7px; height: 7px; flex: none; }
+.fan-source-chip.off { display: inline-block; border: 1px solid var(--warn); background: var(--warn-dim); }
+
+/* 转速单元：状态结论贴右端，故障/过期只改文字与单元底色。 */
+.fan-tach-state.ok { color: var(--ok); }
+.fan-tach-state.warn { color: var(--warn); }
+.fan-tach-state.bad { color: var(--fault); }
+.fan-tach-state.muted { color: var(--text-3); }
+.fan-tach-cell.stalled { background: var(--fault-dim); }
+.fan-tach-cell.stalled > b { color: var(--fault); }
+.fan-tach-cell.starting > b { color: var(--warn); }
+.fan-tach-cell.idle > b, .fan-tach-cell.data-stale > b { color: var(--text-2); }
+
+/* 故障位：置位才点亮，未置位保持安静。 */
+.fan-fault-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 34px;
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--level-1);
+  font-size: var(--fs-label);
+  color: var(--text-3);
+}
+.fan-fault-badge i { width: 6px; height: 6px; flex: none; border-radius: var(--r-dot); background: var(--idle); }
+.fan-fault-badge.on { color: var(--fault); font-weight: 600; }
+.fan-fault-badge.on i { background: var(--fault); }
+
+.fan-diag-summary { font-family: var(--mono); }
+.fan-diag-summary.ok { color: var(--ok); }
+.fan-diag-summary.bad { color: var(--fault); }
+.fan-diag-summary.data-stale { color: var(--warn); }
+
+/* 步骤标题行：标题在左，当前状态在右；机制说明进悬浮提示。 */
+.fan-step-head { margin-top: var(--sp-3); }
+
+/* 步骤标记：1px 方框里的序号。用图形表示层级，不用 ① 这类字符。 */
+.step-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: var(--sp-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-ctl);
+  background: var(--level-2);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: var(--fs-unit);
+  font-weight: 600;
+  line-height: 1;
+}
+.sub-head > b { display: inline-flex; align-items: center; }
+.panel-body > .sub-head:first-child { margin-top: 0; }
+
+/* 字段网格：按列数显式声明，和读数网格同一套命名。动作行一律另起一行
+   右对齐（.panel-foot），不再与字段挤在同一行。 */
+.field-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.field-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.fan-calib-actions { gap: var(--sp-2); }
+.fan-calib-progress-row { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 0; }
+.progress-track { position: relative; height: 6px; background: var(--surface-3); overflow: hidden; }
+.progress-track > i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
+.fan-calib-progress-row .progress-track.running > i { background: var(--ok); }
+.fan-calib-progress-label {
+  color: var(--text-3);
+  font-size: var(--fs-label);
+  overflow-wrap: anywhere;
+}
+
+/* 标定记录表：沿用 IVT 配置表的写法（表头次级色、行间 1px 线、单元格留白）。 */
+.fan-calib-table-wrap { margin-top: var(--sp-3); border: 1px solid var(--line-soft); overflow-x: auto; }
+.fan-calib-table { width: 100%; border-collapse: collapse; font-size: var(--fs-label); }
+.fan-calib-table th, .fan-calib-table td {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  white-space: nowrap;
+}
+.fan-calib-table th { background: var(--level-2); color: var(--text-3); font-weight: 500; }
+.fan-calib-table tr:last-child td { border-bottom: 0; }
+.fan-calib-table .empty-state { padding: var(--sp-4) var(--sp-2); }
+.fan-battery-calib-panel .fan-calib-table-wrap { max-height: 360px; overflow-y: auto; }
+.fan-battery-calib-panel .fan-calib-table th { position: sticky; top: 0; z-index: 1; }
+.fan-battery-calib-actions { flex-wrap: wrap; }
+.fan-manual-step { margin-top: var(--sp-3); border-top: 1px solid var(--line-soft); }
+.fan-manual-step > summary {
+  padding: var(--sp-3) 0;
+  color: var(--text-2);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  cursor: pointer;
+}
+.fan-manual-step > summary:hover { color: var(--text); }
+.fan-manual-step > summary:focus-visible { outline: 2px solid var(--action-border); outline-offset: 2px; }
+
+/* 应答记录：窄卡片里只有时间与一条结论，按两列紧凑排布。 */
+.fan-ack-list { max-height: 220px; overflow-y: auto; }
+.fan-ack-list .event-item { grid-template-columns: 84px minmax(0, 1fr); }
+.fan-ack-list .event-item > b, .fan-ack-list .event-item > p { grid-column: 2; }
+.fan-ack-list .event-item p.ok { color: var(--ok); }
+.fan-ack-list .event-item p.bad { color: var(--fault); }
+
+.fan-maintenance-panel .panel-foot { margin-top: 0; }
+.fan-report { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 0; }
+.fan-report > div { display: flex; align-items: baseline; gap: var(--sp-2); }
+.fan-report dt { flex: none; width: 52px; color: var(--text-3); font-size: var(--fs-label); }
+.fan-report dd { margin: 0; color: var(--text-2); font-size: var(--fs-label); }
+.fan-report dd.bad { color: var(--fault); }
+.panel-note { margin-bottom: var(--sp-2); color: var(--text-3); font-size: var(--fs-label); }
+.fan-battery-grid > * > b.ok { color: var(--ok); }
+.fan-battery-grid > * > b.warn { color: var(--warn); }
+
+/* ---------------- 常看值快捷条（状态栏上方，非工具页常驻） ---------------- */
+
+.quick-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0 var(--sp-3);
+  min-height: 30px;
+  padding: 0 var(--sp-3);
+  border-top: 1px solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--fs-label);
+  color: var(--text-3);
+  line-height: 1;
+  overflow: hidden;
+}
+.quick-cell { display: inline-flex; flex: 0 1 auto; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.quick-cell .label, .quick-cell b, .quick-cell em { overflow: hidden; text-overflow: ellipsis; }
+.quick-cell .label { flex: 0 1 auto; min-width: 0; letter-spacing: .04em; text-transform: uppercase; }
+.quick-cell b { flex: 0 0 auto; }
+
+/* 窄窗口下先让出低压侧三个次要读数，保留高压、SOC、SOP 和风扇；
+   它们是同一优先级序列里最后才需要常驻的值，且整车页仍完整显示。 */
+@media (max-width: 1400px) {
+  .quick-bar .quick-cell-secondary { display: none; }
+}
+.quick-cell .label { font-size: var(--fs-micro); }
+.quick-cell b {
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text);
+}
+.quick-cell em { font-style: normal; font-size: var(--fs-micro); color: var(--text-3); }
+.quick-cell.data-stale b,
+.quick-cell.data-stale em { color: var(--warn); }
+.quick-cell.data-stale::after {
+  content: "旧";
+  align-self: center;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: var(--r-pill);
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.quick-divider { width: 1px; height: 14px; flex: none; background: var(--line-soft); }
+
+/* 状态栏内的整车连接按钮 */
+
+/* ---------------- 整车总览页 ----------------
+
+   版式：显式双列栈——每个节点卡占满所在列，趋势图整行收口在最下。跨列卡会
+   把栅格切成行、让短列无法回填，所以不再使用“2 列 + 跨列卡”的排布。
+   读数全部引用 .readout-grid 原语，本页不再定义任何读数盒子的边框、底色和圆角。 */
+
+.vehicle-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  align-items: start;
+}
+.vehicle-column { display: grid; align-content: start; gap: var(--sp-3); min-width: 0; }
+.vehicle-trend-section { min-width: 0; }
+#vehicleTrendCanvas { display: block; width: 100%; height: 238px; }
+
+@media (max-width: 1260px) {
+  .vehicle-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.vehicle-limit-grid { --cols: 4; }
+.vehicle-flag-list { --cols: 3; }
+.vehicle-sop-flags { --cols: 5; }
+.vehicle-pack-flags { --cols: 2; }
+.vehicle-channel-grid { --cols: 4; }
+.vehicle-ecu-ack { --cols: 2; }
+
+.veh-state-text.bad { color: var(--fault); }
+.veh-state-text.ok { color: var(--ok); }
+
+/* 赛会能量计通道：帧来源状态贴右端 */
+.veh-channel .veh-channel-state { margin-left: auto; color: var(--text-3); }
+.veh-channel .veh-channel-state.ok { color: var(--ok); }
+.veh-channel .veh-channel-state.bad { color: var(--fault); }
+.veh-channel.stale > b { color: var(--text-2); }
+
+/* PDM：两个子块并排，之间一条竖线；子块内部再分单元。 */
+.vehicle-pdm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line-soft); }
+.vehicle-pdm-side { display: grid; align-content: start; min-width: 0; background: var(--level-1); }
+.vehicle-pdm-side .vehicle-limit-grid { --cols: 2; }
+.vehicle-pdm-side.data-stale .vehicle-pdm-head > span { color: var(--warn); }
+
+/* ECU 四轮：表头 + 四行，行间 1px 实线（原来用虚线）。 */
+.vehicle-ecu-table { display: grid; gap: 1px; background: var(--line-soft); }
+.veh-ecu-head, .veh-ecu-row {
+  display: grid;
+  grid-template-columns: 44px repeat(5, minmax(0, 1fr));
+  gap: 0 var(--sp-2);
+  align-items: center;
+  background: var(--level-1);
+}
+.veh-ecu-head { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-unit); color: var(--text-3); }
+.veh-ecu-row { min-height: 34px; padding: var(--sp-1) var(--sp-3); }
+.veh-ecu-row b { font-size: var(--fs-unit); color: var(--text-2); }
+/* 读数与表头同边：两者都左对齐。改成右对齐会让读数贴到下一列表头，
+   实测窗口宽度 1460px（整车两列布局）时列宽只剩 ~85px，读数会与右邻表头挤在一起。 */
+.veh-ecu-row span {
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 轮胎温度：两组并排，组内四个测点（组内网格由 .readout-grid 承担）。 */
+.vehicle-tire-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line-soft); }
+.veh-tire-group { display: grid; align-content: start; min-width: 0; background: var(--level-1); }
+.veh-tire-head > b { font-family: var(--mono); }
+.veh-tire-state.ok { color: var(--ok); }
+.veh-tire-group.data-stale .veh-tire-state { color: var(--warn); }
+/* 测点号单独成列，温度右对齐，避免“1 49.20”糊成一个数字 */
+.veh-tire-point { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: baseline; gap: var(--sp-2); }
+.veh-tire-point small { color: var(--text-3); font-family: var(--mono); font-size: var(--fs-unit); }
+.veh-tire-point b { text-align: right; }
+
+/* ---------- MQTT telemetry fault monitor ---------- */
+
+#page-telemetry { display: none; gap: var(--sp-2); }
+#page-telemetry.active { display: grid; }
+
+.telemetry-status-strip {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 60px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--surface-1);
+}
+.telemetry-status-main { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.telemetry-status-main .status-dot {
+  width: 9px; height: 9px; flex: none;
+  border-radius: var(--r-dot);
+  background: var(--idle);
+}
+.telemetry-status-main .status-dot.connected { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-dim); }
+.telemetry-status-main .status-dot.fault { background: var(--fault); box-shadow: 0 0 0 4px var(--fault-dim); }
+.telemetry-status-main > span:last-child { display: grid; min-width: 0; }
+.telemetry-status-main b { font-size: var(--fs-body); font-weight: 600; }
+.telemetry-status-main small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: var(--fs-unit);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.telemetry-counters { display: grid; grid-template-columns: repeat(3, auto); gap: 0; }
+.telemetry-counters > div { min-width: 84px; padding: 0 var(--sp-3); border-left: 1px solid var(--line-soft); }
+.telemetry-counters dt { color: var(--text-3); font-size: var(--fs-unit); }
+.telemetry-counters dd { font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; }
+.telemetry-counters dd.bad { color: var(--fault); }
+
+.telemetry-fault-hero {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-flat);
+  background: var(--surface-1);
+}
+.telemetry-fault-hero > div { display: grid; align-content: center; gap: 2px; padding: var(--sp-3) var(--sp-4); }
+.telemetry-fault-hero > div > span { color: var(--text-3); font-size: var(--fs-label); font-weight: 600; }
+.telemetry-fault-hero strong { font-family: var(--mono); font-size: var(--fs-kpi); line-height: 1.15; }
+.telemetry-fault-hero strong.bad { color: var(--fault); }
+.telemetry-fault-hero small { color: var(--text-3); font-size: var(--fs-unit); }
+.telemetry-fault-hero small.bad { color: var(--fault); }
+.telemetry-fault-hero dl { display: grid; grid-template-columns: repeat(4, minmax(92px, auto)); }
+.telemetry-fault-hero dl > div {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-left: 1px solid var(--line-soft);
+}
+.telemetry-fault-hero dt { color: var(--text-3); font-size: var(--fs-unit); }
+.telemetry-fault-hero dd { overflow: hidden; font-family: var(--mono); font-size: var(--fs-label); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+
+.telemetry-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: var(--sp-2); }
+.telemetry-grid .panel-body { min-height: 220px; max-height: 330px; overflow: auto; }
+.telemetry-grid .panel-head > span { color: var(--text-3); font-size: var(--fs-label); }
+.telemetry-grid .panel-head > span.bad { color: var(--fault); }
+#telemetryActiveFaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: var(--sp-2); }
+.telemetry-fault-item {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  align-items: center;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--fault) 52%, transparent);
+  border-radius: var(--r-ctl);
+  background: var(--fault-dim);
+}
+.telemetry-fault-item span { font-family: var(--mono); font-size: var(--fs-unit); color: var(--fault); }
+.telemetry-fault-item b { font-size: var(--fs-label); font-weight: 600; }
+.telemetry-normal-state { display: grid; align-content: center; justify-items: center; grid-column: 1 / -1; min-height: 180px; }
+.telemetry-normal-state b { color: var(--ok); font-size: var(--fs-body); }
+.telemetry-normal-state span { color: var(--text-3); font-size: var(--fs-label); }
+.telemetry-normal-state.neutral b { color: var(--text-2); }
+.telemetry-alarm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.telemetry-alarm-item:last-child { border-bottom: 0; }
+.telemetry-alarm-item > span { display: grid; min-width: 0; }
+.telemetry-alarm-item b { font-family: var(--mono); font-size: var(--fs-label); }
+.telemetry-alarm-item small { overflow: hidden; color: var(--text-2); font-size: var(--fs-label); text-overflow: ellipsis; white-space: nowrap; }
+.telemetry-alarm-item em { flex: none; color: var(--text-3); font-size: var(--fs-unit); font-style: normal; }
+.telemetry-alarm-item.severity-2 em { color: var(--warn); }
+.telemetry-alarm-item.severity-3 em,
+.telemetry-alarm-item.severity-4 em { color: var(--fault); }
+.telemetry-history-panel .panel-body { padding: 0; }
+.telemetry-history-panel .event-list { max-height: 260px; }
+
+.telemetry-endpoint-fields { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: var(--sp-2); }
+.telemetry-tls-switch { justify-self: start; }
+
+@media (max-width: 1260px) {
+  .telemetry-status-strip { grid-template-columns: minmax(220px, 1fr) auto; }
+  .telemetry-counters { display: none; }
+  .telemetry-fault-hero { grid-template-columns: minmax(250px, 1fr) auto; }
+  .telemetry-fault-hero dl { grid-template-columns: repeat(2, minmax(92px, auto)); }
+  .telemetry-grid { grid-template-columns: 1fr; }
+}
+
+/* Keep the collapsed rail useful instead of dropping its identity and update entry. */
+@media (max-width: 1260px) {
+  .team-signature { display: flex; justify-content: center; padding: 0 0 2px; }
+  .team-logo { width: 42px; max-width: 100%; }
+}
+
+ @media (max-width: 680px) {
+   #updaterDialog .modal-body { padding: var(--sp-3); }
+   #updaterDialog footer { flex-wrap: wrap; padding: var(--sp-2) var(--sp-3) var(--sp-3); }
+   #updaterDialog footer button { flex: 1 1 132px; }
+   .updater-hero { flex-direction: column; gap: var(--sp-2); min-height: 0; padding: var(--sp-3); }
+   .updater-state-badge { align-self: flex-start; }
+   .updater-version-compare { grid-template-columns: 1fr; }
+   .updater-version-arrow { justify-self: center; transform: rotate(90deg); }
+   .updater-section-heading { align-items: flex-start; flex-direction: column; }
+   .updater-release-meta { align-items: flex-start; }
+   .updater-release-meta > div { text-align: left; }
+   .updater-token-row { grid-template-columns: 1fr; align-items: stretch; }
+   .updater-token-row button { width: 100%; }
+ }

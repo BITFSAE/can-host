@@ -14,10 +14,19 @@ from canhost.encoder.service import POLL_RATES_HZ, EncoderService
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "canhost" / "web"
+
+
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', html)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
+
+
 SCRIPT = (WEB / "js" / "encoder.js").read_text(encoding="utf-8")
 HTML = (WEB / "index.html").read_text(encoding="utf-8")
 CORE = (WEB / "js" / "core.js").read_text(encoding="utf-8")
-CSS = (WEB / "styles.css").read_text(encoding="utf-8")
+CSS = read_css()
 PAGE = HTML[HTML.index('<section class="page" id="page-encoder"'):HTML.index('<section class="page" id="page-simulator"')]
 
 

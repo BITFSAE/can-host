@@ -246,9 +246,8 @@ def write_variants(out_dir: Path) -> None:
 
 def build_page(out_dir: Path) -> None:
     web = ROOT / "canhost" / "web"
-    for name in ("js", "assets", "vendor"):
+    for name in ("js", "assets", "vendor", "css"):
         shutil.copytree(web / name, out_dir / name, dirs_exist_ok=True)
-    shutil.copy2(web / "styles.css", out_dir / "styles.css")
     html = (web / "index.html").read_text(encoding="utf-8")
     marker = '  <script src="js/core.js"></script>'
     if marker not in html:

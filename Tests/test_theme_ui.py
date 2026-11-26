@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +23,13 @@ from canhost.decoders import bms_sampling_rules, bms_cell_voltage_is_open
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "canhost" / "web"
+
+
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', html)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
 
 
 class ThemeFrontendTest(unittest.TestCase):
@@ -74,7 +82,7 @@ assert.match(rule(5), /等待/);
 
     def test_theme_is_applied_before_styles_and_has_an_accessible_toggle(self) -> None:
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        self.assertLess(html.index("canHostTheme"), html.index("styles.css"))
+        self.assertLess(html.index("canHostTheme"), html.index('rel="stylesheet" href="css/'))
         self.assertIn('id="themeToggle"', html)
         self.assertIn('aria-label="切换到浅色模式"', html)
 
@@ -84,7 +92,7 @@ assert.match(rule(5), /等待/);
         self.assertIn('matchMedia("(prefers-reduced-motion: reduce)")', core)
 
     def test_light_palette_and_charts_use_shared_semantic_tokens(self) -> None:
-        styles = (WEB / "styles.css").read_text(encoding="utf-8")
+        styles = read_css()
         self.assertIn(':root[data-theme="light"]', styles)
         for token in ("--bg", "--surface-1", "--text", "--ok", "--warn", "--fault",
                       "--action", "--chart-voltage", "--chart-grid"):

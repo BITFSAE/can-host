@@ -21,6 +21,12 @@ DBC_SCRIPTS = ("dbc.js", "dbc-plot.js", "dbc-editor.js", "dbc-tools.js")
 SOURCES = {name: (JS / name).read_text(encoding="utf-8") for name in DBC_SCRIPTS}
 
 
+def read_css() -> str:
+    """按 index.html 的 link 顺序拼接样式，保持与浏览器一致的级联顺序。"""
+    hrefs = re.findall(r'<link rel="stylesheet" href="(css/[^"?]+)', HTML)
+    return "\n".join((WEB / href).read_text(encoding="utf-8") for href in hrefs)
+
+
 def layout_cases() -> list[dict]:
     cases = []
     for order in (INTEL, MOTOROLA):
@@ -96,7 +102,7 @@ class PageWiringTests(unittest.TestCase):
         self.assertIn("MIT", (folder / "LICENSE").read_text(encoding="utf-8"))
 
     def test_styles_use_the_design_tokens(self) -> None:
-        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        css = read_css()
         block = css[css.index("DBC 工作台\n"):]
         self.assertNotRegex(block, r"border-radius:\s*\d+px")
         self.assertNotRegex(block, r"font-size:\s*\d+(\.\d+)?px")
@@ -114,7 +120,7 @@ class PageWiringTests(unittest.TestCase):
 
     def test_narrow_window_layout_rules_are_kept(self) -> None:
         """窄窗口下的三处版式：搜索清除按钮要有自己的网格列、顶栏固定横向换行、折叠导航的角标贴着图标。"""
-        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        css = read_css()
         self.assertIn(".dbc-side-bar .search { grid-template-columns: 34px minmax(0, 1fr) auto;", css)
         self.assertIn(".dbc-header { flex: none; flex-flow: row wrap;", css)
         self.assertIn(".dbc-header .tool-header-connection { display: flex; flex-wrap: wrap; flex-shrink: 1;", css)
@@ -130,7 +136,7 @@ class PageWiringTests(unittest.TestCase):
         self.assertIn("function dbcMessageMenuItems", SOURCES["dbc-editor.js"])
         self.assertIn("function dbcSignalMenuItems", SOURCES["dbc-editor.js"])
         self.assertIn('event.key === "F2"', SOURCES["dbc-editor.js"])
-        css = (WEB / "styles.css").read_text(encoding="utf-8")
+        css = read_css()
         self.assertIn(".dbc-context-menu", css)
         self.assertIn(".dbc-menu-sep", css)
 
