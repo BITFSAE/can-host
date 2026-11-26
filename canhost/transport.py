@@ -460,6 +460,16 @@ class CanService:
                 elif int(ack.get("result", -1)) == 7:
                     error = (f"主控拒绝：{ack.get('result_name')}"
                              f"（Flash ID=0x{int(ack.get('detail', 0)) & 0xFFFF:04X}）")
+                elif name == "alarm_switches" and ack["result"] == 2 and ack["detail"] in {2, 3, 7}:
+                    error = ("主控拒绝：告警开关写入条件未满足。请释放 HV_ACC，"
+                             "确认高压动作结束且三路继电器均已断开。")
+                elif name == "alarm_switches" and ack["result"] == 5 and ack["detail"] == 0:
+                    if not ack["flags"]["protection_disable_allowed"]:
+                        error = ("主控拒绝：当前固件不允许关闭基础保护。整组开关中仅温差、辅助外设异常、"
+                                 "CAN 运行异常和蜂鸣器可以关闭。请核对主控固件身份。")
+                    else:
+                        error = ("主控拒绝：告警开关参数无效（detail=0）。当前固件允许关闭基础保护；"
+                                 "请在 CAN 监视中保存本次请求和应答以便排查。")
                 else:
                     error = f"主控拒绝：{ack.get('result_name')}（detail={ack.get('detail')}）"
                 return {"ok": False, "error": error, "ack": ack}

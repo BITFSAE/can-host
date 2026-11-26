@@ -748,7 +748,7 @@ def build_command(name: str, values: dict[str, Any] | None = None) -> CanFrame:
         switches = values.get("switches", values)
         # 默认整组全部开启。只写调用方给出的位，缺失位保持开启；
         # 正式 Debug/Release 固件会拒绝关闭强制保护位并返回参数无效。
-        # Byte2 bit0 为保留位，保持 0。
+        # 请求 Byte4 bit0 为保留位，保持 0。
         data = bytearray([0xFF, 0xFF, 0xFE])
         for key, _, _, _, byte, bit in SWITCH_DEFS:
             if key in switches:

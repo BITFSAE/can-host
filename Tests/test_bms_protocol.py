@@ -769,6 +769,31 @@ class BmsProtocolTest(unittest.TestCase):
         self.assertIn("只在 CAN1", result["error"])
         self.assertNotIn("总状态帧", result["error"])
 
+    def test_alarm_switch_ack_in_fault_state(self) -> None:
+        # 从原始应答验证状态拒绝、正式保护限制与 Bringup 参数拒绝的提示。
+        for reply, expected in [
+            ("02 07 21 00 07", "请释放 HV_ACC"),
+            ("05 07 01 00 00", "当前固件不允许关闭基础保护"),
+            ("05 07 21 00 00", "当前固件允许关闭基础保护"),
+            ("07 07 20 FF FF", "Flash ID=0xFFFF"),
+            ("01 07 23 00 00", None),
+        ]:
+            with self.subTest(reply=reply):
+                service = CanService()
+                service.connection.update({"connected": True, "mode": "simulation", "bus_profile": "can1"})
+                service.protocol.ingest(CanFrame(0x186050F4, build_pack_status(570, 0, 50, state=7), True))
+
+                def reply_to(frame: CanFrame) -> None:
+                    payload = bytes([5, frame.data[1], 0x03]) + bytes.fromhex(reply)
+                    service.protocol.ingest(CanFrame(0x18A650F4, payload, True))
+
+                service.simulator = SimpleNamespace(on_command=reply_to)
+                result = service.send_command("alarm_switches", {"switches": {"cell_ov": False}}, True)
+                self.assertEqual(result["ok"], expected is None)
+                self.assertEqual(result["ack"]["bms_state"], 7)
+                if expected is not None:
+                    self.assertIn(expected, result["error"])
+
     def test_flash_log_record_fragments_are_reassembled(self) -> None:
         protocol = BmsProtocol()
         raw = bytes.fromhex("1A 08 02 11 16 21 80 00 00 01 01 04 01 00 93 97")
